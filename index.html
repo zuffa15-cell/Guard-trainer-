@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
-<title>Guard Trainer v640</title>
+<title>Guard Trainer v709</title>
 <style>
 :root{
   --bg:#030303; --panel:#080808; --line:#383838; --gold:#f3b51b; --gold2:#ffc928;
@@ -4486,72 +4486,109 @@ loadMemberNotes();
   };
 })();
 
-/* v707 – write-through spoločných členov do Supabase.
-   Každá zmena členov sa po lokálnom uložení odošle aj na spoločný server.
-   Lokálne úložisko zostáva ako záloha, ale Supabase je spoločný zdroj dát. */
-(function installSupabaseMembersWriteThrough(){
-  if(window.__gtMembersSupabaseWriteThroughInstalled) return;
-  window.__gtMembersSupabaseWriteThroughInstalled=true;
+/* v709 – okamžitý a viditeľný zápis členov do Supabase.
+   Supabase je zdroj spoločných dát. Každé vytvorenie/úprava člena sa pokúsi
+   o zápis okamžite; chyba sa už nesmie potichu stratiť. */
+(function installSupabaseMembersWriteThroughV709(){
+  if(window.__gtMembersSupabaseWriteThroughV709Installed) return;
+  window.__gtMembersSupabaseWriteThroughV709Installed=true;
   const SUPA_URL=window.GT_SUPABASE_URL||'';
   const SUPA_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY||'';
-  let timer=null, busy=false;
-  function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+
+  function token(){
+    try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}
+  }
   function headers(){
     const t=token();
-    return t?{'apikey':SUPA_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null;
+    if(!SUPA_KEY||!t) return null;
+    return {'apikey':SUPA_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'};
   }
   function iso(v){
-    const s=String(v||'').trim(), m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+    const s=String(v||'').trim();
+    const m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
     return m?`${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`:
       (/^\d{4}-\d{2}-\d{2}$/.test(s)?s:null);
   }
-  async function push(){
-    if(busy||!SUPA_URL||!SUPA_KEY||!token()||!Array.isArray(window.membersData||membersData)) return false;
-    busy=true;
-    try{
-      const h=headers();
-      const gr=await fetch(SUPA_URL+'/rest/v1/groups?select=id,name&active=eq.true',{headers:h});
-      if(!gr.ok) throw new Error('groups '+gr.status);
-      const groups=await gr.json(), gm=Object.create(null);
-      (groups||[]).forEach(g=>gm[String(g.name||'').trim()]=g.id);
-      const payload=(membersData||[]).map(m=>({
-        legacy_id:Number(m.id),
-        first_name:String(m.name||''),
-        last_name:String(m.surname||''),
-        date_of_birth:iso(m.dob),
-        phone:String(m.phone||'')||null,
-        group_id:gm[String((m.groups||[m.group])[0]||'').trim()]||null,
-        membership_paid_first_half:!!m.membershipFirstHalf||!!m.membership,
-        membership_paid_second_half:!!m.membershipSecondHalf,
-        registration_paid:!!m.registration,
-        application_date:iso(m.applicationDate),
-        club_join_date:iso(m.memberSince),
-        active:m.active!==false,
-        archived:!!m.archived,
-        note:String(m.note||'')||null,
-        updated_at:new Date().toISOString()
-      })).filter(x=>Number.isFinite(x.legacy_id));
-      if(!payload.length) return true;
-      const r=await fetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{
-        method:'POST',
-        headers:{...h,'Prefer':'resolution=merge-duplicates,return=minimal'},
-        body:JSON.stringify(payload)
-      });
-      if(!r.ok) throw new Error('members '+r.status+' '+(await r.text()).slice(0,180));
-      return true;
-    }catch(e){console.warn('Guard Trainer Supabase write-through:',e);return false}
-    finally{busy=false}
+  function errorText(e){
+    if(e&&e.message) return String(e.message);
+    return String(e||'Neznáma chyba Supabase.');
   }
-  function schedule(){
-    clearTimeout(timer);
-    timer=setTimeout(push,250);
+  function showWriteError(e){
+    const msg='Supabase zápis zlyhal: '+errorText(e);
+    console.error('Guard Trainer:',msg,e);
+    try{ if(typeof toast==='function') toast(msg); }catch(_){}
+    try{ window.alert(msg); }catch(_){}
   }
-  window.gtPushMembersSupabase=push;
-  window.gtScheduleMembersSupabasePush=schedule;
-  // persistMembersData() calls gtScheduleMembersSupabasePush() directly.
-  // Also retry after login/session restoration and when the app becomes visible.
-  setTimeout(push,1500);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden) push()});
+  async function groupMap(){
+    const h=headers();
+    if(!h) throw new Error('Nie ste prihlásený na server.');
+    const r=await fetch(SUPA_URL+'/rest/v1/groups?select=id,name&active=eq.true',{headers:h});
+    const text=await r.text();
+    if(!r.ok) throw new Error('Načítanie skupín zlyhalo ('+r.status+'). '+text.slice(0,240));
+    let data=[];
+    try{data=JSON.parse(text)}catch(_){throw new Error('Supabase vrátil neplatnú odpoveď pri načítaní skupín.');}
+    const gm=Object.create(null);
+    (data||[]).forEach(g=>gm[String(g.name||'').trim()]=g.id);
+    return gm;
+  }
+  function memberPayload(m,gm){
+    const groupName=String((m.groups||[m.group])[0]||'').trim();
+    return {
+      legacy_id:Number(m.id),
+      first_name:String(m.name||''),
+      last_name:String(m.surname||''),
+      date_of_birth:iso(m.dob),
+      phone:String(m.phone||'')||null,
+      group_id:gm[groupName]||null,
+      membership_paid_first_half:!!m.membershipFirstHalf||!!m.membership,
+      membership_paid_second_half:!!m.membershipSecondHalf,
+      registration_paid:!!m.registration,
+      application_date:iso(m.applicationDate),
+      club_join_date:iso(m.memberSince),
+      active:m.active!==false,
+      archived:!!m.archived,
+      note:String(m.note||'')||null,
+      updated_at:new Date().toISOString()
+    };
+  }
+
+  window.gtSaveMemberSupabase=async function(id){
+    if(!SUPA_URL||!SUPA_KEY) throw new Error('Supabase nie je nakonfigurovaný.');
+    const h=headers();
+    if(!h) throw new Error('Nie ste prihlásený na server.');
+    const m=(window.membersData||membersData||[]).find(x=>Number(x.id)===Number(id));
+    if(!m) throw new Error('Člen sa nenašiel.');
+    const gm=await groupMap();
+    const payload=memberPayload(m,gm);
+    if(!Number.isFinite(payload.legacy_id)) throw new Error('Člen nemá platné ID.');
+    const r=await fetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{
+      method:'POST',
+      headers:{...h,'Prefer':'resolution=merge-duplicates,return=representation'},
+      body:JSON.stringify(payload)
+    });
+    const text=await r.text();
+    if(!r.ok) throw new Error('Server odmietol zápis ('+r.status+'). '+text.slice(0,300));
+    return text?JSON.parse(text):null;
+  };
+
+  /* Backward compatibility: staré volania zostávajú funkčné, ale už tiež
+     zobrazia chybu namiesto tichého console.warn. */
+  window.gtPushMembersSupabase=async function(){
+    const arr=Array.isArray(window.membersData||membersData)?(window.membersData||membersData):[];
+    if(!arr.length) return true;
+    for(const m of arr) await window.gtSaveMemberSupabase(m.id);
+    return true;
+  };
+  window.gtScheduleMembersSupabasePush=function(){
+    /* persistMembersData() môže byť volané z množstva starších miest.
+       Zápis jednotlivého člena robia save funkcie okamžite; toto je len
+       bezpečnostná synchronizácia celého zoznamu. */
+    setTimeout(async function(){
+      try{await window.gtPushMembersSupabase();}
+      catch(e){showWriteError(e);}
+    },0);
+  };
+  window.gtShowSupabaseWriteError=showWriteError;
 })();
 
 
@@ -5328,7 +5365,7 @@ function selectEditGroup(group,btn){
  document.getElementById('mpGroup').value=groups.join(',');
 }
 
-function saveNewMemberFromForm(id){
+async function saveNewMemberFromForm(id){
  const btn=document.getElementById('memberSaveBtn');
  const m=membersData.find(x=>x.id===id);
  if(!m)return;
@@ -5401,7 +5438,7 @@ function saveNewMemberFromForm(id){
  },500);
 }
 
-function saveMemberProfile(id,isNew=false){
+async function saveMemberProfile(id,isNew=false){
  const m=membersData.find(x=>x.id===id); if(!m)return;
 
  m.surname=document.getElementById('mpSurname').value.trim().toUpperCase();
@@ -5453,6 +5490,14 @@ function saveMemberProfile(id,isNew=false){
  const a=attendanceState.members.find(x=>x.surname===m.surname && x.name===m.name);
  if(a) updateCanonicalMemberFromAttendance(a);
  persistMembersData();
+ if(typeof window.gtSaveMemberSupabase==='function'){
+   try{
+     await window.gtSaveMemberSupabase(id);
+   }catch(e){
+     if(typeof window.gtShowSupabaseWriteError==='function') window.gtShowSupabaseWriteError(e);
+     return;
+   }
+ }
 
  if(isNew){
    setTimeout(()=>{ renderMembers(); },500);

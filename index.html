@@ -4364,6 +4364,99 @@ function loadPersistedMembers(){
   return false;
 }
 loadPersistedMembers();
+
+/* v703 – spoločná databáza členov cez Supabase.
+   Lokálne ID zostáva zachované cez members.legacy_id, aby sa nerozbili existujúce
+   profily, dochádzka ani navigácia. Pri prvom pripojení sa existujúci lokálny
+   zoznam bezpečne odošle na server; pri ďalších otvoreniach sa serverové údaje
+   zosynchronizujú späť do aplikácie. */
+(function installSupabaseMembersSync(){
+  if(window.__gtMembersSupabaseSyncInstalled) return;
+  window.__gtMembersSupabaseSyncInstalled=true;
+  const SUPA_URL=window.GT_SUPABASE_URL||'';
+  const SUPA_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY||'';
+  let finished=false;
+  function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function authHeaders(){const t=token();return t?{'apikey':SUPA_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null}
+  function toIsoDate(v){
+    const s=String(v||'').trim();
+    let m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+    if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(s)?s:null;
+  }
+  function fromIsoDate(v){
+    const s=String(v||''); const m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m?`${m[3]}. ${m[2]}. ${m[1]}`:'';
+  }
+  function localPayload(m,groupId){
+    return {
+      legacy_id:Number(m.id), first_name:String(m.name||''), last_name:String(m.surname||''),
+      date_of_birth:toIsoDate(m.dob), phone:String(m.phone||''), group_id:groupId||null,
+      membership_paid_first_half:!!m.membershipFirstHalf || !!m.membership,
+      membership_paid_second_half:!!m.membershipSecondHalf,
+      registration_paid:!!m.registration,
+      application_date:toIsoDate(m.applicationDate||''),
+      club_join_date:toIsoDate(m.memberSince||''),
+      active:m.active!==false, archived:!!m.archived, note:String(m.note||'')||null,
+      updated_at:new Date().toISOString()
+    };
+  }
+  async function getJson(url){
+    const h=authHeaders(); if(!h) throw new Error('no-token');
+    const r=await fetch(url,{headers:h});
+    if(!r.ok) throw new Error('Supabase HTTP '+r.status+' '+(await r.text()).slice(0,180));
+    return await r.json();
+  }
+  async function sync(){
+    if(finished || !SUPA_URL || !SUPA_KEY || !token()) return false;
+    try{
+      const [groups,serverMembers]=await Promise.all([
+        getJson(SUPA_URL+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
+        getJson(SUPA_URL+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc')
+      ]);
+      const groupMap=Object.create(null); (groups||[]).forEach(g=>groupMap[String(g.name||'').trim()]=g.id);
+      const localById=new Map(membersData.map(m=>[Number(m.id),m]));
+      const serverByLegacy=new Map((serverMembers||[]).filter(m=>m.legacy_id!=null).map(m=>[Number(m.legacy_id),m]));
+
+      // First connection: seed the empty server from the current app data.
+      if((serverMembers||[]).length===0 && membersData.length){
+        const payload=membersData.map(m=>localPayload(m,groupMap[String((m.groups||[m.group])[0]||'').trim()]));
+        const r=await fetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{method:'POST',headers:{...authHeaders(),'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload)});
+        if(!r.ok) throw new Error('Supabase members seed HTTP '+r.status+' '+(await r.text()).slice(0,180));
+        finished=true; return true;
+      }
+
+      // Merge server data into the existing UI model without changing local IDs.
+      (serverMembers||[]).forEach(sm=>{
+        const id=Number(sm.legacy_id);
+        if(!Number.isFinite(id)) return;
+        let m=localById.get(id);
+        if(!m){
+          const max=Math.max(...membersData.map(x=>Number(x.id)||0),0)+1;
+          m={id:max}; membersData.push(m); localById.set(max,m);
+          // Server-only records are assigned a stable legacy id on next sync.
+          return;
+        }
+        m.name=sm.first_name||m.name||''; m.surname=sm.last_name||m.surname||'';
+        m.dob=fromIsoDate(sm.date_of_birth)||m.dob||''; m.phone=sm.phone||'';
+        const group=(groups||[]).find(g=>g.id===sm.group_id); if(group){m.group=group.name;m.groups=[group.name]}
+        m.membershipFirstHalf=!!sm.membership_paid_first_half;
+        m.membershipSecondHalf=!!sm.membership_paid_second_half;
+        m.membership=!!sm.membership_paid_second_half;
+        m.registration=!!sm.registration_paid; m.active=sm.active!==false; m.archived=!!sm.archived;
+        if(sm.application_date) m.applicationDate=fromIsoDate(sm.application_date);
+        if(sm.club_join_date) m.memberSince=fromIsoDate(sm.club_join_date);
+        if(sm.note!=null) m.note=sm.note;
+      });
+      persistMembersData();
+      if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
+      finished=true; return true;
+    }catch(e){ console.warn('Guard Trainer Supabase members sync:',e); return false; }
+  }
+  // Login may happen a few seconds after page load, so retry briefly.
+  let tries=0; const timer=setInterval(async()=>{tries++; const ok=await sync(); if(ok||tries>=20) clearInterval(timer)},1200);
+  window.gtSyncMembersSupabase=sync;
+})();
 loadMemberNotes();
 
 /* v224 – lifetime payment history; membership status is year-specific. */
@@ -10289,7 +10382,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
  function clearDiag(){var e=document.getElementById('gtLoginErrorV702');if(e){e.textContent='';e.style.display='none'}}
  function showApp(){appOpened=true;try{localStorage.setItem('gt-auth-initialized','true');localStorage.setItem('gt-is-admin','true');localStorage.setItem('gt-user-role','admin')}catch(e){};window.GT_TEST_ROLE='admin';try{activeUserRole='admin'}catch(e){};document.body.classList.remove('head-readonly');var o=document.getElementById('gtLoginOverlayV329');if(o)o.remove();var ss=splash();if(ss){ss.style.setProperty('display','none','important');ss.style.setProperty('visibility','hidden','important');ss.style.setProperty('opacity','0','important');ss.style.setProperty('pointer-events','none','important');try{ss.remove()}catch(e){}}document.body.classList.remove('gtLoginMode','gtSplashActive','splash-active','splashVisible');document.body.classList.add('gtAppMode');var a=app();if(a){a.style.setProperty('display','block','important');a.style.setProperty('visibility','visible','important');a.style.setProperty('opacity','1','important');a.style.setProperty('pointer-events','auto','important')}try{if(typeof window.renderHome==='function')window.renderHome()}catch(e){console.warn(e)}window.scrollTo(0,0)}
  function setBusy(busy){var b=document.querySelector('#gtLoginOverlayV329 .login');if(b){b.disabled=busy;b.textContent=busy?'PRIHLASOVANIE…':'PRIHLÁSIŤ SA'}}
- function xhrJson(url){return new Promise(function(resolve,reject){var x=new XMLHttpRequest(),done=false,timer=setTimeout(function(){if(done)return;done=true;try{x.abort()}catch(e){}reject(new Error('Časový limit: Supabase neodpovedá (15 s).'))},15000);x.onreadystatechange=function(){if(x.readyState!==4||done)return;done=true;clearTimeout(timer);var t=x.responseText||'',d={};try{d=t?JSON.parse(t):{}}catch(e){};if(x.status>=200&&x.status<300)resolve(d);else reject(new Error((d.error_description||d.msg||d.message)||('Supabase HTTP '+x.status))) };x.onerror=function(){if(done)return;done=true;clearTimeout(timer);reject(new Error('Prehliadač zablokoval spojenie s Supabase (CORS/content://).'))};try{x.open('POST',url,true);x.timeout=14000;x.setRequestHeader('Content-Type','application/json');x.setRequestHeader('apikey',SUPABASE_KEY);x.setRequestHeader('Authorization','Bearer '+SUPABASE_KEY);x.send(arguments.length>1?arguments[1]:null)}catch(e){if(done)return;done=true;clearTimeout(timer);reject(e)}})}
+ function xhrJson(url,body){return new Promise(function(resolve,reject){var x=new XMLHttpRequest(),done=false,timer=setTimeout(function(){if(done)return;done=true;try{x.abort()}catch(e){}reject(new Error('Časový limit: Supabase neodpovedá (15 s).'))},15000);x.onreadystatechange=function(){if(x.readyState!==4||done)return;done=true;clearTimeout(timer);var t=x.responseText||'',d={};try{d=t?JSON.parse(t):{}}catch(e){};if(x.status>=200&&x.status<300)resolve(d);else reject(new Error((d.error_description||d.msg||d.message)||('Supabase HTTP '+x.status))) };x.onerror=function(){if(done)return;done=true;clearTimeout(timer);reject(new Error('Prehliadač zablokoval spojenie s Supabase (CORS/content://).'))};try{x.open('POST',url,true);x.timeout=14000;x.setRequestHeader('Content-Type','application/json');x.setRequestHeader('apikey',SUPABASE_KEY);x.setRequestHeader('Authorization','Bearer '+SUPABASE_KEY);x.send(body||null)}catch(e){if(done)return;done=true;clearTimeout(timer);reject(e)}})}
  async function signIn(){clearDiag();var em=document.getElementById('gtLoginEmail'),pw=document.getElementById('gtLoginPassword'),email=String(em&&em.value||'').trim(),pass=String(pw&&pw.value||'');if(!email||!pass){showDiag('Zadajte e-mail a heslo.');return false}setBusy(true);try{var body=JSON.stringify({email:email,password:pass});var data=await xhrJson(SUPABASE_URL+'/auth/v1/token?grant_type=password',body);if(!data||!data.access_token||!data.user)throw new Error('Supabase nevrátil platný prihlasovací token.');try{localStorage.setItem('gt-supabase-user-email',String(data.user.email||email));localStorage.setItem('gt-supabase-access-token',String(data.access_token));localStorage.setItem('gt-supabase-refresh-token',String(data.refresh_token||''));localStorage.setItem('gt-supabase-session-json',JSON.stringify(data))}catch(e){}showApp()}catch(err){setBusy(false);showDiag(String(err&&err.message||err||'Neznáma chyba'));return false}return false}
  function init(){hideApp();var b=document.querySelector('#gtLoginOverlayV329 .login');if(b)b.addEventListener('click',function(e){e.preventDefault();signIn()},true);var pw=document.getElementById('gtLoginPassword');if(pw)pw.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();signIn()}});var saved='';try{saved=localStorage.getItem('gt-supabase-session-json')||''}catch(e){};if(saved){try{var sess=JSON.parse(saved);if(sess&&sess.access_token){showApp();return}}catch(e){}}setTimeout(function(){var o=document.getElementById('gtLoginOverlayV329');if(o){o.classList.add('gt-show');o.style.setProperty('display','flex','important')}},3350)}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();

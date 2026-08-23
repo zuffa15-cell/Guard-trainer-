@@ -4490,7 +4490,8 @@ loadMemberNotes();
   };
 })();
 
-/* v713 – automatické obnovenie Supabase JWT po vypršaní access tokenu.
+/* v714 – oprava Content-Type pri JSON zápise do Supabase (PostgREST PGREST102).
+   v713 – automatické obnovenie Supabase JWT po vypršaní access tokenu.
    Pri 401 sa token obnoví cez refresh_token a požiadavka sa zopakuje.
    v712 – mazanie člena: červené tlačidlo MAŽEM a návrat na zoznam po 0,65 s.
    v710 – oprava poradia inicializácie Supabase konfigurácie.
@@ -10564,7 +10565,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   window.GT_SUPABASE_PUBLISHABLE_KEY='sb_publishable_NQTFwGoLwOEK9R484NAV3A_x8JZW61x';
 })();
 </script>
-<script id="gtSupabaseSessionRefreshV713">
+<script id="gtSupabaseSessionRefreshV714">
 (function(){
   if(window.__gtSupabaseSessionRefreshV713Installed) return;
   window.__gtSupabaseSessionRefreshV713Installed=true;
@@ -10601,6 +10602,10 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     const h=Object.assign({},opts.headers||{});
     h['apikey']=key();
     h['Authorization']='Bearer '+await window.gtEnsureSupabaseSession(false);
+    // Supabase PostgREST rejects a string request body sent as text/plain.
+    // Ensure every JSON body is explicitly marked as application/json unless
+    // the caller intentionally supplied another content type.
+    if(opts.body!=null && !h['Content-Type'] && !h['content-type']) h['Content-Type']='application/json';
     opts.headers=h;
     let r=await fetch(resource,opts);
     if(r.status===401 && retry!==false){

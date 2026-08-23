@@ -4351,9 +4351,10 @@ const MEMBERS_STORAGE_KEY='gt-members-v466';
 function persistMembersData(){
   try{ localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData)); }
   catch(e){ console.warn('Guard Trainer: members could not be persisted',e); }
-  try{
-    if(typeof window.gtScheduleMembersSupabasePush==='function') window.gtScheduleMembersSupabasePush();
-  }catch(e){}
+  // Supabase is the single source of truth. Never push the whole local list
+  // from this generic persistence hook: an older device could resurrect a
+  // member that was deleted on another device. Individual create/edit/delete
+  // operations write only the affected member.
 }
 function loadPersistedMembers(){
   try{
@@ -4369,7 +4370,8 @@ function loadPersistedMembers(){
 }
 loadPersistedMembers();
 
-/* v707 – spoločná databáza členov cez Supabase.
+/* v718 – Supabase is the single source of truth; local persistence never pushes the whole member list.
+   v707 – spoločná databáza členov cez Supabase.
    Lokálne ID zostáva zachované cez members.legacy_id, aby sa nerozbili existujúce
    profily, dochádzka ani navigácia. Pri prvom pripojení sa existujúci lokálny
    zoznam bezpečne odošle na server; pri ďalších otvoreniach sa serverové údaje
@@ -4414,6 +4416,7 @@ loadPersistedMembers();
   }
   async function sync(){
     if(window.__gtMemberDeleteInProgress) return false;
+    const syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
     const url=supaUrl(), key=supaKey();
     if(!url || !key || !token()) return false;
     try{
@@ -4421,6 +4424,9 @@ loadPersistedMembers();
         getJson(url+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
         getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc')
       ]);
+      // A sync request may have started just before a delete. Never let its
+      // stale response overwrite the local list after the delete has begun.
+      if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
       const groupMap=Object.create(null); (groups||[]).forEach(g=>groupMap[String(g.name||'').trim()]=g.id);
       const localById=new Map(membersData.map(m=>[Number(m.id),m]));
       const serverByLegacy=new Map((serverMembers||[]).filter(m=>m.legacy_id!=null).map(m=>[Number(m.legacy_id),m]));
@@ -4430,6 +4436,7 @@ loadPersistedMembers();
         const payload=membersData.map(m=>localPayload(m,groupMap[String((m.groups||[m.group])[0]||'').trim()]));
         const r=await window.gtSupabaseFetch(url+'/rest/v1/members?on_conflict=legacy_id',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload)});
         if(!r.ok) throw new Error('Supabase members seed HTTP '+r.status+' '+(await r.text()).slice(0,180));
+        if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
         try{localStorage.setItem('gt-supabase-members-seeded','1')}catch(_){}
         finished=true; return true;
       }
@@ -4468,6 +4475,7 @@ loadPersistedMembers();
           if(Number.isFinite(Number(lm&&lm.id)) && !serverIds.has(Number(lm.id))) membersData.splice(i,1);
         }
       }
+      if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
       persistMembersData();
       try{localStorage.setItem('gt-supabase-members-seeded','1')}catch(_){}
       if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
@@ -4508,7 +4516,8 @@ loadMemberNotes();
   };
 })();
 
-/* v716 – oprava pretekania synchronizácie počas mazania člena. DELETE sa najprv overí na serveri, polling a write-through sú počas mazania pozastavené.
+/* v717 – definitívna oprava mazania: zrušenie in-flight sync pretekov a okamžitý lokálny commit po úspešnom DELETE.
+   v716 – oprava pretekania synchronizácie počas mazania člena. DELETE sa najprv overí na serveri, polling a write-through sú počas mazania pozastavené.
    v715 – synchronizácia mazania medzi zariadeniami + server ako zdroj pravdy.
    Otvorené zariadenia pravidelne načítajú zoznam zo Supabase a odstránia lokálne
    kópie členov, ktoré už na serveri neexistujú.
@@ -4609,23 +4618,10 @@ loadMemberNotes();
 
   /* Backward compatibility: staré volania zostávajú funkčné, ale už tiež
      zobrazia chybu namiesto tichého console.warn. */
-  window.gtPushMembersSupabase=async function(){
-    if(window.__gtMemberDeleteInProgress) return true;
-    const arr=Array.isArray(window.membersData||membersData)?(window.membersData||membersData):[];
-    if(!arr.length) return true;
-    for(const m of arr) await window.gtSaveMemberSupabase(m.id);
-    return true;
-  };
-  window.gtScheduleMembersSupabasePush=function(){
-    /* persistMembersData() môže byť volané z množstva starších miest.
-       Zápis jednotlivého člena robia save funkcie okamžite; toto je len
-       bezpečnostná synchronizácia celého zoznamu. */
-    setTimeout(async function(){
-      if(window.__gtMemberDeleteInProgress) return;
-      try{await window.gtPushMembersSupabase();}
-      catch(e){showWriteError(e);}
-    },0);
-  };
+  // Legacy compatibility only. Deliberately disabled: pushing the whole
+  // local array is unsafe because stale devices can resurrect deleted rows.
+  window.gtPushMembersSupabase=async function(){ return true; };
+  window.gtScheduleMembersSupabasePush=function(){ return true; };
   window.gtShowSupabaseWriteError=showWriteError;
 })();
 
@@ -5302,6 +5298,7 @@ async function deleteMember(id){
  const btn=(typeof event!=='undefined' && event)?event.currentTarget:null;
  const startedAt=Date.now();
  window.__gtMemberDeleteInProgress=true;
+ window.__gtMemberSyncEpoch=Number(window.__gtMemberSyncEpoch||0)+1;
  if(btn){
    btn.disabled=true;
    btn.textContent='MAŽEM';
@@ -5311,18 +5308,10 @@ async function deleteMember(id){
    if(typeof window.gtDeleteMemberSupabase!=='function') throw new Error('Supabase mazanie nie je dostupné.');
    await window.gtDeleteMemberSupabase(Number(id));
 
-   // Verify the row is really gone before changing the local UI.
-   // This prevents a concurrent sync from immediately restoring it.
-   const url=String(window.GT_SUPABASE_URL||'').trim();
-   const key=String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
-   const tok=(()=>{try{return localStorage.getItem('gt-supabase-access-token')||''}catch(_){return ''}})();
-   if(url&&key&&tok&&typeof window.gtSupabaseFetch==='function'){
-     const verify=await window.gtSupabaseFetch(url+'/rest/v1/members?select=legacy_id&legacy_id=eq.'+encodeURIComponent(Number(id)),{headers:{'apikey':key,'Accept':'application/json'}});
-     const body=await verify.text();
-     if(!verify.ok) throw new Error('Overenie vymazania zlyhalo ('+verify.status+'). '+body.slice(0,220));
-     let rows=[]; try{rows=body?JSON.parse(body):[]}catch(_){rows=[]}
-     if(Array.isArray(rows)&&rows.length) throw new Error('Server ešte eviduje tohto člena. Vymazanie nebolo potvrdené.');
-   }
+   // DELETE returned successfully. Update the local list immediately.
+   // Do not issue a follow-up SELECT here: an older in-flight sync could otherwise
+   // race with the delete and make the member appear again.
+
 
    const idx=membersData.findIndex(x=>Number(x.id)===Number(id));
    if(idx>=0) membersData.splice(idx,1);
@@ -5335,6 +5324,7 @@ async function deleteMember(id){
    }catch(e){}
    // Persist locally, but do not push the remaining list back to Supabase during delete.
    try{ localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData)); }catch(e){}
+   window.__gtMemberSyncEpoch=Number(window.__gtMemberSyncEpoch||0)+1;
    const remaining=Math.max(0,650-(Date.now()-startedAt));
    setTimeout(()=>renderMembers(),remaining);
  }catch(e){
@@ -5485,6 +5475,14 @@ async function saveNewMemberFromForm(id){
    return s || (a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});
  });
  persistMembersData();
+ if(typeof window.gtSaveMemberSupabase==='function'){
+   try{
+     await window.gtSaveMemberSupabase(id);
+   }catch(e){
+     if(typeof window.gtShowSupabaseWriteError==='function') window.gtShowSupabaseWriteError(e);
+     return;
+   }
+ }
 
  if(btn){
    btn.style.setProperty('background','#27c93f','important');
@@ -10671,8 +10669,8 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
  function showApp(){appOpened=true;try{localStorage.setItem('gt-auth-initialized','true');localStorage.setItem('gt-is-admin','true');localStorage.setItem('gt-user-role','admin')}catch(e){};window.GT_TEST_ROLE='admin';try{activeUserRole='admin'}catch(e){};document.body.classList.remove('head-readonly');var o=document.getElementById('gtLoginOverlayV329');if(o)o.remove();var ss=splash();if(ss){ss.style.setProperty('display','none','important');ss.style.setProperty('visibility','hidden','important');ss.style.setProperty('opacity','0','important');ss.style.setProperty('pointer-events','none','important');try{ss.remove()}catch(e){}}document.body.classList.remove('gtLoginMode','gtSplashActive','splash-active','splashVisible');document.body.classList.add('gtAppMode');var a=app();if(a){a.style.setProperty('display','block','important');a.style.setProperty('visibility','visible','important');a.style.setProperty('opacity','1','important');a.style.setProperty('pointer-events','auto','important')}try{if(typeof window.renderHome==='function')window.renderHome()}catch(e){console.warn(e)}window.scrollTo(0,0)}
  function setBusy(busy){var b=document.querySelector('#gtLoginOverlayV329 .login');if(b){b.disabled=busy;b.textContent=busy?'PRIHLASOVANIE…':'PRIHLÁSIŤ SA'}}
  function xhrJson(url,body){return new Promise(function(resolve,reject){var x=new XMLHttpRequest(),done=false,timer=setTimeout(function(){if(done)return;done=true;try{x.abort()}catch(e){}reject(new Error('Časový limit: Supabase neodpovedá (15 s).'))},15000);x.onreadystatechange=function(){if(x.readyState!==4||done)return;done=true;clearTimeout(timer);var t=x.responseText||'',d={};try{d=t?JSON.parse(t):{}}catch(e){};if(x.status>=200&&x.status<300)resolve(d);else reject(new Error((d.error_description||d.msg||d.message)||('Supabase HTTP '+x.status))) };x.onerror=function(){if(done)return;done=true;clearTimeout(timer);reject(new Error('Prehliadač zablokoval spojenie s Supabase (CORS/content://).'))};try{x.open('POST',url,true);x.timeout=14000;x.setRequestHeader('Content-Type','application/json');x.setRequestHeader('apikey',SUPABASE_KEY);x.setRequestHeader('Authorization','Bearer '+SUPABASE_KEY);x.send(body||null)}catch(e){if(done)return;done=true;clearTimeout(timer);reject(e)}})}
- async function signIn(){clearDiag();var em=document.getElementById('gtLoginEmail'),pw=document.getElementById('gtLoginPassword'),email=String(em&&em.value||'').trim(),pass=String(pw&&pw.value||'');if(!email||!pass){showDiag('Zadajte e-mail a heslo.');return false}setBusy(true);try{var body=JSON.stringify({email:email,password:pass});var data=await xhrJson(SUPABASE_URL+'/auth/v1/token?grant_type=password',body);if(!data||!data.access_token||!data.user)throw new Error('Supabase nevrátil platný prihlasovací token.');try{localStorage.setItem('gt-supabase-user-email',String(data.user.email||email));localStorage.setItem('gt-supabase-access-token',String(data.access_token));localStorage.setItem('gt-supabase-refresh-token',String(data.refresh_token||''));localStorage.setItem('gt-supabase-session-json',JSON.stringify(data))}catch(e){}showApp();setTimeout(function(){try{if(typeof window.gtSyncMembersSupabase==='function')window.gtSyncMembersSupabase();if(typeof window.gtPushMembersSupabase==='function')window.gtPushMembersSupabase()}catch(e){console.warn(e)}},700)}catch(err){setBusy(false);showDiag(String(err&&err.message||err||'Neznáma chyba'));return false}return false}
- function init(){hideApp();var b=document.querySelector('#gtLoginOverlayV329 .login');if(b)b.addEventListener('click',function(e){e.preventDefault();signIn()},true);var pw=document.getElementById('gtLoginPassword');if(pw)pw.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();signIn()}});var saved='';try{saved=localStorage.getItem('gt-supabase-session-json')||''}catch(e){};if(saved){try{var sess=JSON.parse(saved);if(sess&&sess.access_token){showApp();setTimeout(function(){try{if(typeof window.gtSyncMembersSupabase==='function')window.gtSyncMembersSupabase();if(typeof window.gtPushMembersSupabase==='function')window.gtPushMembersSupabase()}catch(e){console.warn(e)}},700);return}}catch(e){}}setTimeout(function(){var o=document.getElementById('gtLoginOverlayV329');if(o){o.classList.add('gt-show');o.style.setProperty('display','flex','important')}},3350)}
+ async function signIn(){clearDiag();var em=document.getElementById('gtLoginEmail'),pw=document.getElementById('gtLoginPassword'),email=String(em&&em.value||'').trim(),pass=String(pw&&pw.value||'');if(!email||!pass){showDiag('Zadajte e-mail a heslo.');return false}setBusy(true);try{var body=JSON.stringify({email:email,password:pass});var data=await xhrJson(SUPABASE_URL+'/auth/v1/token?grant_type=password',body);if(!data||!data.access_token||!data.user)throw new Error('Supabase nevrátil platný prihlasovací token.');try{localStorage.setItem('gt-supabase-user-email',String(data.user.email||email));localStorage.setItem('gt-supabase-access-token',String(data.access_token));localStorage.setItem('gt-supabase-refresh-token',String(data.refresh_token||''));localStorage.setItem('gt-supabase-session-json',JSON.stringify(data))}catch(e){}showApp();setTimeout(function(){try{if(typeof window.gtSyncMembersSupabase==='function')window.gtSyncMembersSupabase()}catch(e){console.warn(e)}},700)}catch(err){setBusy(false);showDiag(String(err&&err.message||err||'Neznáma chyba'));return false}return false}
+ function init(){hideApp();var b=document.querySelector('#gtLoginOverlayV329 .login');if(b)b.addEventListener('click',function(e){e.preventDefault();signIn()},true);var pw=document.getElementById('gtLoginPassword');if(pw)pw.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();signIn()}});var saved='';try{saved=localStorage.getItem('gt-supabase-session-json')||''}catch(e){};if(saved){try{var sess=JSON.parse(saved);if(sess&&sess.access_token){showApp();setTimeout(function(){try{if(typeof window.gtSyncMembersSupabase==='function')window.gtSyncMembersSupabase()}catch(e){console.warn(e)}},700);return}}catch(e){}}setTimeout(function(){var o=document.getElementById('gtLoginOverlayV329');if(o){o.classList.add('gt-show');o.style.setProperty('display','flex','important')}},3350)}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
 </script><script id="gtSplashSpeedV335">

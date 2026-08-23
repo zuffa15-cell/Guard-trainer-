@@ -4368,7 +4368,7 @@ function loadPersistedMembers(){
 }
 loadPersistedMembers();
 
-/* v703 – spoločná databáza členov cez Supabase.
+/* v707 – spoločná databáza členov cez Supabase.
    Lokálne ID zostáva zachované cez members.legacy_id, aby sa nerozbili existujúce
    profily, dochádzka ani navigácia. Pri prvom pripojení sa existujúci lokálny
    zoznam bezpečne odošle na server; pri ďalších otvoreniach sa serverové údaje
@@ -4429,20 +4429,20 @@ loadPersistedMembers();
         finished=true; return true;
       }
 
-      // Merge server data into the existing UI model without changing local IDs.
+      // Merge server data into the existing UI model. On another device the
+      // server's legacy_id is the stable local ID, so use it directly.
       (serverMembers||[]).forEach(sm=>{
         const id=Number(sm.legacy_id);
         if(!Number.isFinite(id)) return;
         let m=localById.get(id);
         if(!m){
-          const max=Math.max(...membersData.map(x=>Number(x.id)||0),0)+1;
-          m={id:max}; membersData.push(m); localById.set(max,m);
-          // Server-only records are assigned a stable legacy id on next sync.
-          return;
+          m={id}; membersData.push(m); localById.set(id,m);
         }
         m.name=sm.first_name||m.name||''; m.surname=sm.last_name||m.surname||'';
         m.dob=fromIsoDate(sm.date_of_birth)||m.dob||''; m.phone=sm.phone||'';
-        const group=(groups||[]).find(g=>g.id===sm.group_id); if(group){m.group=group.name;m.groups=[group.name]}
+        const group=(groups||[]).find(g=>g.id===sm.group_id);
+        if(group){m.group=group.name;m.groups=[group.name]}
+        else {m.group=m.group||'';m.groups=m.groups||[m.group].filter(Boolean)}
         m.membershipFirstHalf=!!sm.membership_paid_first_half;
         m.membershipSecondHalf=!!sm.membership_paid_second_half;
         m.membership=!!sm.membership_paid_second_half;
@@ -4462,7 +4462,7 @@ loadPersistedMembers();
 })();
 loadMemberNotes();
 
-/* v706 – vymazanie člena zo spoločnej databázy Supabase. */
+/* v707 – vymazanie člena zo spoločnej databázy Supabase. */
 (function installSupabaseMemberDelete(){
   const SUPA_URL=window.GT_SUPABASE_URL||'';
   const SUPA_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY||'';
@@ -4470,16 +4470,23 @@ loadMemberNotes();
   window.gtDeleteMemberSupabase=async function(id){
     if(!SUPA_URL||!SUPA_KEY||!token()) throw new Error('Nie ste prihlásený na server.');
     const h={'apikey':SUPA_KEY,'Authorization':'Bearer '+token(),'Accept':'application/json'};
-    const r=await fetch(SUPA_URL+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(Number(id)),{method:'DELETE',headers:{...h,'Prefer':'return=minimal'}});
-    if(!r.ok){
-      const text=await r.text();
-      throw new Error('Server odmietol vymazanie ('+r.status+'). '+text.slice(0,160));
-    }
-    return true;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),8000);
+    try{
+      const r=await fetch(SUPA_URL+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(Number(id)),{method:'DELETE',headers:{...h,'Prefer':'return=representation'},signal:controller.signal});
+      if(!r.ok){
+        const text=await r.text();
+        throw new Error('Server odmietol vymazanie ('+r.status+'). '+text.slice(0,160));
+      }
+      return true;
+    }catch(e){
+      if(e && e.name==='AbortError') throw new Error('Supabase neodpovedá. Skontrolujte pripojenie a skúste to znova.');
+      throw e;
+    }finally{clearTimeout(timer)}
   };
 })();
 
-/* v705 – write-through spoločných členov do Supabase.
+/* v707 – write-through spoločných členov do Supabase.
    Každá zmena členov sa po lokálnom uložení odošle aj na spoločný server.
    Lokálne úložisko zostáva ako záloha, ale Supabase je spoločný zdroj dát. */
 (function installSupabaseMembersWriteThrough(){
@@ -4541,14 +4548,10 @@ loadMemberNotes();
   }
   window.gtPushMembersSupabase=push;
   window.gtScheduleMembersSupabasePush=schedule;
-  const oldPersist=window.persistMembersData||persistMembersData;
-  window.persistMembersData=function(){
-    const r=oldPersist.apply(this,arguments);
-    schedule();
-    return r;
-  };
-  /* Re-run once after login/session restoration. */
+  // persistMembersData() calls gtScheduleMembersSupabasePush() directly.
+  // Also retry after login/session restoration and when the app becomes visible.
   setTimeout(push,1500);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden) push()});
 })();
 
 

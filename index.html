@@ -4370,7 +4370,8 @@ function loadPersistedMembers(){
 }
 loadPersistedMembers();
 
-/* v718 – Supabase is the single source of truth; local persistence never pushes the whole member list.
+/* v719 – Supabase single-source sync with fast cross-device refresh.
+   v718 – Supabase is the single source of truth; local persistence never pushes the whole member list.
    v707 – spoločná databáza členov cez Supabase.
    Lokálne ID zostáva zachované cez members.legacy_id, aby sa nerozbili existujúce
    profily, dochádzka ani navigácia. Pri prvom pripojení sa existujúci lokálny
@@ -4383,6 +4384,7 @@ loadPersistedMembers();
   function supaUrl(){return String(window.GT_SUPABASE_URL||'').trim()}
   function supaKey(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
   let finished=false;
+  let syncInFlight=false;
   function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
   function authHeaders(){const t=token(),k=supaKey();return (t&&k)?{'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null}
   function toIsoDate(v){
@@ -4416,6 +4418,8 @@ loadPersistedMembers();
   }
   async function sync(){
     if(window.__gtMemberDeleteInProgress) return false;
+    if(syncInFlight) return false;
+    syncInFlight=true;
     const syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
     const url=supaUrl(), key=supaKey();
     if(!url || !key || !token()) return false;
@@ -4481,12 +4485,18 @@ loadPersistedMembers();
       if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
       finished=true; return true;
     }catch(e){ console.warn('Guard Trainer Supabase members sync:',e); return false; }
+    finally{ syncInFlight=false; }
   }
   // Login may happen a few seconds after page load, so retry briefly.
   let tries=0; const timer=setInterval(async()=>{tries++; const ok=await sync(); if(ok||tries>=20) clearInterval(timer)},1200);
-  // Keep already-open devices in sync as well. This is intentionally a light
-  // polling fallback so a delete on another phone is reflected without reload.
-  setInterval(()=>{try{if(token()) sync()}catch(e){}},5000);
+  // v719 – live cross-device member refresh. Supabase remains the only source
+  // of truth; this frequent, non-destructive pull never writes the local list
+  // back to the server. It also refreshes when the app becomes visible again.
+  setInterval(()=>{try{if(token()) sync()}catch(e){}},2000);
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible'){ try{ if(token()) sync(); }catch(e){} }
+  });
+  window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
   window.gtSyncMembersSupabase=sync;
 })();
 loadMemberNotes();

@@ -4413,6 +4413,7 @@ loadPersistedMembers();
     return await r.json();
   }
   async function sync(){
+    if(window.__gtMemberDeleteInProgress) return false;
     const url=supaUrl(), key=supaKey();
     if(!url || !key || !token()) return false;
     try{
@@ -4507,7 +4508,8 @@ loadMemberNotes();
   };
 })();
 
-/* v715 – synchronizácia mazania medzi zariadeniami + server ako zdroj pravdy.
+/* v716 – oprava pretekania synchronizácie počas mazania člena. DELETE sa najprv overí na serveri, polling a write-through sú počas mazania pozastavené.
+   v715 – synchronizácia mazania medzi zariadeniami + server ako zdroj pravdy.
    Otvorené zariadenia pravidelne načítajú zoznam zo Supabase a odstránia lokálne
    kópie členov, ktoré už na serveri neexistujú.
    v714 – oprava Content-Type pri JSON zápise do Supabase (PostgREST PGREST102).
@@ -4608,6 +4610,7 @@ loadMemberNotes();
   /* Backward compatibility: staré volania zostávajú funkčné, ale už tiež
      zobrazia chybu namiesto tichého console.warn. */
   window.gtPushMembersSupabase=async function(){
+    if(window.__gtMemberDeleteInProgress) return true;
     const arr=Array.isArray(window.membersData||membersData)?(window.membersData||membersData):[];
     if(!arr.length) return true;
     for(const m of arr) await window.gtSaveMemberSupabase(m.id);
@@ -4618,6 +4621,7 @@ loadMemberNotes();
        Zápis jednotlivého člena robia save funkcie okamžite; toto je len
        bezpečnostná synchronizácia celého zoznamu. */
     setTimeout(async function(){
+      if(window.__gtMemberDeleteInProgress) return;
       try{await window.gtPushMembersSupabase();}
       catch(e){showWriteError(e);}
     },0);
@@ -5292,36 +5296,53 @@ async function deleteMember(id){
  const m=membersData.find(x=>Number(x.id)===Number(id));
  if(!m){toast('Člen sa nenašiel');return;}
  if(!isAdmin()){toast('Člena môže zmazať iba administrátor');return;}
+ if(window.__gtMemberDeleteInProgress){return;}
  const label=`${m.surname||''} ${m.name||''}`.trim();
  if(!confirm(`Naozaj chcete natrvalo zmazať člena ${label}?\n\nVymazanie odstráni člena zo zoznamu členov.`)) return;
- const btn=event?.currentTarget;
+ const btn=(typeof event!=='undefined' && event)?event.currentTarget:null;
  const startedAt=Date.now();
+ window.__gtMemberDeleteInProgress=true;
  if(btn){
    btn.disabled=true;
    btn.textContent='MAŽEM';
    btn.classList.add('deleting-member');
  }
  try{
-   if(typeof window.gtDeleteMemberSupabase==='function'){
-     const ok=await window.gtDeleteMemberSupabase(Number(id));
-     if(!ok) throw new Error('Člena sa nepodarilo vymazať zo servera.');
+   if(typeof window.gtDeleteMemberSupabase!=='function') throw new Error('Supabase mazanie nie je dostupné.');
+   await window.gtDeleteMemberSupabase(Number(id));
+
+   // Verify the row is really gone before changing the local UI.
+   // This prevents a concurrent sync from immediately restoring it.
+   const url=String(window.GT_SUPABASE_URL||'').trim();
+   const key=String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
+   const tok=(()=>{try{return localStorage.getItem('gt-supabase-access-token')||''}catch(_){return ''}})();
+   if(url&&key&&tok&&typeof window.gtSupabaseFetch==='function'){
+     const verify=await window.gtSupabaseFetch(url+'/rest/v1/members?select=legacy_id&legacy_id=eq.'+encodeURIComponent(Number(id)),{headers:{'apikey':key,'Accept':'application/json'}});
+     const body=await verify.text();
+     if(!verify.ok) throw new Error('Overenie vymazania zlyhalo ('+verify.status+'). '+body.slice(0,220));
+     let rows=[]; try{rows=body?JSON.parse(body):[]}catch(_){rows=[]}
+     if(Array.isArray(rows)&&rows.length) throw new Error('Server ešte eviduje tohto člena. Vymazanie nebolo potvrdené.');
    }
+
    const idx=membersData.findIndex(x=>Number(x.id)===Number(id));
    if(idx>=0) membersData.splice(idx,1);
    try{
-     if(window.attendanceState?.members) attendanceState.members=attendanceState.members.filter(x=>!(x.id===id || (x.surname===m.surname&&x.name===m.name)));
+     if(window.attendanceState?.members) attendanceState.members=attendanceState.members.filter(x=>!(Number(x.id)===Number(id) || (x.surname===m.surname&&x.name===m.name)));
    }catch(e){}
    try{
      if(window.membershipPayments) { for(let i=membershipPayments.length-1;i>=0;i--) if(Number(membershipPayments[i].memberId)===Number(id)) membershipPayments.splice(i,1); persistPaymentHistory(); }
      if(window.registrationPayments) { for(let i=registrationPayments.length-1;i>=0;i--) if(Number(registrationPayments[i].memberId)===Number(id)) registrationPayments.splice(i,1); persistPaymentHistory(); }
    }catch(e){}
-   persistMembersData();
+   // Persist locally, but do not push the remaining list back to Supabase during delete.
+   try{ localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData)); }catch(e){}
    const remaining=Math.max(0,650-(Date.now()-startedAt));
    setTimeout(()=>renderMembers(),remaining);
  }catch(e){
    console.warn('Guard Trainer delete member:',e);
    toast(e?.message||'Člena sa nepodarilo vymazať');
    if(btn){btn.disabled=false;btn.textContent='🗑 ZMAZAŤ ČLENA';btn.classList.remove('deleting-member');}
+ }finally{
+   window.__gtMemberDeleteInProgress=false;
  }
 }
 

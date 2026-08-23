@@ -4376,11 +4376,12 @@ loadPersistedMembers();
 (function installSupabaseMembersSync(){
   if(window.__gtMembersSupabaseSyncInstalled) return;
   window.__gtMembersSupabaseSyncInstalled=true;
-  const SUPA_URL=window.GT_SUPABASE_URL||'';
-  const SUPA_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY||'';
+  // Config is declared later in the single-file app, so read it at request time.
+  function supaUrl(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function supaKey(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
   let finished=false;
   function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
-  function authHeaders(){const t=token();return t?{'apikey':SUPA_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null}
+  function authHeaders(){const t=token(),k=supaKey();return (t&&k)?{'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null}
   function toIsoDate(v){
     const s=String(v||'').trim();
     let m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
@@ -4411,11 +4412,12 @@ loadPersistedMembers();
     return await r.json();
   }
   async function sync(){
-    if(finished || !SUPA_URL || !SUPA_KEY || !token()) return false;
+    const url=supaUrl(), key=supaKey();
+    if(finished || !url || !key || !token()) return false;
     try{
       const [groups,serverMembers]=await Promise.all([
-        getJson(SUPA_URL+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
-        getJson(SUPA_URL+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc')
+        getJson(url+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
+        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc')
       ]);
       const groupMap=Object.create(null); (groups||[]).forEach(g=>groupMap[String(g.name||'').trim()]=g.id);
       const localById=new Map(membersData.map(m=>[Number(m.id),m]));
@@ -4424,7 +4426,7 @@ loadPersistedMembers();
       // First connection: seed the empty server from the current app data.
       if((serverMembers||[]).length===0 && membersData.length){
         const payload=membersData.map(m=>localPayload(m,groupMap[String((m.groups||[m.group])[0]||'').trim()]));
-        const r=await fetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{method:'POST',headers:{...authHeaders(),'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload)});
+        const r=await fetch(url+'/rest/v1/members?on_conflict=legacy_id',{method:'POST',headers:{...authHeaders(),'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload)});
         if(!r.ok) throw new Error('Supabase members seed HTTP '+r.status+' '+(await r.text()).slice(0,180));
         finished=true; return true;
       }
@@ -4464,10 +4466,11 @@ loadMemberNotes();
 
 /* v707 – vymazanie člena zo spoločnej databázy Supabase. */
 (function installSupabaseMemberDelete(){
-  const SUPA_URL=window.GT_SUPABASE_URL||'';
-  const SUPA_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY||'';
+  function supaUrl(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function supaKey(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
   function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
   window.gtDeleteMemberSupabase=async function(id){
+    const SUPA_URL=supaUrl(), SUPA_KEY=supaKey();
     if(!SUPA_URL||!SUPA_KEY||!token()) throw new Error('Nie ste prihlásený na server.');
     const h={'apikey':SUPA_KEY,'Authorization':'Bearer '+token(),'Accept':'application/json'};
     const controller=new AbortController();
@@ -4486,22 +4489,27 @@ loadMemberNotes();
   };
 })();
 
-/* v709 – okamžitý a viditeľný zápis členov do Supabase.
+/* v710 – oprava poradia inicializácie Supabase konfigurácie.
+   Konfigurácia je v tomto single-file projekte deklarovaná neskôr než sync moduly,
+   preto sa URL a publishable key nesmú načítať do konštánt pri štarte modulu.
+   Všetky Supabase operácie ich čítajú až v momente požiadavky.
+
+   v709 – okamžitý a viditeľný zápis členov do Supabase.
    Supabase je zdroj spoločných dát. Každé vytvorenie/úprava člena sa pokúsi
    o zápis okamžite; chyba sa už nesmie potichu stratiť. */
 (function installSupabaseMembersWriteThroughV709(){
   if(window.__gtMembersSupabaseWriteThroughV709Installed) return;
   window.__gtMembersSupabaseWriteThroughV709Installed=true;
-  const SUPA_URL=window.GT_SUPABASE_URL||'';
-  const SUPA_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY||'';
+  function supaUrl(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function supaKey(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
 
   function token(){
     try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}
   }
   function headers(){
-    const t=token();
-    if(!SUPA_KEY||!t) return null;
-    return {'apikey':SUPA_KEY,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'};
+    const t=token(), k=supaKey();
+    if(!k||!t) return null;
+    return {'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'};
   }
   function iso(v){
     const s=String(v||'').trim();
@@ -4522,7 +4530,7 @@ loadMemberNotes();
   async function groupMap(){
     const h=headers();
     if(!h) throw new Error('Nie ste prihlásený na server.');
-    const r=await fetch(SUPA_URL+'/rest/v1/groups?select=id,name&active=eq.true',{headers:h});
+    const r=await fetch(supaUrl()+'/rest/v1/groups?select=id,name&active=eq.true',{headers:h});
     const text=await r.text();
     if(!r.ok) throw new Error('Načítanie skupín zlyhalo ('+r.status+'). '+text.slice(0,240));
     let data=[];
@@ -4553,6 +4561,7 @@ loadMemberNotes();
   }
 
   window.gtSaveMemberSupabase=async function(id){
+    const SUPA_URL=supaUrl(), SUPA_KEY=supaKey();
     if(!SUPA_URL||!SUPA_KEY) throw new Error('Supabase nie je nakonfigurovaný.');
     const h=headers();
     if(!h) throw new Error('Nie ste prihlásený na server.');

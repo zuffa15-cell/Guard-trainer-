@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
-<title>Guard Trainer v709</title>
+<title>Guard Trainer v720</title>
 <style>
 :root{
   --bg:#030303; --panel:#080808; --line:#383838; --gold:#f3b51b; --gold2:#ffc928;
@@ -5725,7 +5725,7 @@ function confirmDeleteScheduleRange(id){
  const arr=getSavedSchedules();
  const idx=arr.findIndex(x=>Number(x.id)===Number(id));
  if(idx<0)return;
- const x=arr[idx];
+ const x={...arr[idx]};
  const start=x.startDate||from, end=x.until||to;
  const before=from>start;
  const after=to<end;
@@ -5741,6 +5741,23 @@ function confirmDeleteScheduleRange(id){
    x.startDate=nextIsoDate(to);
  }
  localStorage.setItem('gt-schedule',JSON.stringify(arr));
+ // v720: reflect exactly the delete/range change on the shared server.
+ (async()=>{
+   const ok=await gtDeleteScheduleSupabase(x.id);
+   if(!ok) return;
+   if(before&&after){
+     const left=arr.find(z=>Number(z.id)!==Number(x.id)&&z.until===previousIsoDate(from)&&z.startDate===x.startDate);
+     const right=arr.find(z=>Number(z.id)!==Number(x.id)&&z.startDate===nextIsoDate(to)&&z.until===x.until);
+     if(left) await gtSaveScheduleSupabase(left);
+     if(right) await gtSaveScheduleSupabase(right);
+   }else if(before){
+     const left=arr.find(z=>Number(z.id)!==Number(x.id)&&z.until===previousIsoDate(from));
+     if(left) await gtSaveScheduleSupabase(left);
+   }else if(after){
+     const right=arr.find(z=>Number(z.id)!==Number(x.id)&&z.startDate===nextIsoDate(to));
+     if(right) await gtSaveScheduleSupabase(right);
+   }
+ })();
  // Removing a schedule/group must immediately remove that group from trainer profiles.
  syncTrainerGroupsFromSchedules();
  document.getElementById('scheduleDeleteModal')?.remove();
@@ -5854,6 +5871,112 @@ function selectScheduleColor(c){
  if(code) setGroupColor(code,c);
  document.querySelectorAll('.schedule-color').forEach(b=>b.classList.toggle('selected',b.dataset.color===c));
 }
+
+/* v720 – shared schedule/rozvrh sync. Supabase is the single source of truth. */
+(function installSupabaseScheduleSync(){
+  if(window.__gtScheduleSupabaseSyncInstalled) return;
+  window.__gtScheduleSupabaseSyncInstalled=true;
+  let inFlight=false, seeded=false;
+  function url(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
+  function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function headers(){
+    const t=token(), k=key();
+    return (t&&k)?{'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null;
+  }
+  function showErr(e){
+    const msg='Supabase rozvrh: '+String(e&&e.message||e||'Neznáma chyba.');
+    console.error(msg,e);
+    try{if(typeof toast==='function')toast(msg)}catch(_){}
+  }
+  function payload(x){
+    return {
+      id:Number(x.id), day:String(x.day||''), name:String(x.name||''),
+      group_code:String(x.groupCode||''), location:String(x.location||''),
+      start_time:String(x.from||'00:00'), end_time:String(x.to||'00:00'),
+      repeat:x.repeat!==false, start_date:x.startDate||null, until_date:x.until||null,
+      trainer_ids:Array.isArray(x.trainerIds)?x.trainerIds:[],
+      trainers:Array.isArray(x.trainers)?x.trainers:[],
+      trainer_id:x.trainerId==null?null:Number(x.trainerId),
+      trainer:x.trainer||'', color:x.color||'gold',
+      training_fee:Number(x.trainingFee??5), trainer_reward:Number(x.trainerReward??2),
+      updated_at:new Date().toISOString()
+    };
+  }
+  function fromRow(r){
+    return {
+      id:Number(r.id), day:r.day||'Pondelok', name:r.name||'', groupCode:r.group_code||'',
+      location:r.location||'', from:String(r.start_time||'').slice(0,5), to:String(r.end_time||'').slice(0,5),
+      repeat:r.repeat!==false, startDate:r.start_date||'', until:r.until_date||'',
+      trainerIds:Array.isArray(r.trainer_ids)?r.trainer_ids.map(Number):[],
+      trainers:Array.isArray(r.trainers)?r.trainers:[], trainerId:r.trainer_id==null?null:Number(r.trainer_id),
+      trainer:r.trainer||'', color:r.color||'gold', trainingFee:Number(r.training_fee??5),
+      trainerReward:Number(r.trainer_reward??2)
+    };
+  }
+  async function request(path,opts){
+    const h=headers(); if(!h) throw new Error('Nie ste prihlásený na server.');
+    const r=await window.gtSupabaseFetch(url()+path,Object.assign({},opts||{},{headers:Object.assign({},h,opts&&opts.headers||{})}));
+    const text=await r.text();
+    if(!r.ok) throw new Error('server odmietol požiadavku ('+r.status+'). '+text.slice(0,220));
+    return text?JSON.parse(text):[];
+  }
+  async function pull(){
+    if(inFlight) return false;
+    const h=headers(); if(!h||!url()) return false;
+    inFlight=true;
+    try{
+      const rows=await request('/rest/v1/schedule_templates?select=*&order=id.asc');
+      const local=getSavedSchedules();
+      if(!rows.length && local.length && !seeded){
+        for(const x of local) await request('/rest/v1/schedule_templates?on_conflict=id',{
+          method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload(x))
+        });
+        seeded=true;
+        try{localStorage.setItem('gt-schedule-seeded','1')}catch(_){}
+        return true;
+      }
+      if(rows.length || local.length===0){
+        const next=rows.map(fromRow);
+        localStorage.setItem('gt-schedule',JSON.stringify(next));
+        window.guardSchedule=next;
+        syncTrainerGroupsFromSchedules();
+        if(typeof renderCalendar==='function' && document.querySelector('.calendar-page')) renderCalendar();
+        if(typeof openScheduleManager==='function' && document.querySelector('.schedule-manager-page')) openScheduleManager();
+      }
+      seeded=true;
+      return true;
+    }catch(e){showErr(e);return false}
+    finally{inFlight=false}
+  }
+  window.gtSaveScheduleSupabase=async function(x){
+    try{
+      inFlight=true;
+      await request('/rest/v1/schedule_templates?on_conflict=id',{
+        method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload(x))
+      });
+      return true;
+    }catch(e){showErr(e);return false}
+    finally{inFlight=false}
+  };
+  window.gtDeleteScheduleSupabase=async function(id){
+    try{
+      inFlight=true;
+      await request('/rest/v1/schedule_templates?id=eq.'+encodeURIComponent(Number(id)),{
+        method:'DELETE',headers:{'Prefer':'return=minimal'}
+      });
+      return true;
+    }catch(e){showErr(e);return false}
+    finally{inFlight=false}
+  };
+  window.gtPullSchedulesSupabase=pull;
+  let tries=0;
+  const timer=setInterval(async()=>{tries++;const ok=await pull();if(ok||tries>=20)clearInterval(timer)},1200);
+  setInterval(()=>{try{if(token())pull()}catch(_){}} ,2000);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pull()});
+  window.addEventListener('focus',()=>pull());
+})();
+
 function saveSchedule(){
  if(!isAdmin()){toast('Rozvrh môže ukladať iba administrátor');return;}
  const btn=document.querySelector('.schedule-save-btn');
@@ -5886,6 +6009,8 @@ function saveSchedule(){
    window.guardSchedule.push(record);
  }
  localStorage.setItem('gt-schedule',JSON.stringify(window.guardSchedule));
+ // v720: write only the changed schedule to Supabase; never push the whole local list.
+ gtSaveScheduleSupabase(record).then(ok=>{ if(!ok) console.warn('Rozvrh sa nepodarilo uložiť na server.'); });
  // Immediately mirror the schedule assignment into every trainer profile.
  syncTrainerGroupsFromSchedules();
  if(btn){

@@ -530,6 +530,7 @@ body{overflow-x:hidden}
 
 .profile-delete-box{margin-top:12px;border:1px solid #5a1c1c;border-radius:8px;padding:10px;text-align:right}
 .profile-delete-box button{background:#160606;border:1px solid #d92828;color:#f23a3a;border-radius:5px;padding:10px 14px;font-weight:800}
+.profile-delete-box button.deleting-member{background:#d40000!important;border-color:#ff3030!important;color:#fff!important;transition:none!important;}
 
 .members-head{display:flex;justify-content:space-between;align-items:center;margin:8px 0 12px}.members-head h2{margin:0;font-size:22px}.members-head small{color:#aaa}.members-head button{background:#d99a10;border:1px solid #efb52c;color:#111;border-radius:6px;padding:11px;font-weight:900}
 .member-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.member-stats div{border:1px solid #594400;border-radius:7px;text-align:center;padding:10px 4px}.member-stats b{display:block;font-size:23px;color:#ffd12b}.member-stats span{font-size:9px;color:#aaa}
@@ -4489,7 +4490,8 @@ loadMemberNotes();
   };
 })();
 
-/* v710 – oprava poradia inicializácie Supabase konfigurácie.
+/* v712 – mazanie člena: červené tlačidlo MAŽEM a návrat na zoznam po 0,65 s.
+   v710 – oprava poradia inicializácie Supabase konfigurácie.
    Konfigurácia je v tomto single-file projekte deklarovaná neskôr než sync moduly,
    preto sa URL a publishable key nesmú načítať do konštánt pri štarte modulu.
    Všetky Supabase operácie ich čítajú až v momente požiadavky.
@@ -5269,7 +5271,12 @@ async function deleteMember(id){
  const label=`${m.surname||''} ${m.name||''}`.trim();
  if(!confirm(`Naozaj chcete natrvalo zmazať člena ${label}?\n\nVymazanie odstráni člena zo zoznamu členov.`)) return;
  const btn=event?.currentTarget;
- if(btn){btn.disabled=true;btn.textContent='⏳ MAŽEM...';}
+ const startedAt=Date.now();
+ if(btn){
+   btn.disabled=true;
+   btn.textContent='MAŽEM';
+   btn.classList.add('deleting-member');
+ }
  try{
    if(typeof window.gtDeleteMemberSupabase==='function'){
      const ok=await window.gtDeleteMemberSupabase(Number(id));
@@ -5285,12 +5292,12 @@ async function deleteMember(id){
      if(window.registrationPayments) { for(let i=registrationPayments.length-1;i>=0;i--) if(Number(registrationPayments[i].memberId)===Number(id)) registrationPayments.splice(i,1); persistPaymentHistory(); }
    }catch(e){}
    persistMembersData();
-   toast('Člen bol vymazaný');
-   setTimeout(()=>renderMembers(),300);
+   const remaining=Math.max(0,650-(Date.now()-startedAt));
+   setTimeout(()=>renderMembers(),remaining);
  }catch(e){
    console.warn('Guard Trainer delete member:',e);
    toast(e?.message||'Člena sa nepodarilo vymazať');
-   if(btn){btn.disabled=false;btn.textContent='🗑 ZMAZAŤ ČLENA';}
+   if(btn){btn.disabled=false;btn.textContent='🗑 ZMAZAŤ ČLENA';btn.classList.remove('deleting-member');}
  }
 }
 

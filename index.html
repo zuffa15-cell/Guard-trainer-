@@ -4462,6 +4462,23 @@ loadPersistedMembers();
 })();
 loadMemberNotes();
 
+/* v706 – vymazanie člena zo spoločnej databázy Supabase. */
+(function installSupabaseMemberDelete(){
+  const SUPA_URL=window.GT_SUPABASE_URL||'';
+  const SUPA_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY||'';
+  function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  window.gtDeleteMemberSupabase=async function(id){
+    if(!SUPA_URL||!SUPA_KEY||!token()) throw new Error('Nie ste prihlásený na server.');
+    const h={'apikey':SUPA_KEY,'Authorization':'Bearer '+token(),'Accept':'application/json'};
+    const r=await fetch(SUPA_URL+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(Number(id)),{method:'DELETE',headers:{...h,'Prefer':'return=minimal'}});
+    if(!r.ok){
+      const text=await r.text();
+      throw new Error('Server odmietol vymazanie ('+r.status+'). '+text.slice(0,160));
+    }
+    return true;
+  };
+})();
+
 /* v705 – write-through spoločných členov do Supabase.
    Každá zmena členov sa po lokálnom uložení odošle aj na spoločný server.
    Lokálne úložisko zostáva ako záloha, ale Supabase je spoločný zdroj dát. */
@@ -4921,6 +4938,7 @@ function renderMemberProfile(id, backTarget){
    <h3>POZNÁMKY</h3>
    <div class="notes-line"><i>${m.note?escapeHtml(m.note):'Bez poznámok'}</i><button type="button" onclick="addMemberNote(${m.id})">✎ &nbsp; ${m.note?'Upraviť poznámku':'Pridať poznámku'}</button></div>
    <button class="edit-member-btn" onclick="editMemberFromProfile(${m.id})">✎ &nbsp; Upraviť člena</button>
+  ${isAdmin()?`<section class="profile-delete-box"><button type="button" onclick="deleteMember(${m.id})">🗑 ZMAZAŤ ČLENA</button></section>`:''}
   </section>
  </main>
  <nav class="bottom">
@@ -5195,6 +5213,38 @@ function getAvailableMemberGroups(){
  // A group is available here only while at least one schedule exists for it.
  return getAdminCreatedGroups();
 }
+async function deleteMember(id){
+ const m=membersData.find(x=>Number(x.id)===Number(id));
+ if(!m){toast('Člen sa nenašiel');return;}
+ if(!isAdmin()){toast('Člena môže zmazať iba administrátor');return;}
+ const label=`${m.surname||''} ${m.name||''}`.trim();
+ if(!confirm(`Naozaj chcete natrvalo zmazať člena ${label}?\n\nVymazanie odstráni člena zo zoznamu členov.`)) return;
+ const btn=event?.currentTarget;
+ if(btn){btn.disabled=true;btn.textContent='⏳ MAŽEM...';}
+ try{
+   if(typeof window.gtDeleteMemberSupabase==='function'){
+     const ok=await window.gtDeleteMemberSupabase(Number(id));
+     if(!ok) throw new Error('Člena sa nepodarilo vymazať zo servera.');
+   }
+   const idx=membersData.findIndex(x=>Number(x.id)===Number(id));
+   if(idx>=0) membersData.splice(idx,1);
+   try{
+     if(window.attendanceState?.members) attendanceState.members=attendanceState.members.filter(x=>!(x.id===id || (x.surname===m.surname&&x.name===m.name)));
+   }catch(e){}
+   try{
+     if(window.membershipPayments) { for(let i=membershipPayments.length-1;i>=0;i--) if(Number(membershipPayments[i].memberId)===Number(id)) membershipPayments.splice(i,1); persistPaymentHistory(); }
+     if(window.registrationPayments) { for(let i=registrationPayments.length-1;i>=0;i--) if(Number(registrationPayments[i].memberId)===Number(id)) registrationPayments.splice(i,1); persistPaymentHistory(); }
+   }catch(e){}
+   persistMembersData();
+   toast('Člen bol vymazaný');
+   setTimeout(()=>renderMembers(),300);
+ }catch(e){
+   console.warn('Guard Trainer delete member:',e);
+   toast(e?.message||'Člena sa nepodarilo vymazať');
+   if(btn){btn.disabled=false;btn.textContent='🗑 ZMAZAŤ ČLENA';}
+ }
+}
+
 function editMemberFromProfile(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
  renderMemberEditForm(id);

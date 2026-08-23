@@ -4408,7 +4408,7 @@ loadPersistedMembers();
   }
   async function getJson(url){
     const h=authHeaders(); if(!h) throw new Error('no-token');
-    const r=await fetch(url,{headers:h});
+    const r=await window.gtSupabaseFetch(url,{headers:h});
     if(!r.ok) throw new Error('Supabase HTTP '+r.status+' '+(await r.text()).slice(0,180));
     return await r.json();
   }
@@ -4427,7 +4427,7 @@ loadPersistedMembers();
       // First connection: seed the empty server from the current app data.
       if((serverMembers||[]).length===0 && membersData.length){
         const payload=membersData.map(m=>localPayload(m,groupMap[String((m.groups||[m.group])[0]||'').trim()]));
-        const r=await fetch(url+'/rest/v1/members?on_conflict=legacy_id',{method:'POST',headers:{...authHeaders(),'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload)});
+        const r=await window.gtSupabaseFetch(url+'/rest/v1/members?on_conflict=legacy_id',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload)});
         if(!r.ok) throw new Error('Supabase members seed HTTP '+r.status+' '+(await r.text()).slice(0,180));
         finished=true; return true;
       }
@@ -4477,7 +4477,7 @@ loadMemberNotes();
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),8000);
     try{
-      const r=await fetch(SUPA_URL+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(Number(id)),{method:'DELETE',headers:{...h,'Prefer':'return=representation'},signal:controller.signal});
+      const r=await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(Number(id)),{method:'DELETE',headers:{'Prefer':'return=representation'},signal:controller.signal});
       if(!r.ok){
         const text=await r.text();
         throw new Error('Server odmietol vymazanie ('+r.status+'). '+text.slice(0,160));
@@ -4490,7 +4490,9 @@ loadMemberNotes();
   };
 })();
 
-/* v712 – mazanie člena: červené tlačidlo MAŽEM a návrat na zoznam po 0,65 s.
+/* v713 – automatické obnovenie Supabase JWT po vypršaní access tokenu.
+   Pri 401 sa token obnoví cez refresh_token a požiadavka sa zopakuje.
+   v712 – mazanie člena: červené tlačidlo MAŽEM a návrat na zoznam po 0,65 s.
    v710 – oprava poradia inicializácie Supabase konfigurácie.
    Konfigurácia je v tomto single-file projekte deklarovaná neskôr než sync moduly,
    preto sa URL a publishable key nesmú načítať do konštánt pri štarte modulu.
@@ -4532,7 +4534,7 @@ loadMemberNotes();
   async function groupMap(){
     const h=headers();
     if(!h) throw new Error('Nie ste prihlásený na server.');
-    const r=await fetch(supaUrl()+'/rest/v1/groups?select=id,name&active=eq.true',{headers:h});
+    const r=await window.gtSupabaseFetch(supaUrl()+'/rest/v1/groups?select=id,name&active=eq.true',{headers:h});
     const text=await r.text();
     if(!r.ok) throw new Error('Načítanie skupín zlyhalo ('+r.status+'). '+text.slice(0,240));
     let data=[];
@@ -4572,9 +4574,9 @@ loadMemberNotes();
     const gm=await groupMap();
     const payload=memberPayload(m,gm);
     if(!Number.isFinite(payload.legacy_id)) throw new Error('Člen nemá platné ID.');
-    const r=await fetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{
+    const r=await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{
       method:'POST',
-      headers:{...h,'Prefer':'resolution=merge-duplicates,return=representation'},
+      headers:{'Prefer':'resolution=merge-duplicates,return=representation'},
       body:JSON.stringify(payload)
     });
     const text=await r.text();
@@ -10562,6 +10564,55 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   window.GT_SUPABASE_PUBLISHABLE_KEY='sb_publishable_NQTFwGoLwOEK9R484NAV3A_x8JZW61x';
 })();
 </script>
+<script id="gtSupabaseSessionRefreshV713">
+(function(){
+  if(window.__gtSupabaseSessionRefreshV713Installed) return;
+  window.__gtSupabaseSessionRefreshV713Installed=true;
+  function url(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
+  function read(k){try{return localStorage.getItem(k)||''}catch(e){return ''}}
+  function write(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+  function jwtExp(t){
+    try{const p=t.split('.')[1]; if(!p)return 0; const b=p.replace(/-/g,'+').replace(/_/g,'/'); const j=JSON.parse(decodeURIComponent(atob(b.padEnd(b.length+((4-b.length%4)%4),'=')).split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''))); return Number(j.exp)||0}catch(e){return 0}
+  }
+  async function refresh(){
+    const rt=read('gt-supabase-refresh-token');
+    if(!rt) throw new Error('Prihlásenie vypršalo. Prihláste sa znova.');
+    const r=await fetch(url()+'/auth/v1/token?grant_type=refresh_token',{
+      method:'POST',headers:{'Content-Type':'application/json','apikey':key(),'Authorization':'Bearer '+key()},
+      body:JSON.stringify({refresh_token:rt})
+    });
+    const text=await r.text(); let d={}; try{d=text?JSON.parse(text):{}}catch(e){}
+    if(!r.ok || !d.access_token) throw new Error('Obnovenie prihlásenia zlyhalo ('+r.status+'). '+(d.error_description||d.message||text).slice(0,220));
+    write('gt-supabase-access-token',String(d.access_token));
+    if(d.refresh_token) write('gt-supabase-refresh-token',String(d.refresh_token));
+    write('gt-supabase-session-json',JSON.stringify(d));
+    return String(d.access_token);
+  }
+  window.gtEnsureSupabaseSession=async function(force){
+    let t=read('gt-supabase-access-token');
+    if(!t) throw new Error('Nie ste prihlásený na server.');
+    const exp=jwtExp(t);
+    if(force || (exp && exp <= Math.floor(Date.now()/1000)+30)) t=await refresh();
+    return t;
+  };
+  window.gtSupabaseFetch=async function(resource, options, retry){
+    const opts=Object.assign({},options||{});
+    const h=Object.assign({},opts.headers||{});
+    h['apikey']=key();
+    h['Authorization']='Bearer '+await window.gtEnsureSupabaseSession(false);
+    opts.headers=h;
+    let r=await fetch(resource,opts);
+    if(r.status===401 && retry!==false){
+      const fresh=await window.gtEnsureSupabaseSession(true);
+      h['Authorization']='Bearer '+fresh;
+      r=await fetch(resource,Object.assign({},opts,{headers:h}));
+    }
+    return r;
+  };
+})();
+</script>
+
 <script id="gtLoginV702Script">
 (function(){
  var appOpened=false, SUPABASE_URL=window.GT_SUPABASE_URL, SUPABASE_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY;

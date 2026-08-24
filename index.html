@@ -4378,7 +4378,6 @@ loadPersistedMembers();
    profily, dochádzka ani navigácia. Pri prvom pripojení sa existujúci lokálny
    zoznam bezpečne odošle na server; pri ďalších otvoreniach sa serverové údaje
    zosynchronizujú späť do aplikácie. */
-window.__gtMemberPaymentPending=window.__gtMemberPaymentPending||Object.create(null);
 (function installSupabaseMembersSync(){
   if(window.__gtMembersSupabaseSyncInstalled) return;
   window.__gtMembersSupabaseSyncInstalled=true;
@@ -4405,6 +4404,12 @@ window.__gtMemberPaymentPending=window.__gtMemberPaymentPending||Object.create(n
       date_of_birth:toIsoDate(m.dob), phone:String(m.phone||''), group_id:groupId||null,
       membership_paid_first_half:!!m.membershipFirstHalf || !!m.membership,
       membership_paid_second_half:!!m.membershipSecondHalf,
+      membership_first_half_amount:Number(m.membershipFirstHalfAmount||0)||null,
+      membership_first_half_date:toIsoDate(m.membershipFirstHalfDate||''),
+      membership_first_half_group:String(m.membershipFirstHalfGroup||'')||null,
+      membership_second_half_amount:Number(m.membershipSecondHalfAmount||0)||null,
+      membership_second_half_date:toIsoDate(m.membershipSecondHalfDate||''),
+      membership_second_half_group:String(m.membershipSecondHalfGroup||'')||null,
       registration_paid:!!m.registration,
       application_date:toIsoDate(m.applicationDate||''),
       club_join_date:toIsoDate(m.memberSince||''),
@@ -4428,7 +4433,7 @@ window.__gtMemberPaymentPending=window.__gtMemberPaymentPending||Object.create(n
     try{
       const [groups,serverMembers,memberGroups]=await Promise.all([
         getJson(url+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
-        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc'),
+        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,membership_first_half_amount,membership_first_half_date,membership_first_half_group,membership_second_half_amount,membership_second_half_date,membership_second_half_group,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc'),
         getJson(url+'/rest/v1/member_groups?select=member_id,group_id')
       ]);
       // A sync request may have started just before a delete. Never let its
@@ -4467,13 +4472,15 @@ window.__gtMemberPaymentPending=window.__gtMemberPaymentPending||Object.create(n
         const mergedGroups=relGroups.length?relGroups:(primaryGroup?[primaryGroup.name]:[]);
         if(mergedGroups.length){m.groups=[...new Set(mergedGroups)];m.group=m.groups[0]}
         else {m.group=m.group||'';m.groups=m.groups||[m.group].filter(Boolean)}
-        const __paymentPending=!!window.__gtMemberPaymentPending[String(id)];
-        if(!__paymentPending){
-          m.membershipFirstHalf=!!sm.membership_paid_first_half;
-          m.membershipSecondHalf=!!sm.membership_paid_second_half;
-          const __currentPeriod=membershipPeriodForDate(appToday().iso)||2;
-          m.membership=__currentPeriod===1?m.membershipFirstHalf:m.membershipSecondHalf;
-        }
+        m.membershipFirstHalf=!!sm.membership_paid_first_half;
+        m.membershipSecondHalf=!!sm.membership_paid_second_half;
+        m.membershipFirstHalfAmount=Number(sm.membership_first_half_amount||0);
+        m.membershipFirstHalfDate=fromIsoDate(sm.membership_first_half_date)||'';
+        m.membershipFirstHalfGroup=sm.membership_first_half_group||'';
+        m.membershipSecondHalfAmount=Number(sm.membership_second_half_amount||0);
+        m.membershipSecondHalfDate=fromIsoDate(sm.membership_second_half_date)||'';
+        m.membershipSecondHalfGroup=sm.membership_second_half_group||'';
+        m.membership=!!sm.membership_paid_second_half;
         m.registration=!!sm.registration_paid; m.active=sm.active!==false; m.archived=!!sm.archived;
         if(sm.application_date) m.applicationDate=fromIsoDate(sm.application_date);
         if(sm.club_join_date) m.memberSince=fromIsoDate(sm.club_join_date);
@@ -4494,24 +4501,6 @@ window.__gtMemberPaymentPending=window.__gtMemberPaymentPending||Object.create(n
       if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
       persistMembersData();
       try{localStorage.setItem('gt-supabase-members-seeded','1')}catch(_){}
-      // v743: the attendance screen has its own row objects. Keep the proven
-      // attendance/TRÉNING sync untouched, but copy member-level payment state
-      // into those rows after the member sync finishes.
-      try{
-        if(document.querySelector('.attendance-page') && Array.isArray(window.attendanceState?.members)){
-          const byName=new Map((membersData||[]).map(mm=>[String(mm.surname||'')+'|'+String(mm.name||''),mm]));
-          attendanceState.members.forEach(ar=>{
-            const mm=byName.get(String(ar.surname||'')+'|'+String(ar.name||''));
-            if(!mm) return;
-            ar.membershipFirstHalf=!!mm.membershipFirstHalf;
-            ar.membershipSecondHalf=!!mm.membershipSecondHalf;
-            ar.membership=!!mm.membership;
-            ar.registration=!!mm.registration;
-            ar.application=!!mm.application;
-          });
-          if(typeof refreshAttendance==='function') refreshAttendance();
-        }
-      }catch(e){ console.warn('Guard Trainer payment UI sync:',e); }
       if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
       finished=true; return true;
     }catch(e){ console.warn('Guard Trainer Supabase members sync:',e); return false; }
@@ -6143,9 +6132,6 @@ try{
   }
 }catch(e){ console.warn('Attendance history load failed',e); }
 
-/* v742 – ČLENSKÉ používa rovnaký priamy members Supabase zápis ako úprava profilu.
-   TRÉNING synchronizácia z v736 zostáva nezmenená. */
-
 /* v726 – Supabase attendance sync. Supabase is the shared source of truth
    for attendance; localStorage remains only a fast local cache. */
 (function installSupabaseAttendanceSync(){
@@ -7388,24 +7374,6 @@ function toggleRegistration(i){
  refreshAttendance();
 }
 function toggleNew(i){ if(!attendanceEditGuard()) return; attendanceState.members[i].newMember=!attendanceState.members[i].newMember;refreshAttendance();}
-async function gtSyncMembershipStatus(member,period,paid){
-  if(!member || typeof window.gtSaveMemberSupabase!=='function') return;
-  const id=String(member.id);
-  window.__gtMemberPaymentPending[id]=true;
-  try{
-    if(Number(period)===1) member.membershipFirstHalf=!!paid;
-    else member.membershipSecondHalf=!!paid;
-    const cp=membershipPeriodForDate(appToday().iso)||2;
-    member.membership=cp===1?!!member.membershipFirstHalf:!!member.membershipSecondHalf;
-    await window.gtSaveMemberSupabase(member.id);
-  }catch(e){
-    console.error('Guard Trainer membership Supabase:',e);
-    try{toast('Chyba zápisu členského: '+(e?.message||e));}catch(_){}
-  }finally{
-    setTimeout(()=>{delete window.__gtMemberPaymentPending[id]},1800);
-  }
-}
-
 function enterMembership(i){
  if(!attendanceEditGuard() || !billingEditGuard() || !attendancePaymentEditGuard()) return;
  const a=attendanceState.members[i];
@@ -7449,13 +7417,16 @@ function enterMembership(i){
       (!m.membershipPaidGroup || m.membershipPaidGroup===attendanceState.group)){
      m.membership=false; m.membershipAmount=0; m.membershipDate=''; m.membershipPaidGroup='';
    }
+   if(Number(period)===1){ m.membershipFirstHalf=false; m.membershipFirstHalfAmount=0; m.membershipFirstHalfDate=''; m.membershipFirstHalfGroup=''; }
+   else { m.membershipSecondHalf=false; m.membershipSecondHalfAmount=0; m.membershipSecondHalfDate=''; m.membershipSecondHalfGroup=''; }
+   persistMembersData();
+   if(typeof window.gtSaveMemberSupabase==='function'){ window.gtSaveMemberSupabase(m.id).catch(e=>{ try{toast('Supabase zápis členského zlyhal: '+e.message)}catch(_){} }); }
    if(attendanceState.billingPaymentSnapshot){
      const sk=m.surname+'|'+m.name;
      if(attendanceState.billingPaymentSnapshot[sk]){ attendanceState.billingPaymentSnapshot[sk].membership=0; attendanceState.billingPaymentSnapshot[sk].membershipAmount=0; }
    }
    persistMembersData();
    persistPaymentHistory();
-   if(m) gtSyncMembershipStatus(m,period,false);
    refreshAttendance();
    return;
  }
@@ -7470,10 +7441,11 @@ function enterMembership(i){
      action:'add',memberId:m.id,surname:m.surname,name:m.name,
      amount:n,date:attendanceDateKey(),paidGroup:attendanceState.group,period
    });
-   if(period===1) m.membershipFirstHalf=true; else m.membershipSecondHalf=true;
-   const cp=membershipPeriodForDate(appToday().iso)||2; m.membership=cp===1?!!m.membershipFirstHalf:!!m.membershipSecondHalf;
+   if(Number(period)===1){ m.membershipFirstHalf=true; m.membershipFirstHalfAmount=n; m.membershipFirstHalfDate=attendanceDateKey(); m.membershipFirstHalfGroup=attendanceState.group; }
+   else { m.membershipSecondHalf=true; m.membershipSecondHalfAmount=n; m.membershipSecondHalfDate=attendanceDateKey(); m.membershipSecondHalfGroup=attendanceState.group; }
+   m.membership=true; m.membershipAmount=n; m.membershipDate=attendanceDateKey(); m.membershipPaidGroup=attendanceState.group;
    persistMembersData();
-   gtSyncMembershipStatus(m,period,true);
+   if(typeof window.gtSaveMemberSupabase==='function'){ window.gtSaveMemberSupabase(m.id).catch(e=>{ try{toast('Supabase zápis členského zlyhal: '+e.message)}catch(_){} }); }
  }
  refreshAttendance();
 }

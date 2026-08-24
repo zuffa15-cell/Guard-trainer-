@@ -6326,7 +6326,20 @@ try{
         if(pending[pk] || (protectedUntil[pk]||0)>now) return;
         const keys=memberMapKeys(m); const sid=keys.map(k=>map[k]).find(Boolean); const r=sid?byMember[sid]:null;
         if(r){m.training=!!r.present;m.newMember=!!r.new_member;m.trainingAccount=!r.training_fee_paid && !!r.present && !r.new_member;m.debt=Number(r.debt_amount||0);m.debtReason=r.debt_note||'';}
-        else {m.training=false;m.newMember=false;m.trainingAccount=false;m.debt=0;m.debtReason='';}
+        else {m.training=false;m.newMember=false;m.trainingAccount=false;
+          // Do not erase locally saved billing metadata when attendance has no row.
+          // DLŽNÉ/PRIHLÁŠKA are also persisted in the billing record.
+          if(!m.debt) { m.debt=0; m.debtReason=''; }
+        }
+        // Restore the authoritative saved billing snapshot when available.
+        const br=attendanceState.billingRecordSnapshot||{};
+        const ds=Array.isArray(br.debtSnapshot)?br.debtSnapshot:[];
+        const as=Array.isArray(br.applicationSnapshot)?br.applicationSnapshot:[];
+        const nm=String(m.surname||'').trim()+'|'+String(m.name||'').trim();
+        const d=ds.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
+        const a=as.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
+        if(d){m.debt=Number(d.debt||0);m.debtReason=String(d.reason||'');}
+        if(a){m.application=true;m.applicationDate=String(a.applicationDate||'');}
       });
       saveCurrentTrainingAttendanceLocalOnly();
       refreshAttendance();
@@ -6387,7 +6400,8 @@ try{
 function saveCurrentTrainingAttendanceLocalOnly(){
   const key=trainingAttendanceKey();
   trainingAttendanceByGroup[key]=Object.create(null);
-  (attendanceState.members||[]).forEach(a=>{trainingAttendanceByGroup[key][a.surname+'|'+a.name]={training:!!a.training,trainingAccount:!!a.trainingAccount,newMember:!!a.newMember}});
+  (attendanceState.members||[]).forEach(a=>{trainingAttendanceByGroup[key][a.surname+'|'+a.name]={training:!!a.training,trainingAccount:!!a.trainingAccount,newMember:!!a.newMember,
+      debt:Number(a.debt||0),debtReason:String(a.debtReason||''),application:!!a.application,applicationDate:String(a.applicationDate||'')}});
   persistTrainingAttendanceHistory();
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
 }
@@ -8332,6 +8346,7 @@ async function saveTrainingBilling(){
   try{ commitMembershipDraftsForCurrentTraining(); }catch(e){ console.warn('membership local commit:',e); }
   try{ commitRegistrationDraftsForCurrentTraining(); }catch(e){ console.warn('registration local commit:',e); }
   try{ syncAllRegistrationBillingFromMembers(); }catch(e){ console.warn('registration billing sync:',e); }
+  // Persist the exact edited attendance state before leaving the screen.
   saveCurrentTrainingAttendanceLocalOnly();
   const fee=trainingFee();
   const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;

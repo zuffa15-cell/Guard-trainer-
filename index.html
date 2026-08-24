@@ -6420,6 +6420,34 @@ try{
   });
 })();
 
+function billingSnapshotStorageKey(){
+  const d=String(attendanceState&&attendanceState.date||'');
+  const g=String(attendanceState&&attendanceState.group||'');
+  return 'gt-training-billing-snapshot|'+d+'|'+g;
+}
+function persistCommittedTrainingSnapshot(record){
+  try{
+    if(!record)return;
+    const key='gt-training-billing-snapshot|'+String(record.date||'')+'|'+String(record.group||'');
+    localStorage.setItem(key,JSON.stringify(record));
+  }catch(e){ console.warn('billing snapshot cache save failed',e); }
+}
+function loadCommittedTrainingSnapshot(){
+  try{
+    const raw=localStorage.getItem(billingSnapshotStorageKey());
+    if(!raw)return null;
+    const r=JSON.parse(raw);
+    if(!r)return null;
+    attendanceState.billingRecordSnapshot=r;
+    attendanceState.billingPaymentSnapshot={};
+    (Array.isArray(r.paymentSnapshot)?r.paymentSnapshot:[]).forEach(x=>{
+      attendanceState.billingPaymentSnapshot[String(x.surname||'').trim()+'|'+String(x.name||'').trim()]=x;
+    });
+    attendanceState.billingAttendanceSnapshot=Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot.slice():[];
+    return r;
+  }catch(e){ console.warn('billing snapshot cache load failed',e); return null; }
+}
+
 function saveCurrentTrainingAttendanceLocalOnly(){
   const key=trainingAttendanceKey();
   trainingAttendanceByGroup[key]=Object.create(null);
@@ -6824,6 +6852,10 @@ function attendance(){
   const attendanceCancelled=isTrainingCancelled(attendanceState.date,attendanceState.group,attendanceState.trainingTime||'',attendanceState.name) ||
     isTrainingCancelled(attendanceState.date,attendanceState.group,'',attendanceState.name);
   if(attendanceCancelled){ renderCancelledAttendance(); return; }
+  // The last explicitly saved training snapshot is the local source of truth
+  // when returning from Vyúčtovanie. Rebuild the whole attendance from it first,
+  // then allow server sync to confirm it. Never rebuild it from mixed old caches.
+  loadCommittedTrainingSnapshot();
   loadAttendanceFromMembers();
   applyBillingSnapshotToAttendance();
   const app=document.querySelector('.app');
@@ -8447,6 +8479,15 @@ async function saveTrainingBilling(){
     const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
     return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
   };
+  // Persist the complete snapshot immediately. Returning to Dochádzka must use
+  // exactly what was just saved, not a mixture of older member/attendance caches.
+  attendanceState.billingRecordSnapshot=record;
+  attendanceState.billingPaymentSnapshot={};
+  record.paymentSnapshot.forEach(x=>{
+    attendanceState.billingPaymentSnapshot[String(x.surname||'').trim()+'|'+String(x.name||'').trim()]=x;
+  });
+  attendanceState.billingAttendanceSnapshot=record.attendanceSnapshot.slice();
+  persistCommittedTrainingSnapshot(record);
   const recordCanonical=canonicalBillingKey(record);
   // Remove every old variant of this same trainer/date/group, including
   // records whose legacy key contained SUB/ORIGINAL suffixes. Then store one
@@ -8531,6 +8572,10 @@ async function saveTrainingBilling(){
     resetSaveButton();
     return false;
   }
+  // Re-save the final server-confirmed snapshot. This is the exact state used
+  // when the user returns to Dochádzka and also survives a WebView refresh.
+  persistCommittedTrainingSnapshot(record);
+  attendanceState.billingRecordSnapshot=record;
   lockAttendanceFully();
   // The training-billing guard ends only after the user explicitly saves the
   // finished billing. Now it is correct to open Moje vyúčtovanie.
@@ -10670,6 +10715,9 @@ function openGroup(code,name,time='',source='calendar'){
   attendance();
 }
 function appBack(){
+  // Keep the last committed training snapshot alive when returning from
+  // Vyúčtovanie. The next Dochádzka screen must restore the exact saved state.
+  try{ if((location.hash||'')==='#training-billing') persistCommittedTrainingSnapshot(attendanceState.billingRecordSnapshot); }catch(e){}
   // Universal one-step back: the top-left arrow follows the real in-app
   // navigation history. Do not jump to a hard-coded parent screen.
   if((location.hash||'').includes('attendance')) saveCurrentTrainingAttendance();

@@ -4411,6 +4411,9 @@ loadPersistedMembers();
       membership_second_half_date:toIsoDate(m.membershipSecondHalfDate||''),
       membership_second_half_group:String(m.membershipSecondHalfGroup||'')||null,
       registration_paid:!!m.registration,
+      registration_amount:Number(m.registrationAmount||0)||null,
+      registration_date:toIsoDate(m.registrationDate||''),
+      registration_group:String(m.registrationPaidGroup||'')||null,
       application_date:toIsoDate(m.applicationDate||''),
       club_join_date:toIsoDate(m.memberSince||''),
       active:m.active!==false, archived:!!m.archived, note:String(m.note||'')||null,
@@ -4433,7 +4436,7 @@ loadPersistedMembers();
     try{
       const [groups,serverMembers,memberGroups]=await Promise.all([
         getJson(url+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
-        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,membership_first_half_amount,membership_first_half_date,membership_first_half_group,membership_second_half_amount,membership_second_half_date,membership_second_half_group,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc'),
+        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,membership_first_half_amount,membership_first_half_date,membership_first_half_group,membership_second_half_amount,membership_second_half_date,membership_second_half_group,registration_paid,registration_amount,registration_date,registration_group,application_date,active,archived,photo_url,note&order=legacy_id.asc'),
         getJson(url+'/rest/v1/member_groups?select=member_id,group_id')
       ]);
       // A sync request may have started just before a delete. Never let its
@@ -4481,7 +4484,11 @@ loadPersistedMembers();
         m.membershipSecondHalfDate=fromIsoDate(sm.membership_second_half_date)||'';
         m.membershipSecondHalfGroup=sm.membership_second_half_group||'';
         m.membership=!!sm.membership_paid_second_half;
-        m.registration=!!sm.registration_paid; m.active=sm.active!==false; m.archived=!!sm.archived;
+        m.registration=!!sm.registration_paid;
+        m.registrationAmount=Number(sm.registration_amount||0);
+        m.registrationDate=fromIsoDate(sm.registration_date)||'';
+        m.registrationPaidGroup=sm.registration_group||'';
+        m.active=sm.active!==false; m.archived=!!sm.archived;
         if(sm.application_date) m.applicationDate=fromIsoDate(sm.application_date);
         if(sm.club_join_date) m.memberSince=fromIsoDate(sm.club_join_date);
         if(sm.note!=null) m.note=sm.note;
@@ -4625,6 +4632,9 @@ loadMemberNotes();
       membership_second_half_date:iso(m.membershipSecondHalfDate||''),
       membership_second_half_group:String(m.membershipSecondHalfGroup||'')||null,
       registration_paid:!!m.registration,
+      registration_amount:Number(m.registrationAmount||0)||null,
+      registration_date:toIsoDate(m.registrationDate||''),
+      registration_group:String(m.registrationPaidGroup||'')||null,
       application_date:iso(m.applicationDate),
       club_join_date:iso(m.memberSince),
       active:m.active!==false,
@@ -7360,6 +7370,9 @@ function toggleRegistration(i){
      if(attendanceState.billingPaymentSnapshot[sk]){ attendanceState.billingPaymentSnapshot[sk].registration=0; attendanceState.billingPaymentSnapshot[sk].registrationAmount=0; }
    }
    persistMembersData();
+   if(typeof window.gtSaveMemberSupabase==='function'){
+     window.gtSaveMemberSupabase(m.id).catch(e=>{ try{toast('Supabase zrušenie registrácie zlyhalo: '+e.message)}catch(_){} });
+   }
    persistPaymentHistory();
    refreshAttendance();
    return;
@@ -7380,6 +7393,14 @@ function toggleRegistration(i){
    action:'add',memberId:m.id,surname:m.surname,name:m.name,
    paidGroup:attendanceState.group,date:attendanceDateKey()
  };
+ m.registration=true;
+ m.registrationAmount=30;
+ m.registrationDate=attendanceDateKey();
+ m.registrationPaidGroup=attendanceState.group;
+ persistMembersData();
+ if(typeof window.gtSaveMemberSupabase==='function'){
+   window.gtSaveMemberSupabase(m.id).catch(e=>{ try{toast('Supabase zápis registrácie zlyhal: '+e.message)}catch(_){} });
+ }
  refreshAttendance();
 }
 function toggleNew(i){ if(!attendanceEditGuard()) return; attendanceState.members[i].newMember=!attendanceState.members[i].newMember;refreshAttendance();}

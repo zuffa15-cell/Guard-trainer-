@@ -6376,8 +6376,11 @@ try{
       if(serverBillingSnapshot){
         attendanceState.billingRecordSnapshot=serverBillingSnapshot;
       }
-      const committed=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
-      const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
+      if(serverBillingSnapshot){
+        attendanceState.billingRecordSnapshot=serverBillingSnapshot;
+      }
+      const byMember={} ; (rows||[]).forEach(r=>byMember[String(r.member_id)]=r);
+      
 
       // v788: PRIHLÁŠKA is authoritative on the member row in Supabase.
       // The billing snapshot is historical only and must never restore a
@@ -6419,7 +6422,14 @@ try{
         const r=sid?byMember[sid]:null;
         const sharedNew=keys.some(k=>map['new:'+k]===true);
         if(r){
+          // Supabase attendance row is authoritative for the live training.
           m.training=!!r.present;
+          m.newMember=!!r.new_member;
+          m.trainingAccount=!r.training_fee_paid && !!r.present && !m.newMember;
+          if(m.newMember){
+            m.training=true;
+            m.trainingAccount=false;
+          }
           // The shared members table is the authoritative member-level flag.
           // This prevents an older attendance/billing row on mobile 2 from
           // turning a newly created member back into TRÉNING.
@@ -6427,9 +6437,16 @@ try{
           m.trainingAccount=!r.training_fee_paid && !!r.present && !m.newMember;
           m.debt=Number(r.debt_amount||0);m.debtReason=r.debt_note||'';
         }
-        else {m.training=false;m.newMember=sharedNew || !!m.newMember;m.trainingAccount=false;
-          // Do not erase locally saved billing metadata when attendance has no row.
-          // DLŽNÉ/PRIHLÁŠKA are also persisted in the billing record.
+        else {
+          // A missing server row can be transient while a write is propagating.
+          // Keep the exact local edit instead of reverting the row to OFF.
+          const live=trainingAttendanceByGroup[trainingAttendanceKey()];
+          const lv=live && live[m.surname+'|'+m.name];
+          if(!(lv && typeof lv==='object')){
+            m.training=false;
+            m.newMember=sharedNew || !!m.newMember;
+            m.trainingAccount=false;
+          }
           if(!m.debt) { m.debt=0; m.debtReason=''; }
         }
         // Restore the complete server snapshot. If a saved server record exists,
@@ -6455,18 +6472,15 @@ try{
           // live training/new state from it: the attendance table above is the
           // live cross-device source of truth. This is what prevents a newer
           // attendance edit from reverting to the old billing snapshot.
-          if(p){
-            if(!m.training && p.training && !m.newMember){
-              // Do not turn a live-unchecked member back on from old billing.
-            }
-            // Keep only payment metadata that is not represented by the live
-            // attendance row.
-          }
+          // Do not overwrite live training/new state from billing snapshot.
+          // Billing is historical metadata only.
+
         }
       });
 
-      // Final authoritative pass: the live attendance table is authoritative
-      // for NEW as well. Never resurrect an old NEW flag from billing_records.
+      // FINAL AUTHORITATIVE PASS: copy every Supabase attendance row exactly.
+      // This fixes Mobile 2 showing an older count such as 7 while Mobile 1
+      // already has 9. Missing row = not present; new_member is copied exactly.
       const finalRows=Array.isArray(rows)?rows:[];
       const finalMap=new Map(finalRows.map(r=>[String(r.member_id),r]));
       const finalMemberMap=await memberMap();
@@ -6479,6 +6493,10 @@ try{
           m.newMember=!!rr.new_member;
           m.trainingAccount=!rr.training_fee_paid && !!rr.present && !m.newMember;
           if(m.newMember){m.training=true;m.trainingAccount=false;}
+        }else{
+          m.training=false;
+          m.trainingAccount=false;
+          m.newMember=false;
         }
       });
 
@@ -6695,7 +6713,18 @@ function getAttendanceSavedAt(date,group){
 }
 
 function saveCurrentTrainingAttendance(){
+  // Always persist the complete current training before leaving/switching cards.
+  // Individual taps also push their member, but the full save guarantees that
+  // Mobile 2 cannot remain on an older partial state (e.g. 7 instead of 9).
   saveCurrentTrainingAttendanceLocalOnly();
+  try{
+    if(typeof window.gtSaveAttendanceAllSupabase==='function' &&
+       document.querySelector('.attendance-page')){
+      window.gtSaveAttendanceAllSupabase().catch(e=>{
+        console.warn('Guard Trainer full attendance sync:',e);
+      });
+    }
+  }catch(e){ console.warn('Guard Trainer full attendance sync:',e); }
 }
 
 function membershipDraftKey(memberId,date,group){
@@ -6867,6 +6896,27 @@ function loadAttendanceFromMembers(){
      applicationFileName:m.applicationFileName||''
    };
  });
+
+ // Exact local training state wins over member-level defaults. This is the
+ // state the trainer just edited on this device and it must survive switching
+ // cards before/while Supabase synchronization runs.
+ const liveKey=trainingAttendanceKey();
+ const live=trainingAttendanceByGroup[liveKey];
+ if(live && typeof live==='object'){
+   attendanceState.members.forEach(a=>{
+     const v=live[a.surname+'|'+a.name];
+     if(v && typeof v==='object'){
+       a.training=!!v.training;
+       a.trainingAccount=!!v.trainingAccount;
+       a.newMember=!!v.newMember;
+       a.debt=Number(v.debt||0);
+       a.debtReason=String(v.debtReason||'');
+       a.application=!!v.application;
+       a.applicationDate=String(v.applicationDate||'');
+     }
+   });
+ }
+ sortAttendanceMembersAlphabetically();
 }
 
 /* v209 – current date is always the phone's local date */
@@ -11039,7 +11089,10 @@ function appBack(){
   try{ if((location.hash||'')==='#training-billing') persistCommittedTrainingSnapshot(attendanceState.billingRecordSnapshot); }catch(e){}
   // Universal one-step back: the top-left arrow follows the real in-app
   // navigation history. Do not jump to a hard-coded parent screen.
-  if((location.hash||'').includes('attendance')) saveCurrentTrainingAttendance();
+  if((location.hash||'').includes('attendance')){
+    saveCurrentTrainingAttendance();
+    try{ window.gtSaveAttendanceAllSupabase && window.gtSaveAttendanceAllSupabase().catch(()=>{}); }catch(_e){}
+  }
   try{
     if(history.length>1){ history.back(); return false; }
   }catch(e){}

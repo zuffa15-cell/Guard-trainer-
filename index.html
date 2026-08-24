@@ -6287,6 +6287,22 @@ try{
       const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
       const rows=await fetchJson('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(trainingId)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
       const map=await memberMap();
+
+      // v791: the complete saved attendance snapshot is the single source of truth.
+      // After ULOŽIŤ VYÚČTOVANIE the server billing record contains attendance,
+      // DLŽNÉ and PRIHLÁŠKA together. Pull that record first so a later refresh
+      // cannot briefly show the new state and then overwrite it with an older
+      // local/member copy.
+      let serverBillingSnapshot=null;
+      try{
+        const d=String(attendanceState.date||attendanceDateKey());
+        const g=String(attendanceState.group||'');
+        const tr=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+        const brs=await fetchJson('/rest/v1/billing_records?training_date=eq.'+encodeURIComponent(d)+'&group_code=eq.'+encodeURIComponent(g)+'&select=record_key,payload,updated_at&order=updated_at.desc&limit=20');
+        const candidates=(brs||[]).map(x=>x&&x.payload).filter(Boolean);
+        serverBillingSnapshot=candidates.find(x=>String(x.trainer||'').trim().toUpperCase()===tr.toUpperCase()) || candidates[0] || null;
+        if(serverBillingSnapshot){ attendanceState.billingRecordSnapshot=serverBillingSnapshot; }
+      }catch(e){ console.warn('Guard Trainer billing snapshot pull:',e); }
       const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
 
       // v788: PRIHLÁŠKA is authoritative on the member row in Supabase.
@@ -6331,15 +6347,22 @@ try{
           // DLŽNÉ/PRIHLÁŠKA are also persisted in the billing record.
           if(!m.debt) { m.debt=0; m.debtReason=''; }
         }
-        // Restore the authoritative saved billing snapshot when available.
-        const br=attendanceState.billingRecordSnapshot||{};
-        const ds=Array.isArray(br.debtSnapshot)?br.debtSnapshot:[];
-        const as=Array.isArray(br.applicationSnapshot)?br.applicationSnapshot:[];
-        const nm=String(m.surname||'').trim()+'|'+String(m.name||'').trim();
-        const d=ds.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
-        const a=as.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
-        if(d){m.debt=Number(d.debt||0);m.debtReason=String(d.reason||'');}
-        if(a){m.application=true;m.applicationDate=String(a.applicationDate||'');}
+        // Restore the complete server snapshot. If a saved server record exists,
+        // it is authoritative even when the member/attendance tables temporarily
+        // contain an older value. Absence in the snapshot also means the flag is
+        // cleared, which makes deletion synchronize correctly.
+        const br=serverBillingSnapshot || attendanceState.billingRecordSnapshot || null;
+        if(br){
+          const ds=Array.isArray(br.debtSnapshot)?br.debtSnapshot:[];
+          const as=Array.isArray(br.applicationSnapshot)?br.applicationSnapshot:[];
+          const nm=String(m.surname||'').trim()+'|'+String(m.name||'').trim();
+          const d=ds.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
+          const a=as.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
+          m.debt=d?Number(d.debt||0):0;
+          m.debtReason=d?String(d.reason||''):'';
+          m.application=!!a;
+          m.applicationDate=a?String(a.applicationDate||''):'';
+        }
       });
       saveCurrentTrainingAttendanceLocalOnly();
       refreshAttendance();

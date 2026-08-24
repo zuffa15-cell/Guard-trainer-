@@ -7362,6 +7362,57 @@ function toggleRegistration(i){
  refreshAttendance();
 }
 function toggleNew(i){ if(!attendanceEditGuard()) return; attendanceState.members[i].newMember=!attendanceState.members[i].newMember;refreshAttendance();}
+/* v737 – isolated cross-device synchronisation for MEMBERSHIP only.
+   Does not touch the working attendance/TRÉNING synchronisation. */
+(function installMembershipSupabaseSync(){
+  if(window.__gtMembershipSupabaseSyncInstalled) return;
+  window.__gtMembershipSupabaseSyncInstalled=true;
+  const pending=Object.create(null);
+  function url(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
+  function tok(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function hdr(){return {'apikey':key(),'Authorization':'Bearer '+tok(),'Accept':'application/json','Content-Type':'application/json'}}
+  async function save(member,period,paid){
+    if(!member||!tok()) return false;
+    const id=Number(member.id); if(!Number.isFinite(id)) return false;
+    pending[String(id)]=Date.now()+2200;
+    try{
+      const body=period===1?{membership_paid_first_half:!!paid}:{membership_paid_second_half:!!paid};
+      const r=await window.gtSupabaseFetch(url()+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(id),{method:'PATCH',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'}),body:JSON.stringify(body)});
+      if(!r.ok) throw new Error('Supabase HTTP '+r.status+' '+(await r.text()).slice(0,180));
+      pending[String(id)]=Date.now()+2200;
+      return true;
+    }catch(e){
+      console.error('Guard Trainer membership sync:',e);
+      try{toast('Chyba zápisu členského: '+e.message)}catch(_){}
+      return false;
+    }
+  }
+  async function pull(){
+    if(!document.querySelector('.attendance-page')||!tok()||!url()) return false;
+    try{
+      const r=await window.gtSupabaseFetch(url()+'/rest/v1/members?select=legacy_id,membership_paid_first_half,membership_paid_second_half');
+      if(!r.ok) return false;
+      const rows=await r.json(), now=Date.now();
+      const byId=Object.create(null); (rows||[]).forEach(x=>{if(x.legacy_id!=null)byId[String(Number(x.legacy_id))]=x});
+      let changed=false; const period=typeof currentMembershipPeriod==='function'?currentMembershipPeriod():2;
+      (membersData||[]).forEach(m=>{
+        const id=Number(m&&m.id), k=String(id), x=byId[k]; if(!Number.isFinite(id)||!x||(pending[k]||0)>now)return;
+        const h1=!!x.membership_paid_first_half, h2=!!x.membership_paid_second_half;
+        const current=period===1?h1:h2;
+        if(!!m.membershipFirstHalf!==h1||!!m.membershipSecondHalf!==h2||!!m.membership!==current){
+          m.membershipFirstHalf=h1; m.membershipSecondHalf=h2; m.membership=current; changed=true;
+        }
+      });
+      if(changed){persistMembersData(); refreshAttendance();}
+      return true;
+    }catch(e){console.warn('Guard Trainer membership pull:',e);return false;}
+  }
+  window.gtSaveMembershipSupabase=save;
+  window.gtSyncMembershipSupabase=pull;
+  setInterval(()=>{if(document.visibilityState==='visible')pull()},1000);
+})();
+
 function enterMembership(i){
  if(!attendanceEditGuard() || !billingEditGuard() || !attendancePaymentEditGuard()) return;
  const a=attendanceState.members[i];
@@ -7412,6 +7463,7 @@ function enterMembership(i){
    persistMembersData();
    persistPaymentHistory();
    refreshAttendance();
+   if(m && typeof window.gtSaveMembershipSupabase==='function') window.gtSaveMembershipSupabase(m,period,false);
    return;
  }
  if(m && membershipPaidForPeriod(m,period)){ refreshAttendance(); return; }
@@ -7427,6 +7479,7 @@ function enterMembership(i){
    });
  }
  refreshAttendance();
+ if(m && typeof window.gtSaveMembershipSupabase==='function') window.gtSaveMembershipSupabase(m,period,true);
 }
 function enterDebt(i){
  if(!attendanceEditGuard()) return;

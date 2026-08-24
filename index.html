@@ -6910,6 +6910,9 @@ function membershipPaidHereToday(m){
 }
 function memberHasRegistration(m){
   if(!m)return false;
+  // Supabase member-level registration is the shared source of truth.
+  // Keep the local payment-history check as a compatibility fallback.
+  if(!!m.registration) return true;
   const id=attendanceMemberId(m);
   return registrationPayments.some(p=>Number(p.memberId)===Number(id));
 }

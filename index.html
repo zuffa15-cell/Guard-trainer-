@@ -7881,11 +7881,11 @@ function getBillingRecords(){
   window.__gtBillingLiveRefreshInstalled=true;
   setInterval(()=>{
     try{
-      if(window.gtSyncBillingSupabase && document.querySelector('.billing-page') && !window.__gtBillingRefreshInFlight){
+      if(window.gtSyncBillingSupabase && document.querySelector('.monthly-billing-page') && !window.__gtBillingRefreshInFlight){
         window.__gtBillingRefreshInFlight=true;
         window.gtSyncBillingSupabase().then(()=>{
           window.__gtBillingRefreshInFlight=false;
-          try{ if(document.querySelector('.billing-page')) renderMonthlyBilling(); }catch(_){}
+          try{ if(document.querySelector('.monthly-billing-page')) renderMonthlyBilling(); }catch(_){}
         }).catch(()=>{window.__gtBillingRefreshInFlight=false;});
       }
     }catch(_){}
@@ -10209,7 +10209,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
     window.__gtBillingRefreshInFlight=true;
     window.gtSyncBillingSupabase().then(()=>{
       window.__gtBillingRefreshInFlight=false;
-      try{ if(document.querySelector('.billing-page')) renderMonthlyBilling(); }catch(_){}
+      try{ if(document.querySelector('.monthly-billing-page')) renderMonthlyBilling(); }catch(_){}
     }).catch(()=>{window.__gtBillingRefreshInFlight=false;});
   }
   const now=appToday();

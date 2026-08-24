@@ -531,6 +531,7 @@ body{overflow-x:hidden}
 .profile-delete-box{margin-top:12px;border:1px solid #5a1c1c;border-radius:8px;padding:10px;text-align:right}
 .profile-delete-box button{background:#160606;border:1px solid #d92828;color:#f23a3a;border-radius:5px;padding:10px 14px;font-weight:800}
 .profile-delete-box button.deleting-member{background:#d40000!important;border-color:#ff3030!important;color:#fff!important;transition:none!important;}
+.delete-actions .deleting-schedule{background:#d40000!important;border-color:#ff3030!important;color:#fff!important;}
 
 .members-head{display:flex;justify-content:space-between;align-items:center;margin:8px 0 12px}.members-head h2{margin:0;font-size:22px}.members-head small{color:#aaa}.members-head button{background:#d99a10;border:1px solid #efb52c;color:#111;border-radius:6px;padding:11px;font-weight:900}
 .member-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.member-stats div{border:1px solid #594400;border-radius:7px;text-align:center;padding:10px 4px}.member-stats b{display:block;font-size:23px;color:#ffd12b}.member-stats span{font-size:9px;color:#aaa}
@@ -5717,7 +5718,9 @@ function deleteSchedule(id){
   </div>`;
  document.body.appendChild(wrap);
 }
-function confirmDeleteScheduleRange(id){
+async function confirmDeleteScheduleRange(id){
+ const deleteBtn=document.querySelector('#scheduleDeleteModal .delete-actions .danger');
+ if(deleteBtn){ deleteBtn.classList.add('deleting-schedule'); deleteBtn.textContent='MAŽEM'; deleteBtn.disabled=true; }
  const from=document.getElementById('deleteFrom')?.value;
  const to=document.getElementById('deleteTo')?.value;
  if(!from||!to){toast('Vyber dátum OD a DO');return;}
@@ -5741,23 +5744,25 @@ function confirmDeleteScheduleRange(id){
    x.startDate=nextIsoDate(to);
  }
  localStorage.setItem('gt-schedule',JSON.stringify(arr));
- // v720: reflect exactly the delete/range change on the shared server.
- (async()=>{
-   const ok=await gtDeleteScheduleSupabase(x.id);
-   if(!ok) return;
-   if(before&&after){
-     const left=arr.find(z=>Number(z.id)!==Number(x.id)&&z.until===previousIsoDate(from)&&z.startDate===x.startDate);
-     const right=arr.find(z=>Number(z.id)!==Number(x.id)&&z.startDate===nextIsoDate(to)&&z.until===x.until);
-     if(left) await gtSaveScheduleSupabase(left);
-     if(right) await gtSaveScheduleSupabase(right);
-   }else if(before){
-     const left=arr.find(z=>Number(z.id)!==Number(x.id)&&z.until===previousIsoDate(from));
-     if(left) await gtSaveScheduleSupabase(left);
-   }else if(after){
-     const right=arr.find(z=>Number(z.id)!==Number(x.id)&&z.startDate===nextIsoDate(to));
-     if(right) await gtSaveScheduleSupabase(right);
-   }
- })();
+ // v722: wait for the real server delete/update before closing the UI.
+ const ok=await gtDeleteScheduleSupabase(x.id);
+ if(!ok){
+   if(deleteBtn){ deleteBtn.classList.remove('deleting-schedule'); deleteBtn.textContent='VYMAZAŤ'; deleteBtn.disabled=false; }
+   return;
+ }
+ if(before&&after){
+   const left=arr.find(z=>Number(z.id)!==Number(x.id)&&z.until===previousIsoDate(from)&&z.startDate===x.startDate);
+   const right=arr.find(z=>Number(z.id)!==Number(x.id)&&z.startDate===nextIsoDate(to)&&z.until===x.until);
+   if(left && !(await gtSaveScheduleSupabase(left))) return;
+   if(right && !(await gtSaveScheduleSupabase(right))) return;
+ }else if(before){
+   const left=arr.find(z=>Number(z.id)!==Number(x.id)&&z.until===previousIsoDate(from));
+   if(left && !(await gtSaveScheduleSupabase(left))) return;
+ }else if(after){
+   const right=arr.find(z=>Number(z.id)!==Number(x.id)&&z.startDate===nextIsoDate(to));
+   if(right && !(await gtSaveScheduleSupabase(right))) return;
+ }
+ await gtPullSchedulesSupabase();
  // Removing a schedule/group must immediately remove that group from trainer profiles.
  syncTrainerGroupsFromSchedules();
  document.getElementById('scheduleDeleteModal')?.remove();
@@ -5972,12 +5977,12 @@ function selectScheduleColor(c){
   window.gtPullSchedulesSupabase=pull;
   let tries=0;
   const timer=setInterval(async()=>{tries++;const ok=await pull();if(ok||tries>=20)clearInterval(timer)},1200);
-  setInterval(()=>{try{if(token())pull()}catch(_){}} ,2000);
+  setInterval(()=>{try{if(token())pull()}catch(_){}} ,700);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pull()});
   window.addEventListener('focus',()=>pull());
 })();
 
-function saveSchedule(){
+async function saveSchedule(){
  if(!isAdmin()){toast('Rozvrh môže ukladať iba administrátor');return;}
  const btn=document.querySelector('.schedule-save-btn');
  const name=document.getElementById('schName')?.value.trim();
@@ -6009,14 +6014,20 @@ function saveSchedule(){
    window.guardSchedule.push(record);
  }
  localStorage.setItem('gt-schedule',JSON.stringify(window.guardSchedule));
- // v720: write only the changed schedule to Supabase; never push the whole local list.
- gtSaveScheduleSupabase(record).then(ok=>{ if(!ok) console.warn('Rozvrh sa nepodarilo uložiť na server.'); });
+ // v722: wait for the real server write before leaving the editor.
+ if(btn){ btn.disabled=true; btn.classList.add('saving'); btn.textContent='UKLADÁM…'; }
+ const ok=await gtSaveScheduleSupabase(record);
+ if(!ok){
+   if(btn){ btn.disabled=false; btn.classList.remove('saving'); btn.textContent='✓ ULOŽIŤ'; }
+   return;
+ }
+ // Immediately refresh the shared server state on this device.
+ await gtPullSchedulesSupabase();
  // Immediately mirror the schedule assignment into every trainer profile.
  syncTrainerGroupsFromSchedules();
  if(btn){
    btn.classList.add('saved');
    btn.textContent='✓ ULOŽENÉ';
-   btn.disabled=true;
  }
  setTimeout(()=>{ openScheduleManager(); },650);
 }

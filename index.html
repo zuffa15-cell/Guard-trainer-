@@ -6300,9 +6300,37 @@ try{
         const tr=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
         const brs=await fetchJson('/rest/v1/billing_records?training_date=eq.'+encodeURIComponent(d)+'&group_code=eq.'+encodeURIComponent(g)+'&select=record_key,payload,updated_at&order=updated_at.desc&limit=20');
         const candidates=(brs||[]).map(x=>x&&x.payload).filter(Boolean);
-        serverBillingSnapshot=candidates.find(x=>String(x.trainer||'').trim().toUpperCase()===tr.toUpperCase()) || candidates[0] || null;
-        if(serverBillingSnapshot){ attendanceState.billingRecordSnapshot=serverBillingSnapshot; }
+        const trainerCandidates=candidates.filter(x=>String(x.trainer||'').trim().toUpperCase()===tr.toUpperCase());
+        const candidate=trainerCandidates[0] || candidates[0] || null;
+        // Never let an older server copy overwrite a freshly committed local
+        // snapshot. This was the cause of the new values appearing briefly
+        // and then disappearing after the next sync cycle.
+        const localCommitted=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
+        const localSavedAt=Number(localCommitted&&localCommitted.savedAt||window.__gtCommittedTrainingSnapshotSavedAt||0);
+        const serverSavedAt=Number(candidate&&candidate.savedAt||0);
+        if(candidate && (!localCommitted || serverSavedAt>=localSavedAt)){
+          serverBillingSnapshot=candidate;
+          attendanceState.billingRecordSnapshot=candidate;
+          persistCommittedTrainingSnapshot(candidate);
+        } else {
+          serverBillingSnapshot=localCommitted || null;
+        }
       }catch(e){ console.warn('Guard Trainer billing snapshot pull:',e); }
+      // IMPORTANT: after a successful ULOŽIŤ VYÚČTOVANIE the committed
+      // snapshot is the authoritative state for this training on this device.
+      // Do not let the attendance table (which may still contain the previous
+      // version for a moment) overwrite the freshly committed snapshot.
+      // On another device there is no local committed snapshot yet, so the
+      // server billing snapshot is used normally.
+      const committed=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
+      const committedAt=Number(committed&&committed.savedAt||0);
+      const serverAt=Number(serverBillingSnapshot&&serverBillingSnapshot.savedAt||0);
+      if(committed && committedAt>0 && (!serverBillingSnapshot || serverAt<=committedAt)){
+        applyBillingSnapshotToAttendance();
+        saveCurrentTrainingAttendanceLocalOnly();
+        refreshAttendance();
+        return true;
+      }
       const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
 
       // v788: PRIHLÁŠKA is authoritative on the member row in Supabase.
@@ -6429,7 +6457,13 @@ function persistCommittedTrainingSnapshot(record){
   try{
     if(!record)return;
     const key='gt-training-billing-snapshot|'+String(record.date||'')+'|'+String(record.group||'');
+    const savedAt=Number(record.savedAt||0);
+    // The committed snapshot is the last state the user explicitly saved.
+    // Keep its timestamp separately so a delayed/older Supabase pull can
+    // never overwrite it after returning to Dochádzka.
     localStorage.setItem(key,JSON.stringify(record));
+    localStorage.setItem(key+'|savedAt',String(savedAt));
+    window.__gtCommittedTrainingSnapshotSavedAt=savedAt;
   }catch(e){ console.warn('billing snapshot cache save failed',e); }
 }
 function loadCommittedTrainingSnapshot(){
@@ -6439,6 +6473,7 @@ function loadCommittedTrainingSnapshot(){
     const r=JSON.parse(raw);
     if(!r)return null;
     attendanceState.billingRecordSnapshot=r;
+    window.__gtCommittedTrainingSnapshotSavedAt=Number(r.savedAt||localStorage.getItem(billingSnapshotStorageKey()+'|savedAt')||0);
     attendanceState.billingPaymentSnapshot={};
     (Array.isArray(r.paymentSnapshot)?r.paymentSnapshot:[]).forEach(x=>{
       attendanceState.billingPaymentSnapshot[String(x.surname||'').trim()+'|'+String(x.name||'').trim()]=x;

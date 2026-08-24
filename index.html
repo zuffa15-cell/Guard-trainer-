@@ -4425,14 +4425,18 @@ loadPersistedMembers();
     const url=supaUrl(), key=supaKey();
     if(!url || !key || !token()) return false;
     try{
-      const [groups,serverMembers]=await Promise.all([
+      const [groups,serverMembers,memberGroups]=await Promise.all([
         getJson(url+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
-        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc')
+        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,registration_paid,application_date,club_join_date,active,archived,photo_url,note&order=legacy_id.asc'),
+        getJson(url+'/rest/v1/member_groups?select=member_id,group_id')
       ]);
       // A sync request may have started just before a delete. Never let its
       // stale response overwrite the local list after the delete has begun.
       if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
-      const groupMap=Object.create(null); (groups||[]).forEach(g=>groupMap[String(g.name||'').trim()]=g.id);
+      const groupMap=Object.create(null); const groupNameById=Object.create(null);
+      (groups||[]).forEach(g=>{groupMap[String(g.name||'').trim()]=g.id; groupNameById[String(g.id)]=String(g.name||'').trim();});
+      const memberGroupNames=Object.create(null);
+      (memberGroups||[]).forEach(x=>{const mid=String(x.member_id||''); const gn=groupNameById[String(x.group_id||'')]; if(!mid||!gn)return; (memberGroupNames[mid]||(memberGroupNames[mid]=[])).push(gn);});
       const localById=new Map(membersData.map(m=>[Number(m.id),m]));
       const serverByLegacy=new Map((serverMembers||[]).filter(m=>m.legacy_id!=null).map(m=>[Number(m.legacy_id),m]));
 
@@ -4457,8 +4461,10 @@ loadPersistedMembers();
         }
         m.name=sm.first_name||m.name||''; m.surname=sm.last_name||m.surname||'';
         m.dob=fromIsoDate(sm.date_of_birth)||m.dob||''; m.phone=sm.phone||'';
-        const group=(groups||[]).find(g=>g.id===sm.group_id);
-        if(group){m.group=group.name;m.groups=[group.name]}
+        const relGroups=memberGroupNames[String(sm.id)]||[];
+        const primaryGroup=(groups||[]).find(g=>g.id===sm.group_id);
+        const mergedGroups=relGroups.length?relGroups:(primaryGroup?[primaryGroup.name]:[]);
+        if(mergedGroups.length){m.groups=[...new Set(mergedGroups)];m.group=m.groups[0]}
         else {m.group=m.group||'';m.groups=m.groups||[m.group].filter(Boolean)}
         m.membershipFirstHalf=!!sm.membership_paid_first_half;
         m.membershipSecondHalf=!!sm.membership_paid_second_half;
@@ -4624,7 +4630,26 @@ loadMemberNotes();
     });
     const text=await r.text();
     if(!r.ok) throw new Error('Server odmietol zápis ('+r.status+'). '+text.slice(0,300));
-    return text?JSON.parse(text):null;
+    let saved=[]; try{saved=text?JSON.parse(text):[]}catch(_){saved=[]}
+    const memberRow=Array.isArray(saved)?saved[0]:saved;
+    const memberUuid=memberRow&&memberRow.id;
+    if(memberUuid){
+      const groups=(m.groups||[m.group]).map(x=>String(x||'').trim()).filter(Boolean);
+      const gm2=gm;
+      await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/member_groups?member_id=eq.'+encodeURIComponent(memberUuid),{
+        method:'DELETE',headers:h
+      }).then(async rr=>{ if(!rr.ok) throw new Error('Server odmietol aktualizáciu skupín ('+rr.status+'). '+(await rr.text()).slice(0,240)); });
+      if(groups.length){
+        const rows=groups.map(g=>({member_id:memberUuid,group_id:gm2[g]})).filter(x=>x.group_id);
+        if(rows.length){
+          const gr=await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/member_groups',{
+            method:'POST',headers:{...h,'Prefer':'return=minimal'},body:JSON.stringify(rows)
+          });
+          if(!gr.ok) throw new Error('Server odmietol skupiny člena ('+gr.status+'). '+(await gr.text()).slice(0,240));
+        }
+      }
+    }
+    return saved;
   };
 
   /* Backward compatibility: staré volania zostávajú funkčné, ale už tiež
@@ -6126,11 +6151,30 @@ try{
     return row.id;
   }
   async function memberMap(){
-    const ids=(attendanceState.members||[]).map(m=>Number(m.id)).filter(Number.isFinite);
-    if(!ids.length)return {};
-    const q=ids.join(',');
-    const rows=await fetchJson('/rest/v1/members?legacy_id=in.('+q+')&select=id,legacy_id');
-    const out={}; (rows||[]).forEach(x=>{out[String(Number(x.legacy_id))]=x.id}); return out;
+    const localMembers=(attendanceState.members||[]).filter(Boolean);
+    if(!localMembers.length)return {};
+    const out={};
+    const ids=localMembers.map(m=>Number(m.id)).filter(Number.isFinite);
+    if(ids.length){
+      const q=ids.join(',');
+      const rows=await fetchJson('/rest/v1/members?legacy_id=in.('+q+')&select=id,legacy_id');
+      (rows||[]).forEach(x=>{ if(x.legacy_id!==null&&x.legacy_id!==undefined) out[String(Number(x.legacy_id))]=x.id; });
+    }
+    // Older members may have been created before legacy_id was introduced.
+    // Resolve those safely by the exact surname + name pair, then keep the
+    // mapping under the local numeric id so attendance can be saved normally.
+    for(const m of localMembers){
+      const lk=String(Number(m.id));
+      if(!Number.isFinite(Number(m.id)) || out[lk]) continue;
+      const last=String(m.surname||'').trim();
+      const first=String(m.name||'').trim();
+      if(!last || !first) continue;
+      const rows=await fetchJson('/rest/v1/members?last_name=eq.'+encodeURIComponent(last)+'&first_name=eq.'+encodeURIComponent(first)+'&select=id,legacy_id&limit=5');
+      if(rows && rows.length===1){
+        out[lk]=rows[0].id;
+      }
+    }
+    return out;
   }
   async function pull(){
     if(!document.querySelector('.attendance-page')||!tok())return false;
@@ -6155,7 +6199,7 @@ try{
     try{
       const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
       const map=await memberMap(), memberId=map[String(Number(m.id))];
-      if(!memberId) throw new Error('Člen '+m.surname+' '+m.name+' nemá Supabase ID.');
+      if(!memberId) throw new Error('Člen '+m.surname+' '+m.name+' sa nenašiel v Supabase.');
       const body={training_id:trainingId,member_id:memberId,present:!!m.training,new_member:!!m.newMember,training_fee_paid:!!(m.training&&!m.newMember&&!m.trainingAccount),debt_amount:Number(m.debt||0),debt_note:String(m.debtReason||'')||null};
       await fetchJson('/rest/v1/attendance?on_conflict=training_id,member_id',{
         method:'POST',headers:headers({'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'}),body:JSON.stringify(body)

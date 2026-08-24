@@ -5114,7 +5114,15 @@ function saveMemberPaymentFromProfile(memberId,type,period){
  persistPaymentHistory();
  const modal=document.getElementById('memberPaymentEditor'); if(modal)modal.remove();
  renderMemberProfile(memberId);
- toast(`${type==='membership'?'Členské':'Registračné'} uložené`);
+ // v740: use the same direct member write-through already used by member edits.
+ if(type==='membership'){
+   Promise.resolve().then(()=>window.gtSaveMembershipImmediatelyV740(memberId)).then(()=>toast('Členské uložené')).catch(e=>{
+     console.error('Členské Supabase:',e);
+     toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e));
+   });
+ } else {
+   toast('Registračné uložené');
+ }
 }
 function deleteMemberPaymentFromProfile(memberId,type,period){
  const m=membersData.find(x=>Number(x.id)===Number(memberId)); if(!m)return;
@@ -7341,6 +7349,7 @@ function toggleRegistration(i){
    persistMembersData();
    persistPaymentHistory();
    refreshAttendance();
+   Promise.resolve().then(()=>window.gtSaveMembershipImmediatelyV740(m.id)).catch(e=>toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e)));
    return;
  }
  if(memberHasRegistration(m) && !draft){
@@ -7405,8 +7414,6 @@ function enterMembership(i){
       (!m.membershipPaidGroup || m.membershipPaidGroup===attendanceState.group)){
      m.membership=false; m.membershipAmount=0; m.membershipDate=''; m.membershipPaidGroup='';
    }
-   if(period===1) m.membershipFirstHalf=false; else m.membershipSecondHalf=false;
-   m.membership=(period===1)?!!m.membershipFirstHalf:!!m.membershipSecondHalf;
    if(attendanceState.billingPaymentSnapshot){
      const sk=m.surname+'|'+m.name;
      if(attendanceState.billingPaymentSnapshot[sk]){ attendanceState.billingPaymentSnapshot[sk].membership=0; attendanceState.billingPaymentSnapshot[sk].membershipAmount=0; }
@@ -7414,9 +7421,7 @@ function enterMembership(i){
    persistMembersData();
    persistPaymentHistory();
    refreshAttendance();
-   if(m && typeof window.gtSaveMemberSupabase==='function'){
-     window.gtSaveMemberSupabase(m.id).catch(e=>{try{toast('Chyba zápisu členského: '+(e&&e.message?e.message:e))}catch(_){}});
-   }
+   Promise.resolve().then(()=>window.gtSaveMembershipImmediatelyV740(m.id)).catch(e=>toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e)));
    return;
  }
  if(m && membershipPaidForPeriod(m,period)){ refreshAttendance(); return; }
@@ -7430,15 +7435,12 @@ function enterMembership(i){
      action:'add',memberId:m.id,surname:m.surname,name:m.name,
      amount:n,date:attendanceDateKey(),paidGroup:attendanceState.group,period
    });
-   if(period===1) m.membershipFirstHalf=true; else m.membershipSecondHalf=true;
-   m.membership=(period===1)?!!m.membershipFirstHalf:!!m.membershipSecondHalf;
-   m.membershipAmount=n; m.membershipDate=attendanceDateKey(); m.membershipPaidGroup=attendanceState.group;
+   // Keep the member-level record in sync immediately, just like normal member edits.
+   m.membership=true; m.membershipAmount=n; m.membershipDate=attendanceDateKey(); m.membershipPaidGroup=attendanceState.group;
    persistMembersData();
+   Promise.resolve().then(()=>window.gtSaveMembershipImmediatelyV740(m.id)).catch(e=>toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e)));
  }
  refreshAttendance();
- if(m && typeof window.gtSaveMemberSupabase==='function'){
-   window.gtSaveMemberSupabase(m.id).catch(e=>{try{toast('Chyba zápisu členského: '+(e&&e.message?e.message:e))}catch(_){}});
- }
 }
 function enterDebt(i){
  if(!attendanceEditGuard()) return;
@@ -10926,6 +10928,17 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 <label class="field"><span class="icon">♙</span><input id="gtLoginPassword" type="password" placeholder="Heslo" autocomplete="current-password"></label>
 <button class="login" type="button">PRIHLÁSIŤ SA</button><div id="gtLoginErrorV702" style="display:none;width:100%;margin-top:14px;padding:12px;border:1px solid #7a5b20;border-radius:10px;background:#15110a;color:#ffd66b;font-size:14px;line-height:1.45;box-sizing:border-box;text-align:center;word-break:break-word"></div>
 <div class="footer">GUARD TRAINER 1.0<br>© 2024 Guard Košice</div></div></div>
+<script id="gtMembershipWriteThroughV740">
+(function(){
+  if(window.__gtMembershipWriteThroughV740Installed) return;
+  window.__gtMembershipWriteThroughV740Installed=true;
+  async function save(id){
+    if(typeof window.gtSaveMemberSupabase!=='function') throw new Error('Supabase zápis člena nie je dostupný.');
+    await window.gtSaveMemberSupabase(id);
+  }
+  window.gtSaveMembershipImmediatelyV740=save;
+})();
+</script>
 <script id="gtSupabaseConfigV700">
 (function(){
   window.GT_SUPABASE_URL='https://glsqqmernrgztuusncmn.supabase.co';

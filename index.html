@@ -258,7 +258,7 @@ body{overflow-x:hidden}
 .club-row{display:flex;justify-content:space-between;align-items:center;padding:13px 12px;background:linear-gradient(145deg,#11100a,#080808);font-weight:700}
 .club-row strong{color:#ffd12b;font-size:20px}
 .billing-note{font-size:11px;color:#999;margin:6px 2px 12px}.billing-note b{color:#ffb31c}
-.confirm-billing{width:100%;border:0;border-radius:8px;padding:12px;background:linear-gradient(145deg,#58c747,#23891c);color:#fff;font-weight:700;box-shadow:inset 0 2px 3px rgba(255,255,255,.3),0 3px 5px #000}
+.confirm-billing{width:100%;border:0;border-radius:8px;padding:12px;background:linear-gradient(145deg,#ffd12b,#e7a900);color:#171717;font-weight:800;box-shadow:inset 0 2px 3px rgba(255,255,255,.45),0 3px 5px #000;transition:background .15s ease,transform .08s ease}.confirm-billing.saving{background:linear-gradient(145deg,#58c747,#23891c)!important;color:#fff!important}.confirm-billing:disabled{opacity:1;cursor:wait}.confirm-billing:active{transform:scale(.99)}
 .billing-open{background:linear-gradient(145deg,#3f9cff,#075eb6)!important;color:#fff!important}
 
 
@@ -332,8 +332,8 @@ body{overflow-x:hidden}
 .trainer-avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#333;color:#fff;font-size:24px}
 .monthly-trainer-card div:nth-child(2){display:flex;flex-direction:column}.monthly-trainer-card b{font-size:12px;color:#ffd12b}.monthly-trainer-card span{font-size:14px}.monthly-badge{margin-left:auto;color:#4ea7ff;font-weight:700}
 .monthly-title{margin-bottom:8px}
-.monthly-table-wrap{overflow-x:auto;border:1px solid #8c6800;border-radius:6px}
-.monthly-table{width:100%;min-width:900px;border-collapse:collapse;font-size:11px}
+.monthly-table-wrap{width:100%;max-width:100%;overflow-x:scroll;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-x;overscroll-behavior-x:contain;scrollbar-width:auto;border:1px solid #8c6800;border-radius:6px;cursor:grab;position:relative;pointer-events:auto;user-select:none}.monthly-table-wrap:active{cursor:grabbing}
+.monthly-table{width:max-content;min-width:1100px;border-collapse:collapse;font-size:11px;display:table}
 .monthly-table th,.monthly-table td{border:1px solid #6b5200;padding:7px 5px;text-align:center;white-space:nowrap}
 .monthly-table th{color:#eee;font-weight:700;background:#080808}.monthly-table td{color:#ddd}.monthly-table small{display:block;font-size:8px;color:#999;margin-top:2px}
 .monthly-group{display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:4px;color:#fff;font-weight:800}
@@ -7883,9 +7883,26 @@ function getBillingRecords(){
     try{
       if(window.gtSyncBillingSupabase && document.querySelector('.monthly-billing-page') && !window.__gtBillingRefreshInFlight){
         window.__gtBillingRefreshInFlight=true;
+        const before=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
+        const wasHeadDetail=location.hash==='#head-trainer-detail' || !!document.querySelector('.head-profile-main');
+        const headName=(window.__gtHeadTrainerDetailName||'');
+        const headMonth=Number(window.__gtHeadTrainerDetailMonth||appToday().month);
+        const headYear=Number(window.__gtHeadTrainerDetailYear||appToday().year);
         window.gtSyncBillingSupabase().then(()=>{
           window.__gtBillingRefreshInFlight=false;
-          try{ if(document.querySelector('.monthly-billing-page')) renderMonthlyBilling(); }catch(_){}
+          try{
+            const after=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
+            if(before===after) return;
+            const oldWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+            const oldLeft=oldWrap ? oldWrap.scrollLeft : 0;
+            if(wasHeadDetail && headName && typeof window.renderHeadTrainerDetail==='function'){
+              window.renderHeadTrainerDetail(headName,headMonth,headYear);
+            } else if(document.querySelector('.monthly-billing-page')) {
+              renderMonthlyBilling();
+            }
+            const newWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+            if(newWrap) requestAnimationFrame(()=>{ newWrap.scrollLeft=oldLeft; });
+          }catch(_){}
         }).catch(()=>{window.__gtBillingRefreshInFlight=false;});
       }
     }catch(_){}
@@ -8085,6 +8102,9 @@ function upsertBillingRecordFromAttendance(){
 }
 let billingReturnScreen='attendance';
 function openTrainingBillingFromAttendance(){
+  // Keep the immediate next screen stable. A stale monthly-billing transition
+  // from an earlier screen must never pull us away from the training billing.
+  window.__gtTrainingBillingGuardUntil=Date.now()+4000;
   if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
   try{
     // Potvrdenie dochádzky najprv uloží aktuálny stav. Od tohto momentu
@@ -8106,6 +8126,9 @@ function openTrainingBillingFromAttendance(){
   return false;
 }
 function trainingBilling(){
+  // This screen is the direct result of POTVRDIŤ DOCHÁDZKU.
+  // Do not allow an old async billing refresh to replace it.
+  window.__gtTrainingBillingGuardUntil=window.__gtTrainingBillingGuardUntil||Date.now()+2500;
   billingReturnScreen = 'attendance';
   const app=document.querySelector('.app');
   const fee=trainingFee();
@@ -8148,7 +8171,7 @@ function trainingBilling(){
 
       <div class="billing-note">Dlžné: <b>${debt} €</b> — do sumy odovzdávanej klubu sa nezapočítava.</div>
 
-      <button type="button" class="confirm-billing" onclick="return saveTrainingBilling()">✓ ULOŽIŤ VYÚČTOVANIE</button>
+      <button type="button" id="saveTrainingBillingBtn" class="confirm-billing" onclick="return saveTrainingBilling()">✓ ULOŽIŤ VYÚČTOVANIE</button>
     </main>
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
@@ -8219,6 +8242,22 @@ window.forceMyBillingScreen=forceMyBillingScreen;
 
 async function saveTrainingBilling(){
   if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
+  const saveBtn=document.getElementById('saveTrainingBillingBtn') || document.querySelector('.confirm-billing');
+  if(saveBtn && saveBtn.dataset.saving==='1') return false;
+  if(saveBtn){
+    saveBtn.dataset.saving='1';
+    saveBtn.disabled=true;
+    saveBtn.classList.add('saving');
+    saveBtn.textContent='✓ UKLADÁM';
+  }
+  const resetSaveButton=()=>{
+    if(saveBtn){
+      saveBtn.dataset.saving='';
+      saveBtn.disabled=false;
+      saveBtn.classList.remove('saving');
+      saveBtn.textContent='✓ ULOŽIŤ VYÚČTOVANIE';
+    }
+  };
   // Vyúčtovanie sa pre rovnaký tréning vždy aktualizuje do jedného záznamu.
   // Tréner teda môže uložiť vyúčtovanie opakovane po zmene dochádzky.
   // Členské a registračné sa po potvrdení dochádzky nemenia – ich úpravu
@@ -8349,6 +8388,7 @@ async function saveTrainingBilling(){
   }catch(e){
     console.error('Guard Trainer billing server commit:',e);
     toast('Vyúčtovanie sa nepodarilo synchronizovať: '+(e&&e.message?e.message:e));
+    resetSaveButton();
     return false;
   }
 
@@ -8372,9 +8412,13 @@ async function saveTrainingBilling(){
   }catch(e){
     console.error('Guard Trainer offline attendance commit:',e);
     toast('Nepodarilo sa uložiť celý tréning na server: '+(e&&e.message?e.message:e));
+    resetSaveButton();
     return false;
   }
   lockAttendanceFully();
+  // The training-billing guard ends only after the user explicitly saves the
+  // finished billing. Now it is correct to open Moje vyúčtovanie.
+  window.__gtTrainingBillingGuardUntil=0;
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
   location.hash='trainer-month';
   setTimeout(function(){
@@ -8523,6 +8567,9 @@ window.renderTrainerMonthlyFor=function(trainerName, month, year){
 };
 
 function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToday().year){
+  window.__gtHeadTrainerDetailName=String(trainerName||'').trim();
+  window.__gtHeadTrainerDetailMonth=Number(month)||appToday().month;
+  window.__gtHeadTrainerDetailYear=Number(year)||appToday().year;
   const app=document.querySelector('.app');
   const rows=getTrainerMonthlyRecords(trainerName,month,year);
   const targetTrainerName=String(trainerName||'').trim().toUpperCase();
@@ -10200,6 +10247,9 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
 window.openAttendanceFromBillingRow=openAttendanceFromBillingRow;
 
 function renderMonthlyBilling(year=null,targetMonth=null){
+  // If we have just confirmed attendance, the next screen must remain
+  // VYÚČTOVANIE TRÉNINGU. Monthly billing is allowed only after saving it.
+  if(window.__gtTrainingBillingGuardUntil && Date.now()<Number(window.__gtTrainingBillingGuardUntil) && location.hash==='#training-billing') return false;
   const app=document.querySelector('.app');
   if(!app) return false;
   normalizeMonthlyBillingRecords();
@@ -10207,9 +10257,18 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   // When the server has newer data, redraw once the pull finishes.
   if(window.gtSyncBillingSupabase && !window.__gtBillingRefreshInFlight){
     window.__gtBillingRefreshInFlight=true;
+    const before=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
     window.gtSyncBillingSupabase().then(()=>{
       window.__gtBillingRefreshInFlight=false;
-      try{ if(document.querySelector('.monthly-billing-page')) renderMonthlyBilling(); }catch(_){}
+      try{
+        const after=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
+        if(before===after) return;
+        const oldWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+        const oldLeft=oldWrap ? oldWrap.scrollLeft : 0;
+        renderMonthlyBilling();
+        const newWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+        if(newWrap) requestAnimationFrame(()=>{ newWrap.scrollLeft=oldLeft; });
+      }catch(_){}
     }).catch(()=>{window.__gtBillingRefreshInFlight=false;});
   }
   const now=appToday();
@@ -11260,6 +11319,40 @@ function syncAppDateInputs(){
   });
 }
 document.addEventListener('DOMContentLoaded',syncAppDateInputs);
+
+
+/* v777 – mesačná tabuľka: zachovať horizontálnu pozíciu po prekreslení.
+   Dôležité: tento kód je priamo v hlavnom JS bloku, nie ako vnorený <script>.
+   Predchádzajúca v775 týmto predčasne ukončila hlavný script a zobrazovala starý kód. */
+(function installMonthlyScrollPersistenceV776(){
+  if(window.__gtMonthlyScrollPersistenceV776) return;
+  window.__gtMonthlyScrollPersistenceV776=true;
+  let savedLeft=0;
+  let restoring=false;
+  function getWrap(){
+    return document.querySelector('.monthly-billing-page .monthly-table-wrap');
+  }
+  function remember(){
+    const w=getWrap();
+    if(w) savedLeft=w.scrollLeft||0;
+  }
+  function restore(){
+    const w=getWrap();
+    if(!w || !savedLeft) return;
+    restoring=true;
+    requestAnimationFrame(()=>{
+      try{ w.scrollLeft=savedLeft; }catch(e){}
+      setTimeout(()=>{try{w.scrollLeft=savedLeft}catch(e){};restoring=false;},30);
+    });
+  }
+  document.addEventListener('scroll',function(e){
+    const w=e.target && e.target.closest ? e.target.closest('.monthly-table-wrap') : null;
+    if(w && !restoring) savedLeft=w.scrollLeft||0;
+  },true);
+  document.addEventListener('touchend',function(){remember();}, {passive:true});
+  window.__gtRememberMonthlyScrollV776=remember;
+  window.__gtRestoreMonthlyScrollV776=restore;
+})();
 </script>
 
 <div id="gtLoginOverlayV329" aria-label="Prihlásenie">
@@ -11485,6 +11578,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   setTimeout(fixStats,300); setTimeout(fixStats,1000);
 })();
 </script>
+
 </body>
 
 <style id="v650-statistika-fit-final">

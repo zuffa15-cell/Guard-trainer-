@@ -7082,6 +7082,24 @@ function handleNewMemberClick(i){
   handleTrainingClick(i);
 }
 
+function attendanceClickState(m){
+  if(m.newMember) return 'new';
+  if(m.trainingAccount) return 'account';
+  if(m.training) return 'training';
+  return 'off';
+}
+function setAttendanceClickState(m,state){
+  if(state==='training'){
+    m.training=true; m.trainingAccount=false; m.newMember=false;
+  }else if(state==='account'){
+    m.training=true; m.trainingAccount=true; m.newMember=false;
+  }else if(state==='new'){
+    m.training=true; m.trainingAccount=false; m.newMember=true;
+  }else{
+    m.training=false; m.trainingAccount=false; m.newMember=false;
+  }
+}
+
 function renderAttendanceRows(){
  const locked=isAttendanceFullyLocked()&&!isAdmin();
  return attendanceState.members.map((m,i)=>{
@@ -7092,9 +7110,10 @@ function renderAttendanceRows(){
    // next double-click = NOVÝ (blue)
    // next double-click = OFF
    let label='TRÉNING', cls='';
-   if(m.newMember){ label='NOVÝ'; cls='new-blue'; }
-   else if(m.trainingAccount){ label='ÚČET'; cls='account-on'; }
-   else if(m.training){ label='TRÉNING'; cls='training-on'; }
+   const clickState=attendanceClickState(m);
+   if(clickState==='new'){ label='NOVÝ'; cls='new-blue'; }
+   else if(clickState==='account'){ label='ÚČET'; cls='account-on'; }
+   else if(clickState==='training'){ label='TRÉNING'; cls='training-on'; }
    return `
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
@@ -7618,40 +7637,33 @@ let trainingLastClickAt={};
 function handleTrainingClick(i){
  if(!attendanceEditGuard()) return;
  const key=String(i), now=Date.now(), prev=trainingClickTimers[key];
- if(prev && now-prev.time<450){
+ if(prev && now-prev.time<500){
    clearTimeout(prev.timer); delete trainingClickTimers[key];
-   cycleTrainingDoubleClick(i); return;
+   cycleTrainingDoubleClick(i);
+   return;
  }
  const timer=setTimeout(()=>{
    delete trainingClickTimers[key];
    if(!attendanceEditGuard()) return;
    const m=attendanceState.members[i]; if(!m)return;
-   if(m.training && !m.trainingAccount && !m.newMember){
-     m.training=false; m.trainingAccount=false; m.newMember=false;
-   }else if(!m.training && !m.trainingAccount && !m.newMember){
-     m.training=true; m.trainingAccount=false; m.newMember=false;
-   }
+   // One tap: OFF <-> TRÉNING only.
+   const state=attendanceClickState(m);
+   setAttendanceClickState(m,state==='off'?'training':'off');
    saveCurrentTrainingAttendance(); refreshAttendance();
- },450);
+ },500);
  trainingClickTimers[key]={time:now,timer};
 }
 function cycleTrainingDoubleClick(i){
  if(!attendanceEditGuard()) return;
  const m=attendanceState.members[i]; if(!m)return;
- if(m.newMember){
-   m.newMember=false; m.training=true; m.trainingAccount=false;
-   toast('TRÉNING '+trainingFee()+' €');
- }else if(m.trainingAccount){
-   m.trainingAccount=false; m.newMember=true; m.training=true;
-   toast('NOVÝ – tréning zdarma');
- }else if(m.training){
-   m.trainingAccount=true; m.newMember=false; m.training=true;
-   toast('ÚČET '+trainingFee()+' €');
- }else{
-   m.training=true; m.trainingAccount=true; m.newMember=false;
-   toast('ÚČET '+trainingFee()+' €');
- }
- saveCurrentTrainingAttendance(); refreshAttendance();
+ // Two taps: TRÉNING -> ÚČET -> NOVÝ -> TRÉNING.
+ const state=attendanceClickState(m);
+ if(state==='training') setAttendanceClickState(m,'account');
+ else if(state==='account') setAttendanceClickState(m,'new');
+ else if(state==='new') setAttendanceClickState(m,'training');
+ else setAttendanceClickState(m,'account');
+ saveCurrentTrainingAttendance();
+ refreshAttendance();
 }
 function handleTrainingDoubleClick(event,i){
  if(event){event.preventDefault();event.stopPropagation();}

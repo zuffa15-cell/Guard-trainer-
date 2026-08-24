@@ -3407,6 +3407,21 @@ function renderHeadHomeList(title,rows,kind){
   const body=kind==='new'?rows.map(m=>`<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${m.memberSince||m.newMemberDate||'—'}</span></div>`).join(''):rows.map(m=>{const d=headHomeLastVisit(m);return `<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${d?d.toLocaleDateString('sk-SK'):'Žiadna návšteva'}</span></div>`}).join('');
   app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
+function syncRegistrationPaymentsFromMembers(){
+  try{
+    if(!Array.isArray(window.registrationPayments)) return;
+    membersData.forEach(m=>{
+      if(!m || !m.registration) return;
+      const id=Number(m.id);
+      const exists=registrationPayments.some(p=>Number(p.memberId)===id);
+      if(!exists){
+        registrationPayments.push({memberId:id,surname:m.surname,name:m.name,paidGroup:m.registrationPaidGroup||m.group||'',date:m.registrationDate||appToday().iso,amount:Number(m.registrationAmount||30),source:'member-sync'});
+      }
+    });
+    persistPaymentHistory();
+  }catch(e){}
+}
+
 function renderHeadHome(){
   const app=document.querySelector('.app'), t=appToday(), now=new Date(), greeting=now.getHours()<12?'DOBRÉ RÁNO':(now.getHours()<18?'DOBRÝ DEŇ':'DOBRÝ VEČER');
   const week=headHomeWeekStart(), days=['PO','UT','ST','ŠT','PI','SO','NE'];
@@ -3414,6 +3429,7 @@ function renderHeadHome(){
   // Hlavný tréner: sumy členského a registračného v karte PLATBY
   // musia byť totožné so sumami v mesačnom zúčtovaní trénerov.
   // Priamo zapísané evidenčné platby na účet sa zobrazujú osobitne nižšie.
+  syncRegistrationPaymentsFromMembers();
   const headBillingRowsForPayments=(()=>{try{return getHeadTrainerRowsForMonth(t.month,t.year)||[];}catch(e){return [];}})();
   const membershipSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.membership||0),0);
   const registrationSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.registration||0),0);
@@ -6910,9 +6926,9 @@ function membershipPaidHereToday(m){
 }
 function memberHasRegistration(m){
   if(!m)return false;
-  // Supabase member-level registration is the shared source of truth.
-  // Keep the local payment-history check as a compatibility fallback.
-  if(!!m.registration) return true;
+  // The synchronized member record is authoritative. If registration is
+  // explicitly false, never resurrect an old local payment-history entry.
+  if(typeof m.registration==='boolean') return m.registration;
   const id=attendanceMemberId(m);
   return registrationPayments.some(p=>Number(p.memberId)===Number(id));
 }
@@ -7403,7 +7419,8 @@ async function toggleRegistration(i){
    }
    persistMembersData();
    persistPaymentHistory();
-   await saveMember();
+   const saved=await saveMember();
+   if(saved) syncRegistrationIntoBillingRecord();
    refreshAttendance();
    return;
  }
@@ -7415,7 +7432,7 @@ async function toggleRegistration(i){
      m.registration=false; m.registrationDate=''; m.registrationAmount=0; m.registrationPaidGroup='';
      persistMembersData();
      const saved=await saveMember();
-     if(saved){ refreshAttendance(); try{ if(typeof window.gtSyncMembersSupabase==='function') window.gtSyncMembersSupabase(); }catch(_){} }
+     if(saved){ syncRegistrationIntoBillingRecord(); refreshAttendance(); try{ if(typeof window.gtSyncMembersSupabase==='function') window.gtSyncMembersSupabase(); }catch(_){} }
      else { m.registration=true; m.registrationAmount=30; m.registrationDate=attendanceDateKey(); m.registrationPaidGroup=attendanceState.group; a.registration=true; a.registrationDate=m.registrationDate; a.registrationAmount=30; a.registrationPaidGroup=m.registrationPaidGroup; refreshAttendance(); }
      return;
    }
@@ -7441,6 +7458,7 @@ async function toggleRegistration(i){
  persistMembersData();
  const saved=await saveMember();
  if(saved){
+   syncRegistrationIntoBillingRecord();
    // Keep the visual state and then allow the normal cross-device member pull.
    refreshAttendance();
    try{ if(typeof window.gtSyncMembersSupabase==='function') window.gtSyncMembersSupabase(); }catch(_){}
@@ -7453,6 +7471,32 @@ async function toggleRegistration(i){
    refreshAttendance();
  }
 }
+function syncRegistrationIntoBillingRecord(){
+  try{
+    const dateKey=attendanceDateKey(), group=attendanceState.group;
+    const trainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+    const key=`${dateKey}|${group}|${trainer}`;
+    const idx=monthlyBillingRecords.findIndex(r=>r.key===key);
+    if(idx<0) return;
+    const r=monthlyBillingRecords[idx];
+    const registrationSum=attendanceState.members.reduce((x,m)=>x+Number(currentMemberPaymentTotals(m).registration||0),0);
+    const trainingSum=Number(r.trainingSum||0), membershipSum=Number(r.membershipSum||0);
+    const otherPlus=Number(r.otherPlus||0), otherMinus=Number(r.otherMinus||0);
+    const gross=trainingSum+membershipSum+registrationSum+otherPlus-otherMinus;
+    const reward=Number(r.trainerReward||0);
+    r.registrationSum=registrationSum;
+    r.gross=gross;
+    r.clubAmount=gross-reward;
+    r.paymentSnapshot=(attendanceState.members||[]).map(m=>{
+      const pt=currentMemberPaymentTotals(m);
+      return {surname:m.surname,name:m.name,membership:Number(pt.membership||0),registration:Number(pt.registration||0),trainingAccount:!!m.trainingAccount,training:!!m.training,newMember:!!m.newMember};
+    }).filter(x=>x.training||x.membership>0||x.registration>0);
+    monthlyBillingRecords[idx]=r;
+    normalizeMonthlyBillingRecords();
+    persistMonthlyBillingRecords();
+  }catch(e){ console.error('syncRegistrationIntoBillingRecord:',e); }
+}
+
 function toggleNew(i){ if(!attendanceEditGuard()) return; attendanceState.members[i].newMember=!attendanceState.members[i].newMember;refreshAttendance();}
 function enterMembership(i){
  if(!attendanceEditGuard() || !billingEditGuard() || !attendancePaymentEditGuard()) return;

@@ -2702,8 +2702,8 @@ html,body{color-scheme:dark!important;}
 <script id="gtFixRegistrationV747">
 (function(){
   // Compatibility alias: some registration code paths may call the misspelled helper.
-  if(typeof window.tolsoDate !== 'function'){
-    window.tolsoDate=function(v){
+  if(typeof window.toIsoDate !== 'function'){
+    window.toIsoDate=function(v){
       const s=String(v||'').trim();
       const m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
       if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
@@ -4425,7 +4425,7 @@ loadPersistedMembers();
       membership_second_half_group:String(m.membershipSecondHalfGroup||'')||null,
       registration_paid:!!m.registration,
       registration_amount:Number(m.registrationAmount||0)||null,
-      registration_date:toIsoDate(m.registrationDate||''),
+      registration_date:iso(m.registrationDate||''),
       registration_group:String(m.registrationPaidGroup||'')||null,
       application_date:toIsoDate(m.applicationDate||''),
       club_join_date:toIsoDate(m.memberSince||''),
@@ -4646,7 +4646,7 @@ loadMemberNotes();
       membership_second_half_group:String(m.membershipSecondHalfGroup||'')||null,
       registration_paid:!!m.registration,
       registration_amount:Number(m.registrationAmount||0)||null,
-      registration_date:toIsoDate(m.registrationDate||''),
+      registration_date:iso(m.registrationDate||''),
       registration_group:String(m.registrationPaidGroup||'')||null,
       application_date:iso(m.applicationDate),
       club_join_date:iso(m.memberSince),

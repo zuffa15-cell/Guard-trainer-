@@ -6570,7 +6570,7 @@ function syncAllMembersFromAttendance(){
 function syncAttendanceRecord(member){
   let a=attendanceRecordForMember(member);
   if(!a){
-    a={surname:member.surname,name:member.name,training:false,newMember:!!member.newMember,membershipAmount:member.membership?Number(member.membershipAmount||30):0,membershipDate:member.membershipDate||'',membershipPaidGroup:member.membershipPaidGroup||'',membershipAccountAmount:Number(member.membershipAccountAmount||0),membershipAccountDate:member.membershipAccountDate||'',registration:!!member.registration,registrationDate:member.registrationDate||'',debt:member.debt||0,debtReason:member.debtReason||'',application:!!member.application};
+    a={id:member.id,surname:member.surname,name:member.name,training:false,newMember:!!member.newMember,membershipAmount:member.membership?Number(member.membershipAmount||30):0,membershipDate:member.membershipDate||'',membershipPaidGroup:member.membershipPaidGroup||'',membershipAccountAmount:Number(member.membershipAccountAmount||0),membershipAccountDate:member.membershipAccountDate||'',registration:!!member.registration,registrationDate:member.registrationDate||'',debt:member.debt||0,debtReason:member.debtReason||'',application:!!member.application};
     attendanceState.members.push(a);
   }
   a.surname=member.surname;a.name=member.name;
@@ -6599,7 +6599,7 @@ function loadAttendanceFromMembers(){
  attendanceState.members=selected.map(m=>{
    const old=byName.get(m.surname+'|'+m.name);
    return {
-     surname:m.surname,name:m.name,training:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).training
+     id:m.id, surname:m.surname,name:m.name,training:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).training
       || ((old && old.group===attendanceState.group)?!!old.training:false)),
      trainingAccount:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).trainingAccount
       || ((old && old.group===attendanceState.group)?!!old.trainingAccount:false)),

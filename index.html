@@ -5662,7 +5662,7 @@ function openScheduleManager(){
  const app=document.querySelector('.app');
  app.innerHTML=`
   <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
-  <main class="content schedule-page">
+  <main class="content schedule-page schedule-manager-page">
    <div class="section-title">📅 ROZVRH</div>
    <small>Uložené tréningy – admin ich môže upraviť alebo vymazať.</small>
    <div class="schedule-list">
@@ -5837,8 +5837,8 @@ function openCreateSchedule(editId=null){
     <small class="schedule-money-note">Tieto sumy sa automaticky použijú v Dochádzke a vo Vyúčtovaní pre tento tréning.</small>
     <label class="check-line"><input id="schRepeat" type="checkbox" onchange="toggleScheduleUntil()"> OPAKOVAŤ TÝŽDENNE</label>
     <div class="profile-grid schedule-validity">
-     <label>ROZVRH PLATNÝ OD<input id="schFromDate" value="${scheduleDraft.startDate||""}" type="date"></label>
-     <label>ROZVRH PLATNÝ DO<input id="schUntil" value="${scheduleDraft.until||""}" type="date"></label>
+     <label>ROZVRH PLATNÝ OD<input id="schFromDate" value="${scheduleDraft.startDate||""}" type="date" min="2026-05-08" max="2099-12-31"></label>
+     <label>ROZVRH PLATNÝ DO<input id="schUntil" value="${scheduleDraft.until||""}" type="date" min="2026-05-08" max="2099-12-31"></label>
     </div>
     <label>PRIDELENÍ TRÉNERI
       <div id="schTrainers" class="schedule-trainers">
@@ -5946,7 +5946,8 @@ function selectScheduleColor(c){
         localStorage.setItem('gt-schedule',JSON.stringify(next));
         window.guardSchedule=next;
         syncTrainerGroupsFromSchedules();
-        if(typeof renderCalendar==='function' && document.querySelector('.calendar-page')) renderCalendar();
+        // Re-render only the schedule views. Do not touch the create/edit form.
+        if(typeof renderCalendar==='function' && (location.hash==='#calendar' || document.querySelector('.calendar-page'))) renderCalendar();
         if(typeof openScheduleManager==='function' && document.querySelector('.schedule-manager-page')) openScheduleManager();
       }
       seeded=true;
@@ -5975,6 +5976,14 @@ function selectScheduleColor(c){
     finally{inFlight=false}
   };
   window.gtPullSchedulesSupabase=pull;
+  // Supabase Realtime: schedule changes arrive without waiting for refresh.
+  try{
+    if(window.supabase && typeof window.supabase.channel==='function'){
+      window.supabase.channel('gt-schedule-realtime')
+        .on('postgres_changes',{event:'*',schema:'public',table:'schedule_templates'},()=>pull())
+        .subscribe();
+    }
+  }catch(e){ console.warn('Supabase schedule realtime unavailable; polling remains active.',e); }
   let tries=0;
   const timer=setInterval(async()=>{tries++;const ok=await pull();if(ok||tries>=20)clearInterval(timer)},1200);
   setInterval(()=>{try{if(token())pull()}catch(_){}} ,700);

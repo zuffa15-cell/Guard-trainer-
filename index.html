@@ -4378,6 +4378,7 @@ loadPersistedMembers();
    profily, dochádzka ani navigácia. Pri prvom pripojení sa existujúci lokálny
    zoznam bezpečne odošle na server; pri ďalších otvoreniach sa serverové údaje
    zosynchronizujú späť do aplikácie. */
+window.__gtMemberPaymentPending=window.__gtMemberPaymentPending||Object.create(null);
 (function installSupabaseMembersSync(){
   if(window.__gtMembersSupabaseSyncInstalled) return;
   window.__gtMembersSupabaseSyncInstalled=true;
@@ -4466,9 +4467,13 @@ loadPersistedMembers();
         const mergedGroups=relGroups.length?relGroups:(primaryGroup?[primaryGroup.name]:[]);
         if(mergedGroups.length){m.groups=[...new Set(mergedGroups)];m.group=m.groups[0]}
         else {m.group=m.group||'';m.groups=m.groups||[m.group].filter(Boolean)}
-        m.membershipFirstHalf=!!sm.membership_paid_first_half;
-        m.membershipSecondHalf=!!sm.membership_paid_second_half;
-        m.membership=!!sm.membership_paid_second_half;
+        const __paymentPending=!!window.__gtMemberPaymentPending[String(id)];
+        if(!__paymentPending){
+          m.membershipFirstHalf=!!sm.membership_paid_first_half;
+          m.membershipSecondHalf=!!sm.membership_paid_second_half;
+          const __currentPeriod=membershipPeriodForDate(appToday().iso)||2;
+          m.membership=__currentPeriod===1?m.membershipFirstHalf:m.membershipSecondHalf;
+        }
         m.registration=!!sm.registration_paid; m.active=sm.active!==false; m.archived=!!sm.archived;
         if(sm.application_date) m.applicationDate=fromIsoDate(sm.application_date);
         if(sm.club_join_date) m.memberSince=fromIsoDate(sm.club_join_date);
@@ -5104,7 +5109,7 @@ function saveMemberPaymentFromProfile(memberId,type,period){
    const idx=membershipPayments.findIndex(x=>Number(x.memberId)===Number(memberId)&&Number(x.period)===p&&Number(x.year||String(x.date||'').slice(0,4))===paymentYear);
    const rec={memberId:m.id,surname:m.surname,name:m.name,groups:[group],paidGroup:group,date,amount,period:p,year:paymentYear,source:'admin'};
    if(idx>=0) membershipPayments[idx]=rec; else membershipPayments.push(rec);
-   m.membershipDate=date; m.membershipAmount=amount; m.membershipPaidGroup=group; if(p===1) m.membershipFirstHalf=true; if(p===2) m.membershipSecondHalf=true; m.membership=(p===2);
+   m.membership=true; m.membershipDate=date; m.membershipAmount=amount; m.membershipPaidGroup=group;
  }else{
    const idx=registrationPayments.findIndex(x=>Number(x.memberId)===Number(memberId));
    const rec={memberId:m.id,surname:m.surname,name:m.name,paidGroup:group,date,amount,source:'admin'};
@@ -5114,15 +5119,7 @@ function saveMemberPaymentFromProfile(memberId,type,period){
  persistPaymentHistory();
  const modal=document.getElementById('memberPaymentEditor'); if(modal)modal.remove();
  renderMemberProfile(memberId);
- // v740: use the same direct member write-through already used by member edits.
- if(type==='membership'){
-   Promise.resolve().then(()=>window.gtSaveMembershipPeriodV741(memberId,period,true)).then(()=>toast('Členské uložené')).catch(e=>{
-     console.error('Členské Supabase:',e);
-     toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e));
-   });
- } else {
-   toast('Registračné uložené');
- }
+ toast(`${type==='membership'?'Členské':'Registračné'} uložené`);
 }
 function deleteMemberPaymentFromProfile(memberId,type,period){
  const m=membersData.find(x=>Number(x.id)===Number(memberId)); if(!m)return;
@@ -6128,6 +6125,9 @@ try{
   }
 }catch(e){ console.warn('Attendance history load failed',e); }
 
+/* v742 – ČLENSKÉ používa rovnaký priamy members Supabase zápis ako úprava profilu.
+   TRÉNING synchronizácia z v736 zostáva nezmenená. */
+
 /* v726 – Supabase attendance sync. Supabase is the shared source of truth
    for attendance; localStorage remains only a fast local cache. */
 (function installSupabaseAttendanceSync(){
@@ -6976,7 +6976,7 @@ function adminCancelPayment(type,i){
     }
     const key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
     if(attendanceState.membershipDrafts) delete attendanceState.membershipDrafts[key];
-    if(Number(period)===1) m.membershipFirstHalf=false; if(Number(period)===2) m.membershipSecondHalf=false; m.membership=(Number(period)===2); m.membershipAmount=0; m.membershipDate=''; m.membershipPaidGroup='';
+    m.membership=false; m.membershipAmount=0; m.membershipDate=''; m.membershipPaidGroup='';
     a.membershipAmount=0; a.membershipDate=''; a.membershipPaidGroup='';
   }else{
     for(let j=registrationPayments.length-1;j>=0;j--){
@@ -7349,7 +7349,6 @@ function toggleRegistration(i){
    persistMembersData();
    persistPaymentHistory();
    refreshAttendance();
-   Promise.resolve().then(()=>window.gtSaveMembershipPeriodV741(m.id,period,false)).catch(e=>toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e)));
    return;
  }
  if(memberHasRegistration(m) && !draft){
@@ -7371,6 +7370,24 @@ function toggleRegistration(i){
  refreshAttendance();
 }
 function toggleNew(i){ if(!attendanceEditGuard()) return; attendanceState.members[i].newMember=!attendanceState.members[i].newMember;refreshAttendance();}
+async function gtSyncMembershipStatus(member,period,paid){
+  if(!member || typeof window.gtSaveMemberSupabase!=='function') return;
+  const id=String(member.id);
+  window.__gtMemberPaymentPending[id]=true;
+  try{
+    if(Number(period)===1) member.membershipFirstHalf=!!paid;
+    else member.membershipSecondHalf=!!paid;
+    const cp=membershipPeriodForDate(appToday().iso)||2;
+    member.membership=cp===1?!!member.membershipFirstHalf:!!member.membershipSecondHalf;
+    await window.gtSaveMemberSupabase(member.id);
+  }catch(e){
+    console.error('Guard Trainer membership Supabase:',e);
+    try{toast('Chyba zápisu členského: '+(e?.message||e));}catch(_){}
+  }finally{
+    setTimeout(()=>{delete window.__gtMemberPaymentPending[id]},1800);
+  }
+}
+
 function enterMembership(i){
  if(!attendanceEditGuard() || !billingEditGuard() || !attendancePaymentEditGuard()) return;
  const a=attendanceState.members[i];
@@ -7420,8 +7437,8 @@ function enterMembership(i){
    }
    persistMembersData();
    persistPaymentHistory();
+   if(m) gtSyncMembershipStatus(m,period,false);
    refreshAttendance();
-   Promise.resolve().then(()=>window.gtSaveMembershipPeriodV741(m.id,period,true)).catch(e=>toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e)));
    return;
  }
  if(m && membershipPaidForPeriod(m,period)){ refreshAttendance(); return; }
@@ -7435,10 +7452,10 @@ function enterMembership(i){
      action:'add',memberId:m.id,surname:m.surname,name:m.name,
      amount:n,date:attendanceDateKey(),paidGroup:attendanceState.group,period
    });
-   // Keep the member-level record in sync immediately, just like normal member edits.
-   m.membershipAmount=n; m.membershipDate=attendanceDateKey(); m.membershipPaidGroup=attendanceState.group; if(Number(period)===1) m.membershipFirstHalf=true; if(Number(period)===2) m.membershipSecondHalf=true; m.membership=(Number(period)===2);
+   if(period===1) m.membershipFirstHalf=true; else m.membershipSecondHalf=true;
+   const cp=membershipPeriodForDate(appToday().iso)||2; m.membership=cp===1?!!m.membershipFirstHalf:!!m.membershipSecondHalf;
    persistMembersData();
-   Promise.resolve().then(()=>window.gtSaveMembershipImmediatelyV740(m.id)).catch(e=>toast('Členské sa nepodarilo uložiť do Supabase: '+(e?.message||e)));
+   gtSyncMembershipStatus(m,period,true);
  }
  refreshAttendance();
 }
@@ -10928,29 +10945,6 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 <label class="field"><span class="icon">♙</span><input id="gtLoginPassword" type="password" placeholder="Heslo" autocomplete="current-password"></label>
 <button class="login" type="button">PRIHLÁSIŤ SA</button><div id="gtLoginErrorV702" style="display:none;width:100%;margin-top:14px;padding:12px;border:1px solid #7a5b20;border-radius:10px;background:#15110a;color:#ffd66b;font-size:14px;line-height:1.45;box-sizing:border-box;text-align:center;word-break:break-word"></div>
 <div class="footer">GUARD TRAINER 1.0<br>© 2024 Guard Košice</div></div></div>
-<script id="gtMembershipWriteThroughV740">
-(function(){
-  if(window.__gtMembershipWriteThroughV740Installed) return;
-  window.__gtMembershipWriteThroughV740Installed=true;
-  async function save(id){
-    if(typeof window.gtSaveMemberSupabase!=='function') throw new Error('Supabase zápis člena nie je dostupný.');
-    await window.gtSaveMemberSupabase(id);
-  }
-  window.gtSaveMembershipImmediatelyV740=save;
-  // v741: membership period is stored in the same members row used by the
-  // working cross-device member sync. Do not depend on payment-history localStorage.
-  window.gtSaveMembershipPeriodV741=async function(id,period,paid){
-    const m=(window.membersData||[]).find(x=>Number(x.id)===Number(id));
-    if(!m) throw new Error('Člen sa nenašiel.');
-    const p=Number(period);
-    if(p===1) m.membershipFirstHalf=!!paid;
-    if(p===2) m.membershipSecondHalf=!!paid;
-    m.membership=(p===2 && !!paid);
-    await window.gtSaveMemberSupabase(id);
-    return true;
-  };
-})();
-</script>
 <script id="gtSupabaseConfigV700">
 (function(){
   window.GT_SUPABASE_URL='https://glsqqmernrgztuusncmn.supabase.co';

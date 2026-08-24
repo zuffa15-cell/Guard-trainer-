@@ -6150,6 +6150,15 @@ try{
     attendanceState.trainingSupabaseId=row.id;
     return row.id;
   }
+  function memberMapKeys(m){
+    const keys=[];
+    const n=Number(m&&m.id);
+    if(Number.isFinite(n)) keys.push('id:'+String(n));
+    const last=String(m&&m.surname||'').trim().toLocaleLowerCase('sk-SK');
+    const first=String(m&&m.name||'').trim().toLocaleLowerCase('sk-SK');
+    if(last&&first) keys.push('name:'+last+'|'+first);
+    return keys;
+  }
   async function memberMap(){
     const localMembers=(attendanceState.members||[]).filter(Boolean);
     if(!localMembers.length)return {};
@@ -6158,20 +6167,22 @@ try{
     if(ids.length){
       const q=ids.join(',');
       const rows=await fetchJson('/rest/v1/members?legacy_id=in.('+q+')&select=id,legacy_id');
-      (rows||[]).forEach(x=>{ if(x.legacy_id!==null&&x.legacy_id!==undefined) out[String(Number(x.legacy_id))]=x.id; });
+      (rows||[]).forEach(x=>{
+        if(x.legacy_id!==null&&x.legacy_id!==undefined) out['id:'+String(Number(x.legacy_id))]=x.id;
+      });
     }
-    // Older members may have been created before legacy_id was introduced.
-    // Resolve those safely by the exact surname + name pair, then keep the
-    // mapping under the local numeric id so attendance can be saved normally.
+    // Always resolve by exact surname + name as a fallback, including members
+    // whose local id is not numeric. This is important for older/newly created
+    // members whose local identifier is a UUID or another non-numeric value.
     for(const m of localMembers){
-      const lk=String(Number(m.id));
-      if(!Number.isFinite(Number(m.id)) || out[lk]) continue;
+      const keys=memberMapKeys(m);
+      if(keys.some(k=>out[k])) continue;
       const last=String(m.surname||'').trim();
       const first=String(m.name||'').trim();
       if(!last || !first) continue;
       const rows=await fetchJson('/rest/v1/members?last_name=eq.'+encodeURIComponent(last)+'&first_name=eq.'+encodeURIComponent(first)+'&select=id,legacy_id&limit=5');
       if(rows && rows.length===1){
-        out[lk]=rows[0].id;
+        keys.forEach(k=>{out[k]=rows[0].id;});
       }
     }
     return out;
@@ -6181,10 +6192,10 @@ try{
     try{
       const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
       const rows=await fetchJson('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(trainingId)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
-      const map=await memberMap(); const reverse={}; Object.keys(map).forEach(k=>reverse[map[k]]=k);
+      const map=await memberMap();
       const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
       (attendanceState.members||[]).forEach(m=>{
-        const sid=map[String(Number(m.id))]; const r=sid?byMember[sid]:null;
+        const keys=memberMapKeys(m); const sid=keys.map(k=>map[k]).find(Boolean); const r=sid?byMember[sid]:null;
         if(r){m.training=!!r.present;m.newMember=!!r.new_member;m.trainingAccount=!r.training_fee_paid && !!r.present && !r.new_member;m.debt=Number(r.debt_amount||0);m.debtReason=r.debt_note||'';}
         else {m.training=false;m.newMember=false;m.trainingAccount=false;m.debt=0;m.debtReason='';}
       });
@@ -6198,7 +6209,7 @@ try{
     const m=attendanceState.members[index]; if(!m)return false;
     try{
       const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
-      const map=await memberMap(), memberId=map[String(Number(m.id))];
+      const map=await memberMap(), keys=memberMapKeys(m), memberId=keys.map(k=>map[k]).find(Boolean);
       if(!memberId) throw new Error('Člen '+m.surname+' '+m.name+' sa nenašiel v Supabase.');
       const body={training_id:trainingId,member_id:memberId,present:!!m.training,new_member:!!m.newMember,training_fee_paid:!!(m.training&&!m.newMember&&!m.trainingAccount),debt_amount:Number(m.debt||0),debt_note:String(m.debtReason||'')||null};
       await fetchJson('/rest/v1/attendance?on_conflict=training_id,member_id',{

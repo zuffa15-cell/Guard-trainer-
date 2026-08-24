@@ -4472,7 +4472,7 @@ loadPersistedMembers();
     try{
       const [groups,serverMembers,memberGroups]=await Promise.all([
         getJson(url+'/rest/v1/groups?select=id,name,sort_order&active=eq.true&order=sort_order.asc'),
-        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,membership_first_half_amount,membership_first_half_date,membership_first_half_group,membership_second_half_amount,membership_second_half_date,membership_second_half_group,registration_paid,registration_amount,registration_date,registration_group,membership_account_amount,membership_account_date,registration_account_amount,registration_account_date,new_member,application_date,active,archived,photo_url,note&order=legacy_id.asc'),
+        getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,membership_first_half_amount,membership_first_half_date,membership_first_half_group,membership_second_half_amount,membership_second_half_date,membership_second_half_group,registration_paid,registration_amount,registration_date,registration_group,membership_account_amount,membership_account_date,registration_account_amount,registration_account_date,application_date,active,archived,photo_url,note&order=legacy_id.asc'),
         getJson(url+'/rest/v1/member_groups?select=member_id,group_id')
       ]);
       // A sync request may have started just before a delete or payment write.
@@ -4531,7 +4531,6 @@ loadPersistedMembers();
         m.membershipAccountDate=fromIsoDate(sm.membership_account_date)||'';
         m.registrationAccountAmount=Number(sm.registration_account_amount||0);
         m.registrationAccountDate=fromIsoDate(sm.registration_account_date)||'';
-        m.newMember=!!sm.new_member || !!m.newMember;
         m.active=sm.active!==false; m.archived=!!sm.archived;
         m.application=!!sm.application_date;
         m.applicationDate=sm.application_date?fromIsoDate(sm.application_date):'';
@@ -4687,7 +4686,6 @@ loadMemberNotes();
       membership_account_date:iso(m.membershipAccountDate||''),
       registration_account_amount:Number(m.registrationAccountAmount||0)||null,
       registration_account_date:iso(m.registrationAccountDate||''),
-      new_member:!!m.newMember,
       application_date:iso(m.applicationDate),
       club_join_date:iso(m.memberSince),
       active:m.active!==false,
@@ -6261,13 +6259,9 @@ try{
     const ids=localMembers.map(m=>Number(m.id)).filter(Number.isFinite);
     if(ids.length){
       const q=ids.join(',');
-      const rows=await fetchJson('/rest/v1/members?legacy_id=in.('+q+')&select=id,legacy_id,new_member');
+      const rows=await fetchJson('/rest/v1/members?legacy_id=in.('+q+')&select=id,legacy_id');
       (rows||[]).forEach(x=>{
-        if(x.legacy_id!==null&&x.legacy_id!==undefined){
-          const k='id:'+String(Number(x.legacy_id));
-          out[k]=x.id;
-          out['new:'+k]=!!x.new_member;
-        }
+        if(x.legacy_id!==null&&x.legacy_id!==undefined) out['id:'+String(Number(x.legacy_id))]=x.id;
       });
     }
     // Always resolve by exact surname + name as a fallback, including members
@@ -6278,18 +6272,10 @@ try{
       if(keys.some(k=>out[k])) continue;
       const last=String(m.surname||'').trim();
       const first=String(m.name||'').trim();
-      if(!last) continue;
-      const q=first
-        ? '/rest/v1/members?last_name=eq.'+encodeURIComponent(last)+'&first_name=eq.'+encodeURIComponent(first)+'&select=id,legacy_id,new_member&limit=5'
-        : '/rest/v1/members?last_name=eq.'+encodeURIComponent(last)+'&select=id,legacy_id,new_member&limit=5';
-      const rows=await fetchJson(q);
+      if(!last || !first) continue;
+      const rows=await fetchJson('/rest/v1/members?last_name=eq.'+encodeURIComponent(last)+'&first_name=eq.'+encodeURIComponent(first)+'&select=id,legacy_id&limit=5');
       if(rows && rows.length===1){
-        const row=rows[0];
-        keys.push('name:'+last+(first?'|'+first:''));
-        keys.forEach(k=>{
-          out[k]=row.id;
-          out['new:'+k]=!!row.new_member;
-        });
+        keys.forEach(k=>{out[k]=rows[0].id;});
       }
     }
     return out;
@@ -6364,23 +6350,33 @@ try{
           serverBillingSnapshot=candidate || null;
         }
       }catch(e){ console.warn('Guard Trainer billing snapshot pull:',e); }
-      // IMPORTANT: billing_records is a historical snapshot. Live attendance
-      // edits are stored in the attendance table and must win here. Previously
-      // this function returned early after applying billing_records, which made
-      // a changed attendance appear briefly and then jump back to the old saved
-      // value on the next Supabase pull.
-      //
-      // Keep the newest billing snapshot available for membership/registration/
-      // debt metadata below, but ALWAYS continue and read the live attendance
-      // rows for training/new status.
+      // IMPORTANT: after a successful ULOŽIŤ VYÚČTOVANIE the committed
+      // snapshot is the authoritative state for this training on this device.
+      // Do not let the attendance table (which may still contain the previous
+      // version for a moment) overwrite the freshly committed snapshot.
+      // On another device there is no local committed snapshot yet, so the
+      // server billing snapshot is used normally.
+      const committed=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
+      // A server billing snapshot is the cross-device source of truth. Apply
+      // it immediately and do not fall through to the older attendance table.
       if(serverBillingSnapshot){
         attendanceState.billingRecordSnapshot=serverBillingSnapshot;
+        applyBillingSnapshotToAttendance();
+        saveCurrentTrainingAttendanceLocalOnly();
+        refreshAttendance();
+        return true;
       }
-      if(serverBillingSnapshot){
-        attendanceState.billingRecordSnapshot=serverBillingSnapshot;
+      if(committed){
+        applyBillingSnapshotToAttendance();
+        saveCurrentTrainingAttendanceLocalOnly();
+        refreshAttendance();
+        return true;
       }
-      const byMember={} ; (rows||[]).forEach(r=>byMember[String(r.member_id)]=r);
-      
+      // If a complete billing snapshot exists, it is the single source of truth
+      // for this training. Do not merge the older attendance table underneath it.
+      // That merge was the reason mobile 2 briefly showed the new state and then
+      // lost it again on the next refresh.
+      const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
 
       // v788: PRIHLÁŠKA is authoritative on the member row in Supabase.
       // The billing snapshot is historical only and must never restore a
@@ -6417,36 +6413,11 @@ try{
         // Protect recently edited rows briefly so stale server data cannot
         // overwrite the user's fresh state and make the button blink.
         if(pending[pk] || (protectedUntil[pk]||0)>now) return;
-        const keys=memberMapKeys(m);
-        const sid=keys.map(k=>map[k]).find(Boolean);
-        const r=sid?byMember[sid]:null;
-        const sharedNew=keys.some(k=>map['new:'+k]===true);
-        if(r){
-          // Supabase attendance row is authoritative for the live training.
-          m.training=!!r.present;
-          m.newMember=!!r.new_member;
-          m.trainingAccount=!r.training_fee_paid && !!r.present && !m.newMember;
-          if(m.newMember){
-            m.training=true;
-            m.trainingAccount=false;
-          }
-          // The shared members table is the authoritative member-level flag.
-          // This prevents an older attendance/billing row on mobile 2 from
-          // turning a newly created member back into TRÉNING.
-          m.newMember=sharedNew || !!r.new_member || !!m.newMember;
-          m.trainingAccount=!r.training_fee_paid && !!r.present && !m.newMember;
-          m.debt=Number(r.debt_amount||0);m.debtReason=r.debt_note||'';
-        }
-        else {
-          // A missing server row can be transient while a write is propagating.
-          // Keep the exact local edit instead of reverting the row to OFF.
-          const live=trainingAttendanceByGroup[trainingAttendanceKey()];
-          const lv=live && live[m.surname+'|'+m.name];
-          if(!(lv && typeof lv==='object')){
-            m.training=false;
-            m.newMember=sharedNew || !!m.newMember;
-            m.trainingAccount=false;
-          }
+        const keys=memberMapKeys(m); const sid=keys.map(k=>map[k]).find(Boolean); const r=sid?byMember[sid]:null;
+        if(r){m.training=!!r.present;m.newMember=!!r.new_member;m.trainingAccount=!r.training_fee_paid && !!r.present && !r.new_member;m.debt=Number(r.debt_amount||0);m.debtReason=r.debt_note||'';}
+        else {m.training=false;m.newMember=false;m.trainingAccount=false;
+          // Do not erase locally saved billing metadata when attendance has no row.
+          // DLŽNÉ/PRIHLÁŠKA are also persisted in the billing record.
           if(!m.debt) { m.debt=0; m.debtReason=''; }
         }
         // Restore the complete server snapshot. If a saved server record exists,
@@ -6457,57 +6428,15 @@ try{
         if(br){
           const ds=Array.isArray(br.debtSnapshot)?br.debtSnapshot:[];
           const as=Array.isArray(br.applicationSnapshot)?br.applicationSnapshot:[];
-          const ps=Array.isArray(br.paymentSnapshot)?br.paymentSnapshot:[];
           const nm=String(m.surname||'').trim()+'|'+String(m.name||'').trim();
           const d=ds.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
           const a=as.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
-          const p=ps.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
-
           m.debt=d?Number(d.debt||0):0;
           m.debtReason=d?String(d.reason||''):'';
           m.application=!!a;
           m.applicationDate=a?String(a.applicationDate||''):'';
-
-          // paymentSnapshot is historical billing data. Do NOT overwrite the
-          // live training/new state from it: the attendance table above is the
-          // live cross-device source of truth. This is what prevents a newer
-          // attendance edit from reverting to the old billing snapshot.
-          // Do not overwrite live training/new state from billing snapshot.
-          // Billing is historical metadata only.
-
         }
       });
-
-      // FINAL AUTHORITATIVE PASS: copy every Supabase attendance row exactly.
-      // This fixes Mobile 2 showing an older count such as 7 while Mobile 1
-      // already has 9. Missing row = not present; new_member is copied exactly.
-      const finalRows=Array.isArray(rows)?rows:[];
-      const finalMap=new Map(finalRows.map(r=>[String(r.member_id),r]));
-      const finalMemberMap=await memberMap();
-      (attendanceState.members||[]).forEach(m=>{
-        const keys=memberMapKeys(m);
-        const sid=keys.map(k=>finalMemberMap[k]).find(Boolean);
-        const rr=sid?finalMap.get(String(sid)):null;
-        if(rr){
-          m.training=!!rr.present;
-          m.newMember=!!rr.new_member;
-          m.trainingAccount=!rr.training_fee_paid && !!rr.present && !m.newMember;
-          if(m.newMember){m.training=true;m.trainingAccount=false;}
-        }else{
-          m.training=false;
-          m.trainingAccount=false;
-          m.newMember=false;
-        }
-      });
-
-      // Keep the shared attendance list alphabetically sorted after every
-      // cross-device pull. New members arriving from Mobile 1 must not be
-      // appended to the bottom on Mobile 2.
-      attendanceState.members.sort((a,b)=>{
-        const sx=String(a.surname||'').trim().localeCompare(String(b.surname||'').trim(),'sk',{sensitivity:'base'});
-        return sx || String(a.name||'').trim().localeCompare(String(b.name||'').trim(),'sk',{sensitivity:'base'});
-      });
-      sortAttendanceMembersAlphabetically();
       saveCurrentTrainingAttendanceLocalOnly();
       refreshAttendance();
       return true;
@@ -6607,19 +6536,6 @@ function loadCommittedTrainingSnapshot(){
 }
 
 function saveCurrentTrainingAttendanceLocalOnly(){
-  // Remember the exact training currently being edited. Switching to another
-  // card must not reset Dochádzka to the empty chooser when the trainer comes
-  // back. The member states themselves remain in trainingAttendanceByGroup.
-  try{
-    localStorage.setItem('gt-last-attendance-context',JSON.stringify({
-      date:String(attendanceState.date||''),
-      group:String(attendanceState.group||''),
-      name:String(attendanceState.name||''),
-      trainingTime:String(attendanceState.trainingTime||''),
-      savedAt:Date.now()
-    }));
-  }catch(e){ console.warn('Attendance context save failed:',e); }
-
   const key=trainingAttendanceKey();
   trainingAttendanceByGroup[key]=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{trainingAttendanceByGroup[key][a.surname+'|'+a.name]={training:!!a.training,trainingAccount:!!a.trainingAccount,newMember:!!a.newMember,
@@ -6713,18 +6629,7 @@ function getAttendanceSavedAt(date,group){
 }
 
 function saveCurrentTrainingAttendance(){
-  // Always persist the complete current training before leaving/switching cards.
-  // Individual taps also push their member, but the full save guarantees that
-  // Mobile 2 cannot remain on an older partial state (e.g. 7 instead of 9).
   saveCurrentTrainingAttendanceLocalOnly();
-  try{
-    if(typeof window.gtSaveAttendanceAllSupabase==='function' &&
-       document.querySelector('.attendance-page')){
-      window.gtSaveAttendanceAllSupabase().catch(e=>{
-        console.warn('Guard Trainer full attendance sync:',e);
-      });
-    }
-  }catch(e){ console.warn('Guard Trainer full attendance sync:',e); }
 }
 
 function membershipDraftKey(memberId,date,group){
@@ -6866,15 +6771,14 @@ function loadAttendanceFromMembers(){
    const saved=getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name);
    const hasSaved=!!saved && typeof saved==='object' && (Object.prototype.hasOwnProperty.call(saved,'training') || Object.prototype.hasOwnProperty.call(saved,'trainingAccount') || Object.prototype.hasOwnProperty.call(saved,'debt') || Object.prototype.hasOwnProperty.call(saved,'application'));
    return {
-     id:m.id,
      surname:m.surname,name:m.name,training:hasSaved ? !!saved.training : ((old && old.group===attendanceState.group)?!!old.training:false),
      trainingAccount:hasSaved ? !!saved.trainingAccount : ((old && old.group===attendanceState.group)?!!old.trainingAccount:false),
      membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
      registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
      newMember:(Object.prototype.hasOwnProperty.call(
         getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name),'newMember')
-        ? (!!getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).newMember || !!m.newMember)
-        : (!!m.newMember || (!!m.newMemberDate && m.newMemberDate===attendanceState.date))),
+        ? !!getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).newMember
+        : (!!m.newMemberDate && m.newMemberDate===attendanceState.date)),
      newMemberDate:m.newMemberDate||'',
      // Membership is member-level, not group-level: once paid, it remains paid
      // when the member appears in any other assigned group.
@@ -6896,27 +6800,6 @@ function loadAttendanceFromMembers(){
      applicationFileName:m.applicationFileName||''
    };
  });
-
- // Exact local training state wins over member-level defaults. This is the
- // state the trainer just edited on this device and it must survive switching
- // cards before/while Supabase synchronization runs.
- const liveKey=trainingAttendanceKey();
- const live=trainingAttendanceByGroup[liveKey];
- if(live && typeof live==='object'){
-   attendanceState.members.forEach(a=>{
-     const v=live[a.surname+'|'+a.name];
-     if(v && typeof v==='object'){
-       a.training=!!v.training;
-       a.trainingAccount=!!v.trainingAccount;
-       a.newMember=!!v.newMember;
-       a.debt=Number(v.debt||0);
-       a.debtReason=String(v.debtReason||'');
-       a.application=!!v.application;
-       a.applicationDate=String(v.applicationDate||'');
-     }
-   });
- }
- sortAttendanceMembersAlphabetically();
 }
 
 /* v209 – current date is always the phone's local date */
@@ -7060,24 +6943,13 @@ function attendance(){
   // when returning from Vyúčtovanie. Rebuild the whole attendance from it first,
   // then allow server sync to confirm it. Never rebuild it from mixed old caches.
   const committedBeforeMembers=loadCommittedTrainingSnapshot();
-
-  // IMPORTANT: when returning to Dochádzka after switching cards, the latest
-  // live attendance cache is authoritative. A previously confirmed billing
-  // snapshot can contain an older count (for example 4 instead of the current
-  // 7) and must never overwrite the trainer's current attendance.
-  const liveKey=trainingAttendanceKey();
-  const liveSaved=trainingAttendanceByGroup[liveKey];
-  const hasLiveAttendance=!!(liveSaved && Object.keys(liveSaved).length);
-
   loadAttendanceFromMembers();
-
   if(committedBeforeMembers){
+    // Re-apply the complete saved billing snapshot immediately after rebuilding
+    // the member list. The billing snapshot is the source of truth for this
+    // exact trainer/date/group, not the older member-level attendance cache.
     attendanceState.billingRecordSnapshot=committedBeforeMembers;
-    if(!hasLiveAttendance){
-      // Only use the committed billing snapshot when there is no current local
-      // attendance at all for this exact date + group.
-      applyBillingSnapshotToAttendance();
-    }
+    applyBillingSnapshotToAttendance();
   }
   const app=document.querySelector('.app');
   app.innerHTML=`
@@ -7126,8 +6998,6 @@ function attendance(){
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
     </nav>
     <div id="toast" class="toast"></div>`;
-  // Re-save the rebuilt live state so switching cards cannot discard it.
-  saveCurrentTrainingAttendanceLocalOnly();
   updateAttendanceTotals();
   if(window.gtStartAttendanceSupabaseSync) window.gtStartAttendanceSupabaseSync();
 }
@@ -7144,19 +7014,12 @@ function openAttendanceMemberProfile(index){
  window.__gtBackTarget={route:'attendanceCurrent'};
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
-function sortAttendanceMembersAlphabetically(){
-  if(!attendanceState || !Array.isArray(attendanceState.members)) return;
-  attendanceState.members.sort((a,b)=>{
-    const sx=String(a.surname||'').trim().localeCompare(String(b.surname||'').trim(),'sk',{sensitivity:'base'});
-    return sx || String(a.name||'').trim().localeCompare(String(b.name||'').trim(),'sk',{sensitivity:'base'});
-  });
-}
 function renderAttendanceRows(){
  const locked=isAttendanceFullyLocked()&&!isAdmin();
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
-   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(event,${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
+   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(${i})" ondblclick="attendanceEditGuard()&&handleTrainingDoubleClick(event,${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
    <button ${locked?'disabled':''} class="pay-btn ${m.debt>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${m.debt>0?'<strong>'+m.debt+' €</strong>':''}</button>
@@ -7610,15 +7473,12 @@ function currentMemberPaymentTotals(m){
   };
 }
 function updateAttendanceTotals(){
- // FINAL UI RULE FOR BOTH DEVICES:
- // NOVÝ is a saved attendance state, but it is NOT a "present" count.
- // This is calculated from the live attendanceState after every refresh/pull.
  const t=attendanceState.members.reduce((s,m)=>s+currentMemberPaymentTotals(m).training,0);
  const mem=attendanceState.members.reduce((s,m)=>s+currentMemberPaymentTotals(m).membership,0);
  const reg=attendanceState.members.reduce((s,m)=>s+currentMemberPaymentTotals(m).registration,0);
  const debt=attendanceState.members.reduce((s,m)=>s+Number(m.debt||0),0);
  const trainingCount=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
- const presentCount=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
+ const presentCount=attendanceState.members.filter(m=>m.training).length;
  const newCount=attendanceState.members.filter(m=>m.newMember).length;
  const pe=document.getElementById('presentCount'); if(pe)pe.textContent=presentCount;
  const ne=document.getElementById('newCount'); if(ne)ne.textContent=newCount;
@@ -7674,52 +7534,37 @@ function clearOther(type){
  document.getElementById('otherModal').remove(); updateAttendanceTotals();
 }
 let trainingClickTimers={};
-let trainingClickCounts={};
+let trainingLastClickAt={};
 
-function handleTrainingClick(event,i){
+function handleTrainingClick(i){
  if(!attendanceEditGuard()) return;
- if(event){event.preventDefault();event.stopPropagation();}
- const key=String(i);
- const now=Date.now();
- const prev=trainingClickCounts[key]||0;
- clearTimeout(trainingClickTimers[key]);
-
- if(prev && now-prev<420){
-   trainingClickCounts[key]=0;
-   handleTrainingDoubleClick(null,i);
-   return;
- }
-
- trainingClickCounts[key]=now;
- trainingClickTimers[key]=setTimeout(()=>{
-   trainingClickCounts[key]=0;
-   delete trainingClickTimers[key];
-   // SINGLE CLICK ONLY: toggle attendance ON/OFF.
-   toggleTraining(i);
- },430);
+ // Keep the existing immediate single-click behavior from this current file.
+ // A second click is converted by ondblclick below.
+ trainingLastClickAt[String(i)]=Date.now();
+ toggleTraining(i);
 }
 
 async function handleTrainingDoubleClick(event,i){
  if(!attendanceEditGuard()) return;
  if(event){event.preventDefault();event.stopPropagation();}
- const key=String(i);
- clearTimeout(trainingClickTimers[key]);
- trainingClickCounts[key]=0;
-
  const m=attendanceState.members[i];
  if(!m)return;
 
- // DOUBLE CLICK:
+ // DOUBLE CLICK state machine:
  // TRÉNING -> ÚČET
  // ÚČET -> NOVÝ
+ // NOVÝ remains NOVÝ.
  if(m.trainingAccount){
    m.training=true;
    m.trainingAccount=false;
    m.newMember=true;
    saveCurrentTrainingAttendance();
    refreshAttendance();
-   try{ if(typeof window.gtSaveAttendanceMemberSupabase==='function') await window.gtSaveAttendanceMemberSupabase(i); }
-   catch(e){ console.warn('NOVÝ Supabase sync:',e); }
+   try{
+     if(typeof window.gtSaveAttendanceMemberSupabase==='function'){
+       await window.gtSaveAttendanceMemberSupabase(i);
+     }
+   }catch(e){ console.warn('NOVÝ Supabase sync:',e); }
    toast('NOVÝ – tréning zdarma');
    return;
  }
@@ -7729,16 +7574,25 @@ async function handleTrainingDoubleClick(event,i){
    m.trainingAccount=false;
    saveCurrentTrainingAttendance();
    refreshAttendance();
+   try{
+     if(typeof window.gtSaveAttendanceMemberSupabase==='function'){
+       await window.gtSaveAttendanceMemberSupabase(i);
+     }
+   }catch(e){ console.warn('NOVÝ Supabase sync:',e); }
    return;
  }
 
+ // Ordinary attendance -> ACCOUNT.
  m.training=true;
  m.trainingAccount=true;
  m.newMember=false;
  saveCurrentTrainingAttendance();
  refreshAttendance();
- try{ if(typeof window.gtSaveAttendanceMemberSupabase==='function') await window.gtSaveAttendanceMemberSupabase(i); }
- catch(e){ console.warn('Účet Supabase sync:',e); }
+ try{
+   if(typeof window.gtSaveAttendanceMemberSupabase==='function'){
+     await window.gtSaveAttendanceMemberSupabase(i);
+   }
+ }catch(e){ console.warn('Účet Supabase sync:',e); }
  toast(`Účet ${trainingFee()} € – nezapočíta sa do vyzbieranej sumy`);
 }
 
@@ -7747,22 +7601,32 @@ async function toggleTraining(i){
  const m=attendanceState.members[i];
  if(!m)return;
 
- // SINGLE CLICK: green training ON, second single click OFF.
- // It never changes ACCOUNT/NEW into another payment state.
- if(m.training){
-   m.training=false;
-   m.trainingAccount=false;
-   m.newMember=false;
- }else{
+ if(!m.training){
    m.training=true;
    m.trainingAccount=false;
    m.newMember=false;
+ }else if(m.newMember){
+   m.training=false;
+   m.trainingAccount=false;
+   m.newMember=false;
+ }else if(m.trainingAccount){
+   // ACCOUNT is changed to NEW only by the next DOUBLE CLICK.
+   // A single click simply returns to the ordinary paid training state.
+   m.training=true;
+   m.trainingAccount=false;
+   m.newMember=false;
+ }else{
+   m.training=false;
+   m.trainingAccount=false;
+   m.newMember=false;
  }
-
  saveCurrentTrainingAttendance();
  refreshAttendance();
- try{ if(typeof window.gtSaveAttendanceMemberSupabase==='function') await window.gtSaveAttendanceMemberSupabase(i); }
- catch(e){ console.warn('Dochádzka Supabase sync:',e); }
+ try{
+   if(typeof window.gtSaveAttendanceMemberSupabase==='function'){
+     await window.gtSaveAttendanceMemberSupabase(i);
+   }
+ }catch(e){ console.warn('Dochádzka Supabase sync:',e); }
 }
 function attendancePaymentPdfData(){
  const date=attendanceState.date||appToday().iso;
@@ -7822,8 +7686,7 @@ function updateCanonicalMemberFromAttendance(a){
  m.debt=Number(a.debt||0);
  m.debtReason=a.debtReason||'';
  if(a.newMember && !m.newMemberDate) m.newMemberDate=attendanceState.date;
-// NOVÝ je spoločný stav člena. Starý lokálny záznam dochádzky ho nesmie zmazať.
-m.newMember=!!a.newMember || !!m.newMember;
+m.newMember=!!m.newMemberDate;
  persistMembersData();
 }
 function registrationPaidHere(m){
@@ -8125,50 +7988,35 @@ function deleteDebt(i){
 }
 async function addNewMember(){
  if(!attendanceEditGuard()) return;
+ const n=prompt('Meno alebo priezvisko nového člena:','');
+ if(!n||!n.trim())return;
+ const parts=n.trim().split(/\s+/);
+ const surname=parts[0].toUpperCase();
+ const name=parts.length>1?parts.slice(1).join(' '):'';
 
- // Nový člen z Dochádzky musí mať rovnaké povinné údaje ako
- // Členovia -> Nový člen: PRIEZVISKO + MENO.
- const surnameInput=prompt('PRIEZVISKO nového člena:','');
- if(!surnameInput||!surnameInput.trim())return;
- const nameInput=prompt('MENO nového člena:','');
- if(!nameInput||!nameInput.trim())return;
-
- const surname=surnameInput.trim().toUpperCase();
- const name=nameInput.trim();
-
- // Jeden jednoznačný člen = priezvisko + meno.
- let member=membersData.find(x=>
-   String(x.surname||'').trim().toUpperCase()===surname &&
-   String(x.name||'').trim()===name
- );
+ // A member is created once and remains in the club/member list.
+ // If the same person is entered again later, use the existing member.
+ let member=membersData.find(x=>x.surname===surname && x.name===name);
  if(!member){
    member={
      id:Date.now(),
      surname,name,
      groups:[attendanceState.group],group:attendanceState.group,memberSince:attendanceState.date,
-     training:false,newMember:true,newMemberDate:attendanceState.date,
+     training:false,newMember:false,newMemberDate:'',
      membershipAmount:0,registration:false,debt:0,application:false
    };
    membersData.push(member);
  }else if(!(member.groups||[]).includes(attendanceState.group)){
    member.groups=[...(member.groups||[]),attendanceState.group];
  }
- member.newMember=true;
- member.newMemberDate=attendanceState.date;
  persistMembersData();
 
- const existing=attendanceState.members.find(x=>
-   String(x.surname||'').trim().toUpperCase()===surname &&
-   String(x.name||'').trim()===name
- );
+ const existing=attendanceState.members.find(x=>x.surname===surname&&x.name===name);
  if(existing){
-   existing.id=member.id;
    existing.newMember=true;
-   existing.newMemberDate=attendanceState.date;
    existing.training=true;
  }else{
    attendanceState.members.push({
-     id:member.id,
      surname,name,training:true,newMember:true,newMemberDate:attendanceState.date,
      membershipAmount:Number(member.membershipAmount||0),
      membershipDate:member.membershipDate||'',membershipPaidGroup:member.membershipPaidGroup||'',
@@ -8178,23 +8026,15 @@ async function addNewMember(){
      applicationFile:member.applicationFile||'',applicationFileName:member.applicationFileName||''
    });
  }
- attendanceState.members.sort((a,b)=>{
-   const x=String(a.surname||'').localeCompare(String(b.surname||''),'sk',{sensitivity:'base'});
-   return x||String(a.name||'').localeCompare(String(b.name||''),'sk',{sensitivity:'base'});
- });
+ attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
  saveCurrentTrainingAttendance();
  refreshAttendance();
-
- // Uloženie člena + záznamu NOVÝ pre presne tento tréning.
+ // Persist NOVÝ to Supabase before the member sync can remove the local draft.
+ // Then persist the attendance row for this exact date/group so mobile 2 gets it.
  try{
    if(typeof window.gtSaveMemberSupabase==='function') await window.gtSaveMemberSupabase(member.id);
-   const ni=attendanceState.members.findIndex(x=>
-     String(x.surname||'').trim().toUpperCase()===surname &&
-     String(x.name||'').trim()===name
-   );
-   if(ni>=0 && typeof window.gtSaveAttendanceMemberSupabase==='function'){
-     await window.gtSaveAttendanceMemberSupabase(ni);
-   }
+   const ni=attendanceState.members.findIndex(x=>x.surname===surname&&x.name===name);
+   if(ni>=0 && typeof window.gtSaveAttendanceMemberSupabase==='function') await window.gtSaveAttendanceMemberSupabase(ni);
  }catch(e){
    console.warn('Guard Trainer NOVÝ sync:',e);
    toast('Nový člen sa nepodarilo synchronizovať: '+e.message);
@@ -8203,7 +8043,7 @@ async function addNewMember(){
  persistMembersData();
  saveCurrentTrainingAttendance();
  refreshAttendance();
- toast('Nový člen '+surname+' '+name+' bol pridaný do skupiny '+attendanceState.group);
+ toast('Nový člen bol pridaný do skupiny '+attendanceState.group);
 }
 function goBackAttendance(){ location.hash='home'; renderHome(); }
 
@@ -8548,7 +8388,7 @@ function upsertBillingRecordFromAttendance(){
       const pt=currentMemberPaymentTotals(m);
       return {surname:m.surname,name:m.name,membership:Number(pt.membership||0),registration:Number(pt.registration||0),trainingAccount:!!m.trainingAccount,training:!!m.training,newMember:!!m.newMember};
     }).filter(x=>x.training||x.membership>0||x.registration>0),
-    presentCount:attendanceState.members.filter(m=>m.training&&!m.newMember).length,
+    presentCount:attendanceState.members.filter(m=>m.training).length,
     newCount:attendanceState.members.filter(m=>m.training&&m.newMember).length,
     // Poradie skupín v daný deň vo Vyúčtovaní = poradie posledného uloženia dochádzky.
     // Pri opätovnom uložení sa skupina presunie na koniec poradia.
@@ -8594,10 +8434,6 @@ function trainingBilling(){
   billingReturnScreen = 'attendance';
   const app=document.querySelector('.app');
   const fee=trainingFee();
-  // When this screen is opened directly from POTVRDIŤ DOCHÁDZKU, the live
-  // attendanceState is authoritative. billingRecordSnapshot can belong to a
-  // previously saved version of the same training and caused the detail screen
-  // to show 4 payments while Dochádzka showed 7.
   const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
   const trainingPaid=attendanceState.members.filter(m=>m.training&&!m.newMember&&!m.trainingAccount).length;
   const trainingSum=trainingPaid*fee;
@@ -8781,7 +8617,7 @@ async function saveTrainingBilling(){
     applicationSnapshot:(attendanceState.members||[])
       .filter(m=>!!m.application)
       .map(m=>({surname:m.surname,name:m.name,applicationDate:String(m.applicationDate||'')})),
-    presentCount:attendanceState.members.filter(m=>m.training&&!m.newMember).length,
+    presentCount:attendanceState.members.filter(m=>m.training).length,
     newCount:attendanceState.members.filter(m=>m.training&&m.newMember).length,
     // Aktuálny čas uloženia určuje poradie skupiny v rámci rovnakého dňa.
     savedAt:Date.now()
@@ -10779,35 +10615,6 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       const d=parsePaymentDate(r.date);
       return d && d.month===shownMonth && d.year===shownYear;
     });
-
-  // Repair/display the training totals from the saved per-member snapshot.
-  // Older billing records may have been saved before NEW was introduced and
-  // therefore still say e.g. 10 payments although 2 of those members are now
-  // NEW. NEW is not a paid training and must never be included in the billing.
-  rows=rows.map(r=>{
-    if(r && !r.substituteReference && Array.isArray(r.paymentSnapshot) && r.paymentSnapshot.length){
-      const fee=Number(r.trainingFee||trainingFee()||0);
-      const paying=r.paymentSnapshot.filter(x=>x && x.training && !x.newMember).length;
-      const trainingPaid=r.paymentSnapshot.filter(x=>x && x.training && !x.newMember && !x.trainingAccount).length;
-      const trainingAccountCount=r.paymentSnapshot.filter(x=>x && x.training && !x.newMember && x.trainingAccount).length;
-      const trainingSum=trainingPaid*fee;
-      const membershipSum=Number(r.membershipSum||0);
-      const registrationSum=Number(r.registrationSum||0);
-      const otherPlus=Number(r.otherPlus||0);
-      const otherMinus=Number(r.otherMinus||0);
-      const gross=trainingSum+membershipSum+registrationSum+otherPlus-otherMinus;
-      const reward=paying*Number(r.trainerRewardPerMember||trainerRewardPerMember()||0);
-      return {...r,
-        paying,trainingPaid,trainingAccountCount,trainingSum,
-        trainerReward:reward,
-        gross,
-        clubAmount:gross-reward,
-        presentCount:paying,
-        newCount:r.paymentSnapshot.filter(x=>x && x.training && x.newMember).length
-      };
-    }
-    return r;
-  });
   rows=getMyBillingRowsForCurrentTrainer(rows,shownYear,shownMonth);
   // Final UI guard: accepted substitute sees only the financial row;
   // original/offering trainer sees only the substitution-information row.
@@ -11089,10 +10896,7 @@ function appBack(){
   try{ if((location.hash||'')==='#training-billing') persistCommittedTrainingSnapshot(attendanceState.billingRecordSnapshot); }catch(e){}
   // Universal one-step back: the top-left arrow follows the real in-app
   // navigation history. Do not jump to a hard-coded parent screen.
-  if((location.hash||'').includes('attendance')){
-    saveCurrentTrainingAttendance();
-    try{ window.gtSaveAttendanceAllSupabase && window.gtSaveAttendanceAllSupabase().catch(()=>{}); }catch(_e){}
-  }
+  if((location.hash||'').includes('attendance')) saveCurrentTrainingAttendance();
   try{
     if(history.length>1){ history.back(); return false; }
   }catch(e){}
@@ -11430,24 +11234,6 @@ function openStatisticsScreen(){
 }
 window.openStatisticsScreen=openStatisticsScreen;
 
-function restoreLastAttendanceContext(){
-  try{
-    const raw=localStorage.getItem('gt-last-attendance-context');
-    if(!raw)return false;
-    const c=JSON.parse(raw);
-    if(!c || !c.group || !c.date)return false;
-    // Only restore a recent context for the current day. This prevents the
-    // normal Dochádzka button from unexpectedly reopening an old training.
-    if(String(c.date)!==String(appToday().iso))return false;
-    attendanceState.date=String(c.date);
-    attendanceState.group=String(c.group);
-    attendanceState.name=String(c.name||'');
-    attendanceState.trainingTime=String(c.trainingTime||'');
-    window.__attendanceOpenSource='restore';
-    window.__attendanceHomeDate=null;
-    return true;
-  }catch(e){ return false; }
-}
 function nav(route){
   try{
     if(['home','statistics','calendar','attendance','billing','trainer-month','more','members'].includes(route)) window.__gtBackTarget=null;
@@ -11455,22 +11241,20 @@ function nav(route){
     if(route==='statistics'){ return openStatisticsScreen(); }
     if(route==='calendar'){ history.pushState({gtRoute:'calendar'},'',location.pathname+location.search+'#calendar'); renderCalendar(); return false; }
     if(route==='attendance'){ if(isHeadTrainer()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
+      // DOCHÁDZKA z Domova / hlavnej navigácie je vždy dnešný deň.
+      // Dátum z Kalendára sa nesmie preniesť do tejto vstupnej cesty.
       window.__attendanceOpenedFromCalendar=false;
       window.__attendanceOpenSource='home';
-      const restored=restoreLastAttendanceContext();
-      if(!restored){
-        attendanceState.date=appToday().iso;
-        attendanceState.group='';
-        attendanceState.name='';
-        attendanceState.trainingTime='';
-        attendanceState.trainingScheduleId=null;
-        attendanceState.billingPaymentSnapshot=null;
-        attendanceState.billingAttendanceSnapshot=null;
-        attendanceState.billingRecordSnapshot=null;
-      }
-      history.pushState({gtRoute:'attendance',source:restored?'restore':'home',date:attendanceState.date},'',location.pathname+location.search+'#attendance');
-      if(restored){ attendance(); } else { attendanceChooser(); }
-      return false; }
+      attendanceState.date=appToday().iso;
+      attendanceState.group='';
+      attendanceState.name='';
+      attendanceState.trainingTime='';
+      attendanceState.trainingScheduleId=null;
+      attendanceState.billingPaymentSnapshot=null;
+      attendanceState.billingAttendanceSnapshot=null;
+      attendanceState.billingRecordSnapshot=null;
+      history.pushState({gtRoute:'attendance',source:'home',date:attendanceState.date},'',location.pathname+location.search+'#attendance');
+      attendanceChooser(); return false; }
     if(route==='billing'){ return openMyBilling(); }
     if(route==='trainer-month'){ history.pushState({gtRoute:'trainer-month'},'',location.pathname+location.search+'#trainer-month'); renderMonthlyBilling(); return false; }
     if(route==='more'){ history.pushState({gtRoute:'more'},'',location.pathname+location.search+'#more'); renderMore(); return false; }
@@ -11516,10 +11300,6 @@ window.addEventListener('hashchange',()=>{
       attendanceState.date=String(window.__attendanceHomeDate);
       attendance();
       window.__attendanceHomeDate=null;
-      return;
-    }
-    if(restoreLastAttendanceContext()){
-      attendance();
       return;
     }
     window.__attendanceOpenSource='home';

@@ -6453,14 +6453,54 @@ try{
         if(br){
           const ds=Array.isArray(br.debtSnapshot)?br.debtSnapshot:[];
           const as=Array.isArray(br.applicationSnapshot)?br.applicationSnapshot:[];
+          const ps=Array.isArray(br.paymentSnapshot)?br.paymentSnapshot:[];
           const nm=String(m.surname||'').trim()+'|'+String(m.name||'').trim();
           const d=ds.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
           const a=as.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
+          const p=ps.find(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim()===nm);
+
           m.debt=d?Number(d.debt||0):0;
           m.debtReason=d?String(d.reason||''):'';
           m.application=!!a;
           m.applicationDate=a?String(a.applicationDate||''):'';
+
+          // IMPORTANT: paymentSnapshot is saved with the same training.
+          // Restore NEW from this exact training record, never from the
+          // generic member list. NEW means present for this training but 0 €.
+          if(p){
+            m.training=!!p.training;
+            m.newMember=!!p.newMember;
+            m.trainingAccount=!!p.trainingAccount && !m.newMember;
+            if(m.newMember){
+              m.training=true;
+              m.trainingAccount=false;
+            }
+          }
         }
+      });
+
+      // Final authoritative pass for this exact training: attendance rows
+      // saved in Supabase. If either attendance or billing says NEW, keep it.
+      const finalRows=Array.isArray(rows)?rows:[];
+      const finalMap=new Map(finalRows.map(r=>[String(r.member_id),r]));
+      const finalMemberMap=await memberMap();
+      (attendanceState.members||[]).forEach(m=>{
+        const keys=memberMapKeys(m);
+        const sid=keys.map(k=>finalMemberMap[k]).find(Boolean);
+        const rr=sid?finalMap.get(String(sid)):null;
+        if(rr && rr.new_member){
+          m.training=true;
+          m.newMember=true;
+          m.trainingAccount=false;
+        }
+      });
+
+      // Keep the shared attendance list alphabetically sorted after every
+      // cross-device pull. New members arriving from Mobile 1 must not be
+      // appended to the bottom on Mobile 2.
+      attendanceState.members.sort((a,b)=>{
+        const sx=String(a.surname||'').trim().localeCompare(String(b.surname||'').trim(),'sk',{sensitivity:'base'});
+        return sx || String(a.name||'').trim().localeCompare(String(b.name||'').trim(),'sk',{sensitivity:'base'});
       });
       saveCurrentTrainingAttendanceLocalOnly();
       refreshAttendance();
@@ -7040,12 +7080,19 @@ function openAttendanceMemberProfile(index){
  window.__gtBackTarget={route:'attendanceCurrent'};
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
+function sortAttendanceMembersAlphabetically(){
+  if(!attendanceState || !Array.isArray(attendanceState.members)) return;
+  attendanceState.members.sort((a,b)=>{
+    const sx=String(a.surname||'').trim().localeCompare(String(b.surname||'').trim(),'sk',{sensitivity:'base'});
+    return sx || String(a.name||'').trim().localeCompare(String(b.name||'').trim(),'sk',{sensitivity:'base'});
+  });
+}
 function renderAttendanceRows(){
  const locked=isAttendanceFullyLocked()&&!isAdmin();
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
-   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(event,${i})" ondblclick="attendanceEditGuard()&&handleTrainingDoubleClick(event,${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
+   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(event,${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
    <button ${locked?'disabled':''} class="pay-btn ${m.debt>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${m.debt>0?'<strong>'+m.debt+' €</strong>':''}</button>
@@ -7504,7 +7551,7 @@ function updateAttendanceTotals(){
  const reg=attendanceState.members.reduce((s,m)=>s+currentMemberPaymentTotals(m).registration,0);
  const debt=attendanceState.members.reduce((s,m)=>s+Number(m.debt||0),0);
  const trainingCount=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
- const presentCount=attendanceState.members.filter(m=>m.training).length;
+ const presentCount=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
  const newCount=attendanceState.members.filter(m=>m.newMember).length;
  const pe=document.getElementById('presentCount'); if(pe)pe.textContent=presentCount;
  const ne=document.getElementById('newCount'); if(ne)ne.textContent=newCount;
@@ -7560,17 +7607,34 @@ function clearOther(type){
  document.getElementById('otherModal').remove(); updateAttendanceTotals();
 }
 let trainingClickTimers={};
+let trainingClickCounts={};
 
 function handleTrainingClick(event,i){
  if(!attendanceEditGuard()) return;
+ if(event){event.preventDefault();event.stopPropagation();}
  const key=String(i);
+ const now=Date.now();
+ const prev=trainingClickCounts[key]||{time:0,count:0};
+
  clearTimeout(trainingClickTimers[key]);
- // Wait briefly because a browser sends click before dblclick. This prevents
- // the first click of the second double-click from destroying ACCOUNT state.
+
+ // Two clicks within the short window = the next state:
+ // TRÉNING -> ÚČET
+ // ÚČET -> NOVÝ
+ if(now-prev.time < 380){
+   trainingClickCounts[key]={time:0,count:0};
+   handleTrainingDoubleClick(null,i);
+   return;
+ }
+
+ trainingClickCounts[key]={time:now,count:1};
+
+ // One click is only committed after the double-click window expires.
  trainingClickTimers[key]=setTimeout(()=>{
    delete trainingClickTimers[key];
+   trainingClickCounts[key]={time:0,count:0};
    toggleTraining(i);
- },280);
+ },400);
 }
 
 async function handleTrainingDoubleClick(event,i){
@@ -7579,14 +7643,14 @@ async function handleTrainingDoubleClick(event,i){
  const key=String(i);
  clearTimeout(trainingClickTimers[key]);
  delete trainingClickTimers[key];
+ trainingClickCounts[key]={time:0,count:0};
 
  const m=attendanceState.members[i];
  if(!m)return;
 
- // DOUBLE CLICK:
- // TRÉNING -> ÚČET
- // ÚČET -> NOVÝ
- // NOVÝ stays NOVÝ
+ // THIRD STATE:
+ // 1st double-click: green TRÉNING -> red ÚČET
+ // 2nd double-click: red ÚČET -> blue NOVÝ
  if(m.trainingAccount){
    m.training=true;
    m.trainingAccount=false;
@@ -7615,7 +7679,7 @@ async function handleTrainingDoubleClick(event,i){
    return;
  }
 
- // Ordinary present state -> ACCOUNT.
+ // Green ordinary training -> account.
  m.training=true;
  m.trainingAccount=true;
  m.newMember=false;
@@ -7634,20 +7698,20 @@ async function toggleTraining(i){
  const m=attendanceState.members[i];
  if(!m)return;
 
- if(!m.training){
-   m.training=true;
-   m.trainingAccount=false;
-   m.newMember=false;
- }else if(m.newMember){
+ // A single click:
+ // OFF -> green TRÉNING
+ // green -> OFF
+ // ACCOUNT/NEW -> OFF
+ if(m.training){
    m.training=false;
    m.trainingAccount=false;
    m.newMember=false;
  }else{
-   // A single click from ACCOUNT returns to ordinary paid training.
    m.training=true;
    m.trainingAccount=false;
    m.newMember=false;
  }
+
  saveCurrentTrainingAttendance();
  refreshAttendance();
  try{
@@ -8440,7 +8504,7 @@ function upsertBillingRecordFromAttendance(){
       const pt=currentMemberPaymentTotals(m);
       return {surname:m.surname,name:m.name,membership:Number(pt.membership||0),registration:Number(pt.registration||0),trainingAccount:!!m.trainingAccount,training:!!m.training,newMember:!!m.newMember};
     }).filter(x=>x.training||x.membership>0||x.registration>0),
-    presentCount:attendanceState.members.filter(m=>m.training).length,
+    presentCount:attendanceState.members.filter(m=>m.training&&!m.newMember).length,
     newCount:attendanceState.members.filter(m=>m.training&&m.newMember).length,
     // Poradie skupín v daný deň vo Vyúčtovaní = poradie posledného uloženia dochádzky.
     // Pri opätovnom uložení sa skupina presunie na koniec poradia.
@@ -8669,7 +8733,7 @@ async function saveTrainingBilling(){
     applicationSnapshot:(attendanceState.members||[])
       .filter(m=>!!m.application)
       .map(m=>({surname:m.surname,name:m.name,applicationDate:String(m.applicationDate||'')})),
-    presentCount:attendanceState.members.filter(m=>m.training).length,
+    presentCount:attendanceState.members.filter(m=>m.training&&!m.newMember).length,
     newCount:attendanceState.members.filter(m=>m.training&&m.newMember).length,
     // Aktuálny čas uloženia určuje poradie skupiny v rámci rovnakého dňa.
     savedAt:Date.now()

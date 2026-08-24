@@ -8495,30 +8495,53 @@ function getBillingRecords(){
 (function installBillingAttendanceCrossDevice(){
   if(window.__gtBillingAttendanceCrossDeviceInstalled) return;
   window.__gtBillingAttendanceCrossDeviceInstalled=true;
-  setInterval(async()=>{
+
+  async function pullExactTraining(){
     try{
-      if(!window.__attendanceOpenedFromBillingRecord) return;
-      let rk=String(attendanceState&&attendanceState.billingRecordKey||'').trim();
-      if(!rk) return;
-      let rows=await request('/rest/v1/billing_records?record_key=eq.'+encodeURIComponent(rk)+'&select=record_key,payload,updated_at&limit=1');
-      let br=rows&&rows[0]&&rows[0].payload;
-      if(!br) return;
+      if(!attendanceState) return;
+      let tid=String(attendanceState.trainingSupabaseId||'').trim();
+      if(!tid) return;
+
+      // Find ALL billing records for this exact training. Do not use
+      // record_key because the two devices/trainers can have different keys.
+      let rows=await request('/rest/v1/billing_records?select=record_key,payload,updated_at&limit=1000');
+      let matches=(rows||[]).filter(x=>{
+        let p=x&&x.payload||{};
+        return String(p.trainingId||p.trainingSupabaseId||'').trim()===tid;
+      });
+      if(!matches.length) return;
+
+      matches.sort((a,b)=>{
+        let aa=Number((a.payload||{}).savedAt||0);
+        let bb=Number((b.payload||{}).savedAt||0);
+        return bb-aa;
+      });
+      let row=matches[0], br=row.payload||{};
       let old=Number((attendanceState.billingRecordSnapshot||{}).savedAt||0);
       let fresh=Number(br.savedAt||0);
-      // Same record_key means the same training. A newer savedAt is a save
-      // made by either device. Always accept that newer server snapshot.
       if(fresh<=old) return;
+
       attendanceState.billingRecordSnapshot=br;
       attendanceState.billingAttendanceSnapshot=Array.isArray(br.attendanceSnapshot)?br.attendanceSnapshot.slice():[];
-      attendanceState.billingRecordKey=String(rows[0].record_key||rk);
-      if(br.trainingId||br.trainingSupabaseId){
+      attendanceState.billingRecordKey=String(row.record_key||'');
+      if(br.trainingId||br.trainingSupabaseId)
         attendanceState.trainingSupabaseId=String(br.trainingId||br.trainingSupabaseId);
-      }
-      try{ persistCommittedTrainingSnapshot(br); }catch(_e){}
+
+      try{persistCommittedTrainingSnapshot(br);}catch(_e){}
       serverBillingSnapshot=br;
+
+      // Rebuild from the exact server checkpoint, regardless of which device
+      // made the last save.
       if(typeof refreshAttendance==='function') refreshAttendance();
-    }catch(_){}
-  },2000);
+    }catch(e){ console.warn('Guard Trainer cross-device training sync:',e); }
+  }
+
+  window.__gtPullExactTraining= pullExactTraining;
+  setInterval(pullExactTraining,2000);
+
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible') pullExactTraining();
+  });
 })();
 
 // Bidirectional attendance refresh: when the first device returns to the
@@ -9123,6 +9146,25 @@ async function saveTrainingBilling(){
         savedAt:Date.now()
       };
       await window.gtSaveBillingRecordSupabase(sharedRecord);
+
+      // Bidirectional canonical update: if another device has the same
+      // training under another record_key, update that record's payload too.
+      // record_key identifies a billing row; trainingId identifies the actual
+      // training and is the cross-device identity.
+      try{
+        let tid=String(sharedRecord.trainingId||sharedRecord.trainingSupabaseId||'').trim();
+        if(tid){
+          let existing=await request('/rest/v1/billing_records?select=record_key,payload&limit=1000');
+          for(let er of (existing||[])){
+            let ep=er&&er.payload||{};
+            if(String(ep.trainingId||ep.trainingSupabaseId||'').trim()!==tid) continue;
+            if(String(er.record_key||'')===String(recordKey(sharedRecord)||'')) continue;
+            let mirror={...sharedRecord,record_key:String(er.record_key)};
+            await window.gtSaveBillingRecordSupabase(mirror);
+          }
+        }
+      }catch(_mirrorErr){ console.warn('Cross-device billing mirror failed:',_mirrorErr); }
+
       Object.assign(record,sharedRecord);
       // saveTrainingBilling is outside the Supabase sync IIFE, so it cannot
       // call that IIFE's private recordKey(). Use the actual object reference

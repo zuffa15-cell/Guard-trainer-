@@ -7385,7 +7385,8 @@ async function toggleRegistration(i){
    Number(p.memberId)===Number(attendanceMemberId(m)) &&
    p.paidGroup===attendanceState.group &&
    p.date===attendanceDateKey()
- );
+ ) || (!!m.registration && m.registrationDate===attendanceDateKey() &&
+       (!m.registrationPaidGroup || m.registrationPaidGroup===attendanceState.group));
  const snapshotToday = (!isAdmin() && attendanceState.billingPaymentSnapshot && (()=>{ const snap=attendanceState.billingPaymentSnapshot[m.surname+'|'+m.name]; return !!(snap && Number(snap.registration||0)>0); })());
  if((paidHere || snapshotToday) && !draft){
    for(let j=registrationPayments.length-1;j>=0;j--){
@@ -7407,6 +7408,17 @@ async function toggleRegistration(i){
    return;
  }
  if(memberHasRegistration(m) && !draft){
+   // Server-synchronized registration is still a local payment toggle.
+   // Do not block the trainer from cancelling it.
+   if(m.registration){
+     a.registration=false; a.registrationDate=''; a.registrationAmount=0; a.registrationPaidGroup='';
+     m.registration=false; m.registrationDate=''; m.registrationAmount=0; m.registrationPaidGroup='';
+     persistMembersData();
+     const saved=await saveMember();
+     if(saved){ refreshAttendance(); try{ if(typeof window.gtSyncMembersSupabase==='function') window.gtSyncMembersSupabase(); }catch(_){} }
+     else { m.registration=true; m.registrationAmount=30; m.registrationDate=attendanceDateKey(); m.registrationPaidGroup=attendanceState.group; a.registration=true; a.registrationDate=m.registrationDate; a.registrationAmount=30; a.registrationPaidGroup=m.registrationPaidGroup; refreshAttendance(); }
+     return;
+   }
    refreshAttendance(); return;
  }
  if(draft?.action==='add'){

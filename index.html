@@ -6188,6 +6188,8 @@ try{
     return out;
   }
   const pending={};
+  const protectedUntil={};
+  const mutationSeq={};
   async function pull(){
     if(!document.querySelector('.attendance-page')||!tok())return false;
     try{
@@ -6195,11 +6197,13 @@ try{
       const rows=await fetchJson('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(trainingId)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
       const map=await memberMap();
       const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
+      const now=Date.now();
       (attendanceState.members||[]).forEach((m,i)=>{
-        // Do not let the 1-second background pull overwrite a tap that is
-        // still being written to Supabase. The old code caused the green
-        // button to flash and immediately return to its previous state.
-        if(pending[String(i)]) return;
+        const pk=String(i);
+        // A pull can have started before a local tap and finish afterwards.
+        // Protect recently edited rows briefly so stale server data cannot
+        // overwrite the user's fresh state and make the button blink.
+        if(pending[pk] || (protectedUntil[pk]||0)>now) return;
         const keys=memberMapKeys(m); const sid=keys.map(k=>map[k]).find(Boolean); const r=sid?byMember[sid]:null;
         if(r){m.training=!!r.present;m.newMember=!!r.new_member;m.trainingAccount=!r.training_fee_paid && !!r.present && !r.new_member;m.debt=Number(r.debt_amount||0);m.debtReason=r.debt_note||'';}
         else {m.training=false;m.newMember=false;m.trainingAccount=false;m.debt=0;m.debtReason='';}
@@ -6212,7 +6216,8 @@ try{
   async function pushMember(index){
     if(!document.querySelector('.attendance-page')||!tok())return false;
     const m=attendanceState.members[index]; if(!m)return false;
-    const pk=String(index); pending[pk]=true;
+    const pk=String(index); pending[pk]=true; protectedUntil[pk]=Date.now()+2500; mutationSeq[pk]=(mutationSeq[pk]||0)+1;
+    const mySeq=mutationSeq[pk];
     try{
       const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
       const map=await memberMap(), keys=memberMapKeys(m), memberId=keys.map(k=>map[k]).find(Boolean);
@@ -6221,9 +6226,17 @@ try{
       await fetchJson('/rest/v1/attendance?on_conflict=training_id,member_id',{
         method:'POST',headers:headers({'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'}),body:JSON.stringify(body)
       });
+      // Keep the row protected until a later pull has definitely had a chance
+      // to read the just-written value. This also makes switching attendance
+      // OFF reliable; a stale in-flight pull can no longer turn it back ON.
+      if(mutationSeq[pk]===mySeq) protectedUntil[pk]=Date.now()+1800;
       return true;
-    }catch(e){console.error('Guard Trainer Supabase attendance push:',e);toast('Chyba zápisu dochádzky: '+e.message);return false;}
-    finally{ delete pending[pk]; }
+    }catch(e){
+      console.error('Guard Trainer Supabase attendance push:',e);
+      protectedUntil[pk]=Date.now()+1200;
+      toast('Chyba zápisu dochádzky: '+e.message);
+      return false;
+    }finally{ delete pending[pk]; }
   }
   window.gtSyncAttendanceSupabase=pull;
   window.gtSaveAttendanceMemberSupabase=pushMember;

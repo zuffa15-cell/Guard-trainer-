@@ -4501,6 +4501,9 @@ loadPersistedMembers();
       if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
       persistMembersData();
       try{localStorage.setItem('gt-supabase-members-seeded','1')}catch(_){}
+      if(typeof loadAttendanceFromMembers==='function' && document.querySelector('.attendance-page')){
+        try{loadAttendanceFromMembers(); if(typeof refreshAttendance==='function') refreshAttendance();}catch(e){console.warn('Attendance refresh after member sync:',e);}
+      }
       if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
       finished=true; return true;
     }catch(e){ console.warn('Guard Trainer Supabase members sync:',e); return false; }
@@ -4615,6 +4618,12 @@ loadMemberNotes();
       group_id:gm[groupName]||null,
       membership_paid_first_half:!!m.membershipFirstHalf||!!m.membership,
       membership_paid_second_half:!!m.membershipSecondHalf,
+      membership_first_half_amount:Number(m.membershipFirstHalfAmount||0)||null,
+      membership_first_half_date:iso(m.membershipFirstHalfDate||''),
+      membership_first_half_group:String(m.membershipFirstHalfGroup||'')||null,
+      membership_second_half_amount:Number(m.membershipSecondHalfAmount||0)||null,
+      membership_second_half_date:iso(m.membershipSecondHalfDate||''),
+      membership_second_half_group:String(m.membershipSecondHalfGroup||'')||null,
       registration_paid:!!m.registration,
       application_date:iso(m.applicationDate),
       club_join_date:iso(m.memberSince),
@@ -4635,9 +4644,9 @@ loadMemberNotes();
     const gm=await groupMap();
     const payload=memberPayload(m,gm);
     if(!Number.isFinite(payload.legacy_id)) throw new Error('Člen nemá platné ID.');
-    const r=await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{
-      method:'POST',
-      headers:{'Prefer':'resolution=merge-duplicates,return=representation'},
+    const r=await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(String(payload.legacy_id)),{
+      method:'PATCH',
+      headers:{...h,'Prefer':'return=representation'},
       body:JSON.stringify(payload)
     });
     const text=await r.text();

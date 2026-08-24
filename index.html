@@ -6270,7 +6270,7 @@ try{
   const protectedUntil={};
   const mutationSeq={};
   async function pull(){
-    if(!document.querySelector('.attendance-page')||!tok())return false;
+    if(!tok())return false;
     try{
       const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
       const rows=await fetchJson('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(trainingId)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
@@ -7821,6 +7821,63 @@ function getBillingRecords(){
 }
 
 
+/* v766 – Supabase synchronization of monthly billing records.
+   Billing rows are a shared source of truth across trainer devices. */
+(function installSupabaseBillingSync(){
+  if(window.__gtBillingSupabaseSyncInstalled) return;
+  window.__gtBillingSupabaseSyncInstalled=true;
+  function url(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
+  function tok(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function headers(extra){return Object.assign({'apikey':key(),'Authorization':'Bearer '+tok(),'Accept':'application/json'},extra||{})}
+  async function request(path,opts){
+    if(!url()||!key()||!tok()) throw new Error('Nie ste prihlásený na server.');
+    const r=await window.gtSupabaseFetch(url()+path,Object.assign({headers:headers()},opts||{}));
+    if(!r.ok) throw new Error('Supabase vyúčtovanie '+r.status+': '+(await r.text()).slice(0,220));
+    const t=await r.text(); return t?JSON.parse(t):[];
+  }
+  function recordKey(r){
+    const d=parsePaymentDate(r&&r.date);
+    const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
+    return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
+  }
+  function savedAt(r){ return Number(r&&r.savedAt||0); }
+  window.gtSaveBillingRecordSupabase=async function(record){
+    if(!record) return false;
+    const rk=recordKey(record);
+    const d=parsePaymentDate(record.date);
+    const body={record_key:rk,trainer:String(record.trainer||''),training_date:d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:null,group_code:String(record.group||''),payload:record,updated_at:new Date().toISOString()};
+    await request('/rest/v1/billing_records?on_conflict=record_key',{method:'POST',headers:headers({'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'}),body:JSON.stringify(body)});
+    return true;
+  };
+  window.gtSyncBillingSupabase=async function(){
+    if(!tok()) return false;
+    try{
+      const rows=await request('/rest/v1/billing_records?select=record_key,payload&order=updated_at.asc');
+      const serverMap=new Map();
+      (rows||[]).forEach(x=>{ if(x&&x.payload&&x.record_key) serverMap.set(String(x.record_key),x.payload); });
+      const localMap=new Map();
+      (monthlyBillingRecords||[]).forEach(r=>localMap.set(recordKey(r),r));
+      // Server wins only when it is newer. Local newer rows are pushed back.
+      for(const [rk,sr] of serverMap){
+        const lr=localMap.get(rk);
+        if(!lr || savedAt(sr)>=savedAt(lr)) localMap.set(rk,sr);
+      }
+      for(const [rk,lr] of localMap){
+        const sr=serverMap.get(rk);
+        if(!sr || savedAt(lr)>savedAt(sr)){
+          try{ await window.gtSaveBillingRecordSupabase(lr); }catch(e){ console.warn('Billing push:',e); }
+        }
+      }
+      monthlyBillingRecords=Array.from(localMap.values());
+      normalizeMonthlyBillingRecords();
+      persistMonthlyBillingRecords();
+      return true;
+    }catch(e){ console.warn('Guard Trainer Supabase billing sync:',e); return false; }
+  };
+})();
+
+
 // Potvrdenie odovzdania peňazí hlavného trénera.
 // Jeden stav je spoločný pre hlavného trénera aj konkrétneho trénera:
 // hlavný tréner označí prijaté peniaze -> tréner vidí ODOVZDANÉ.
@@ -8258,6 +8315,22 @@ async function saveTrainingBilling(){
     monthlyBillingRecords.push(originalRecord);
   }
   persistMonthlyBillingRecords();
+
+  // Save the finished billing record to the shared server only now, after
+  // ULOŽIŤ VYÚČTOVANIE. While editing attendance everything remains local.
+  try{
+    if(window.gtSaveBillingRecordSupabase){
+      if(!(await window.gtSaveBillingRecordSupabase(record))) throw new Error('Vyúčtovanie sa nepodarilo odoslať na server');
+      if(substitution){
+        const original=monthlyBillingRecords.find(r=>r.key===originalKey);
+        if(original) await window.gtSaveBillingRecordSupabase(original);
+      }
+    }
+  }catch(e){
+    console.error('Guard Trainer billing server commit:',e);
+    toast('Vyúčtovanie sa nepodarilo synchronizovať: '+(e&&e.message?e.message:e));
+    return false;
+  }
 
   // The whole attendance is offline until this point. Only now send the
   // complete training + payment/member state to Supabase.
@@ -10110,6 +10183,15 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   const app=document.querySelector('.app');
   if(!app) return false;
   normalizeMonthlyBillingRecords();
+  // Refresh shared billing from Supabase without blocking the local screen.
+  // When the server has newer data, redraw once the pull finishes.
+  if(window.gtSyncBillingSupabase && !window.__gtBillingRefreshInFlight){
+    window.__gtBillingRefreshInFlight=true;
+    window.gtSyncBillingSupabase().then(()=>{
+      window.__gtBillingRefreshInFlight=false;
+      try{ if(document.querySelector('.billing-page')) renderMonthlyBilling(); }catch(_){}
+    }).catch(()=>{window.__gtBillingRefreshInFlight=false;});
+  }
   const now=appToday();
   if(year==null||targetMonth==null){
     if(selectedBillingYear==null){ selectedBillingYear=now.year; selectedBillingMonth=now.month; }

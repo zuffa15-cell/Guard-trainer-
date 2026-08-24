@@ -6320,7 +6320,7 @@ try{
   window.gtSyncAttendanceSupabase=pull;
   window.gtSaveAttendanceMemberSupabase=pushMember;
   window.gtSaveAttendanceAllSupabase=async function(){
-    if(!document.querySelector('.attendance-page')) return false;
+    if(!attendanceState || !Array.isArray(attendanceState.members)) return false;
     const members=attendanceState.members||[];
     for(let i=0;i<members.length;i++){ await pushMember(i); }
     return true;
@@ -8147,9 +8147,10 @@ async function saveTrainingBilling(){
   // Členské a registračné sa po potvrdení dochádzky nemenia – ich úpravu
   // riadi attendancePaymentEditGuard() a pri platbe zadanej Adminom je zákaz
   // ešte prísnejší.
-  commitMembershipDraftsForCurrentTraining();
-  commitRegistrationDraftsForCurrentTraining();
-  syncAllRegistrationBillingFromMembers();
+  try{ commitMembershipDraftsForCurrentTraining(); }catch(e){ console.warn('membership local commit:',e); }
+  try{ commitRegistrationDraftsForCurrentTraining(); }catch(e){ console.warn('registration local commit:',e); }
+  try{ syncAllRegistrationBillingFromMembers(); }catch(e){ console.warn('registration billing sync:',e); }
+  saveCurrentTrainingAttendanceLocalOnly();
   const fee=trainingFee();
   const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
   const trainingPaid=attendanceState.members.filter(m=>m.training&&!m.newMember&&!m.trainingAccount).length;
@@ -8261,7 +8262,10 @@ async function saveTrainingBilling(){
   // The whole attendance is offline until this point. Only now send the
   // complete training + payment/member state to Supabase.
   try{
-    if(window.gtSaveAttendanceAllSupabase) await window.gtSaveAttendanceAllSupabase();
+    if(window.gtSaveAttendanceAllSupabase){
+      const pushed=await window.gtSaveAttendanceAllSupabase();
+      if(pushed===false) throw new Error('Dochádzku sa nepodarilo odoslať na server');
+    }
     // Membership, registration and ACCOUNT fields live on the member row.
     // Save only members belonging to this attendance, so another device's
     // unrelated members cannot be overwritten.

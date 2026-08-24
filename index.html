@@ -4553,9 +4553,11 @@ loadPersistedMembers();
       persistMembersData();
       try{ if(typeof syncAllRegistrationBillingFromMembers==='function') syncAllRegistrationBillingFromMembers(); }catch(_){}
       try{localStorage.setItem('gt-supabase-members-seeded','1')}catch(_){}
-      if(typeof loadAttendanceFromMembers==='function' && document.querySelector('.attendance-page')){
-        try{loadAttendanceFromMembers(); if(typeof refreshAttendance==='function') refreshAttendance();}catch(e){console.warn('Attendance refresh after member sync:',e);}
-      }
+      // IMPORTANT: the member synchronizer must NEVER rebuild the active
+      // Dochádzka screen. Attendance has its own authoritative sync loop.
+      // Rebuilding it here caused the exact mobile-2 bug: the fresh server
+      // snapshot appeared, then the 2-second member refresh loaded an older
+      // member/local state and overwrote it.
       if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
       finished=true; return true;
     }catch(e){ console.warn('Guard Trainer Supabase members sync:',e); return false; }
@@ -4703,9 +4705,9 @@ loadMemberNotes();
     const gm=await groupMap();
     const payload=memberPayload(m,gm);
     if(!Number.isFinite(payload.legacy_id)) throw new Error('Člen nemá platné ID.');
-    const r=await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(String(payload.legacy_id)),{
-      method:'PATCH',
-      headers:{...h,'Prefer':'return=representation'},
+    const r=await window.gtSupabaseFetch(SUPA_URL+'/rest/v1/members?on_conflict=legacy_id',{
+      method:'POST',
+      headers:{...h,'Prefer':'resolution=merge-duplicates,return=representation'},
       body:JSON.stringify(payload)
     });
     const text=await r.text();
@@ -6283,6 +6285,8 @@ try{
   const mutationSeq={};
   async function pull(){
     if(!tok())return false;
+    // v801: newest complete billing snapshot wins; never roll back a newer local save.
+
     try{
       const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
       const rows=await fetchJson('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(trainingId)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
@@ -6295,16 +6299,29 @@ try{
       // local/member copy.
       let serverBillingSnapshot=null;
       try{
-        const d=String(attendanceState.date||attendanceDateKey());
-        const g=String(attendanceState.group||'');
+        // The billing screen is the authoritative source for this exact
+        // training. Always query it using the same ISO date key used by the
+        // billing_records.training_date column. A display-formatted date
+        // such as "24. 8. 2026" must never be sent to Supabase here.
+        const rawDate=String(attendanceState.date||attendanceDateKey());
+        const pd=parsePaymentDate(rawDate);
+        const d=pd ? `${pd.year}-${String(pd.month).padStart(2,'0')}-${String(pd.day).padStart(2,'0')}` : rawDate;
+        const g=String(attendanceState.group||'').trim();
         const tr=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
-        const brs=await fetchJson('/rest/v1/billing_records?training_date=eq.'+encodeURIComponent(d)+'&group_code=eq.'+encodeURIComponent(g)+'&select=record_key,payload,updated_at&order=updated_at.desc&limit=20');
+        const brs=await fetchJson('/rest/v1/billing_records?training_date=eq.'+encodeURIComponent(d)+'&group_code=eq.'+encodeURIComponent(g)+'&select=record_key,payload,updated_at,trainer&order=updated_at.desc&limit=50');
         // IMPORTANT: do not trust row order alone. Multiple devices can have
         // billing rows with different updated_at values, while the payload's
         // savedAt is the actual version of the complete attendance snapshot.
         // Always select the newest complete snapshot for this trainer/date/group.
-        const rawCandidates=(brs||[]).filter(x=>x&&x.payload).map(x=>({payload:x.payload,updatedAt:String(x.updated_at||'')}));
-        const trainerCandidates=rawCandidates.filter(x=>String(x.payload.trainer||'').trim().toUpperCase()===tr.toUpperCase());
+        const rawCandidates=(brs||[]).filter(x=>x&&x.payload).map(x=>({payload:x.payload,updatedAt:String(x.updated_at||''),trainer:String(x.trainer||'')}));
+        // Prefer the exact trainer that owns the currently opened attendance.
+        // Only fall back to another trainer if the exact trainer has no saved
+        // record. This prevents mobile 2 from briefly loading one trainer's
+        // old training and then switching to another snapshot.
+        const trainerCandidates=rawCandidates.filter(x=>{
+          const a=String(x.payload&&x.payload.trainer||x.trainer||'').trim().toUpperCase();
+          return a===tr.toUpperCase();
+        });
         const pool=trainerCandidates.length?trainerCandidates:rawCandidates;
         pool.sort((a,b)=>{
           const sa=Number(a.payload&&a.payload.savedAt||0), sb=Number(b.payload&&b.payload.savedAt||0);
@@ -6312,18 +6329,25 @@ try{
           return String(b.updatedAt).localeCompare(String(a.updatedAt));
         });
         const candidate=pool.length?pool[0].payload:null;
-        // A device may still have an older local snapshot. The newest version
-        // wins. Once a server snapshot is received it becomes the authoritative
-        // local snapshot, so the following attendance pull cannot roll it back.
+        // IMPORTANT: the device can already contain a newer state that it
+        // explicitly saved itself. Never replace that state with an older
+        // server snapshot. Conversely, when another device saves later, the
+        // newer server snapshot must replace the local one. This is the
+        // cross-device merge rule for the complete training snapshot.
         const localCommitted=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
         const localSavedAt=Number(localCommitted&&localCommitted.savedAt||window.__gtCommittedTrainingSnapshotSavedAt||0);
         const serverSavedAt=Number(candidate&&candidate.savedAt||0);
-        if(candidate && serverSavedAt>=localSavedAt){
+        if(candidate && serverSavedAt >= localSavedAt){
           serverBillingSnapshot=candidate;
           attendanceState.billingRecordSnapshot=candidate;
           persistCommittedTrainingSnapshot(candidate);
+        } else if(localCommitted){
+          // Keep this device's own newer saved snapshot. The next pull will
+          // re-evaluate it against the server, so a later save from mobile 1
+          // will still propagate to mobile 2.
+          serverBillingSnapshot=localCommitted;
         } else {
-          serverBillingSnapshot=localCommitted || null;
+          serverBillingSnapshot=candidate || null;
         }
       }catch(e){ console.warn('Guard Trainer billing snapshot pull:',e); }
       // IMPORTANT: after a successful ULOŽIŤ VYÚČTOVANIE the committed
@@ -6333,9 +6357,16 @@ try{
       // On another device there is no local committed snapshot yet, so the
       // server billing snapshot is used normally.
       const committed=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
-      const committedAt=Number(committed&&committed.savedAt||0);
-      const serverAt=Number(serverBillingSnapshot&&serverBillingSnapshot.savedAt||0);
-      if(committed && committedAt>0 && (!serverBillingSnapshot || serverAt<=committedAt)){
+      // A server billing snapshot is the cross-device source of truth. Apply
+      // it immediately and do not fall through to the older attendance table.
+      if(serverBillingSnapshot){
+        attendanceState.billingRecordSnapshot=serverBillingSnapshot;
+        applyBillingSnapshotToAttendance();
+        saveCurrentTrainingAttendanceLocalOnly();
+        refreshAttendance();
+        return true;
+      }
+      if(committed){
         applyBillingSnapshotToAttendance();
         saveCurrentTrainingAttendanceLocalOnly();
         refreshAttendance();
@@ -6911,9 +6942,15 @@ function attendance(){
   // The last explicitly saved training snapshot is the local source of truth
   // when returning from Vyúčtovanie. Rebuild the whole attendance from it first,
   // then allow server sync to confirm it. Never rebuild it from mixed old caches.
-  loadCommittedTrainingSnapshot();
+  const committedBeforeMembers=loadCommittedTrainingSnapshot();
   loadAttendanceFromMembers();
-  applyBillingSnapshotToAttendance();
+  if(committedBeforeMembers){
+    // Re-apply the complete saved billing snapshot immediately after rebuilding
+    // the member list. The billing snapshot is the source of truth for this
+    // exact trainer/date/group, not the older member-level attendance cache.
+    attendanceState.billingRecordSnapshot=committedBeforeMembers;
+    applyBillingSnapshotToAttendance();
+  }
   const app=document.querySelector('.app');
   app.innerHTML=`
     <header class="topbar">
@@ -7889,7 +7926,7 @@ function deleteDebt(i){
  refreshAttendance();
 
 }
-function addNewMember(){
+async function addNewMember(){
  if(!attendanceEditGuard()) return;
  const n=prompt('Meno alebo priezvisko nového člena:','');
  if(!n||!n.trim())return;
@@ -7930,6 +7967,20 @@ function addNewMember(){
    });
  }
  attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
+ saveCurrentTrainingAttendance();
+ refreshAttendance();
+ // Persist NOVÝ to Supabase before the member sync can remove the local draft.
+ // Then persist the attendance row for this exact date/group so mobile 2 gets it.
+ try{
+   if(typeof window.gtSaveMemberSupabase==='function') await window.gtSaveMemberSupabase(member.id);
+   const ni=attendanceState.members.findIndex(x=>x.surname===surname&&x.name===name);
+   if(ni>=0 && typeof window.gtSaveAttendanceMemberSupabase==='function') await window.gtSaveAttendanceMemberSupabase(ni);
+ }catch(e){
+   console.warn('Guard Trainer NOVÝ sync:',e);
+   toast('Nový člen sa nepodarilo synchronizovať: '+e.message);
+   return;
+ }
+ persistMembersData();
  saveCurrentTrainingAttendance();
  refreshAttendance();
  toast('Nový člen bol pridaný do skupiny '+attendanceState.group);

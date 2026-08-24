@@ -5949,6 +5949,8 @@ function selectScheduleColor(c){
         // Re-render only the schedule views. Do not touch the create/edit form.
         if(typeof renderCalendar==='function' && (location.hash==='#calendar' || document.querySelector('.calendar-page'))) renderCalendar();
         if(typeof openScheduleManager==='function' && document.querySelector('.schedule-manager-page')) openScheduleManager();
+        // Realtime/polling must also refresh Domov: its training cards are derived from the same schedule.
+        if((location.hash==='' || location.hash==='#home') && typeof renderHome==='function') renderHome();
       }
       seeded=true;
       return true;
@@ -5980,7 +5982,7 @@ function selectScheduleColor(c){
   try{
     if(window.supabase && typeof window.supabase.channel==='function'){
       window.supabase.channel('gt-schedule-realtime')
-        .on('postgres_changes',{event:'*',schema:'public',table:'schedule_templates'},()=>pull())
+        .on('postgres_changes',{event:'*',schema:'public',table:'schedule_templates'},async()=>{ await pull(); if(typeof renderHome==='function' && (location.hash==='' || location.hash==='#home')) renderHome(); })
         .subscribe();
     }
   }catch(e){ console.warn('Supabase schedule realtime unavailable; polling remains active.',e); }

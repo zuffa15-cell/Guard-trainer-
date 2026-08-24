@@ -6095,6 +6095,93 @@ try{
   }
 }catch(e){ console.warn('Attendance history load failed',e); }
 
+/* v726 – Supabase attendance sync. Supabase is the shared source of truth
+   for attendance; localStorage remains only a fast local cache. */
+(function installSupabaseAttendanceSync(){
+  function url(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
+  function tok(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function headers(extra){return Object.assign({'apikey':key(),'Authorization':'Bearer '+tok(),'Accept':'application/json'},extra||{})}
+  async function fetchJson(path,opts){
+    if(!url()||!key()||!tok()) throw new Error('Nie ste prihlásený na server.');
+    const r=await window.gtSupabaseFetch(url()+path,Object.assign({headers:headers()},opts||{}));
+    if(!r.ok){const t=await r.text();throw new Error('Supabase attendance '+r.status+': '+t.slice(0,180));}
+    const t=await r.text(); return t?JSON.parse(t):[];
+  }
+  function parseTime(){
+    const raw=String(attendanceState.trainingTime||'');
+    const m=raw.match(/(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})/);
+    return {start:m?m[1]:'17:30',end:m?m[2]:'18:45'};
+  }
+  async function ensureTraining(){
+    const times=parseTime(), date=String(attendanceState.date||attendanceDateKey());
+    const groups=await fetchJson('/rest/v1/groups?name=eq.'+encodeURIComponent(String(attendanceState.group||''))+'&select=id&limit=1');
+    if(!groups.length) throw new Error('Skupina '+attendanceState.group+' neexistuje v Supabase.');
+    const body={training_date:date,start_time:times.start,end_time:times.end,group_id:groups[0].id,canceled:false};
+    const rows=await fetchJson('/rest/v1/trainings?on_conflict=training_date,start_time,end_time,group_id',{
+      method:'POST',headers:headers({'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=representation'}),body:JSON.stringify(body)
+    });
+    const row=rows&&rows[0]; if(!row||!row.id) throw new Error('Supabase nevytvoril tréning.');
+    attendanceState.trainingSupabaseId=row.id;
+    return row.id;
+  }
+  async function memberMap(){
+    const ids=(attendanceState.members||[]).map(m=>Number(m.id)).filter(Number.isFinite);
+    if(!ids.length)return {};
+    const q=ids.join(',');
+    const rows=await fetchJson('/rest/v1/members?legacy_id=in.('+q+')&select=id,legacy_id');
+    const out={}; (rows||[]).forEach(x=>{out[String(Number(x.legacy_id))]=x.id}); return out;
+  }
+  async function pull(){
+    if(!document.querySelector('.attendance-page')||!tok())return false;
+    try{
+      const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
+      const rows=await fetchJson('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(trainingId)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
+      const map=await memberMap(); const reverse={}; Object.keys(map).forEach(k=>reverse[map[k]]=k);
+      const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
+      (attendanceState.members||[]).forEach(m=>{
+        const sid=map[String(Number(m.id))]; const r=sid?byMember[sid]:null;
+        if(r){m.training=!!r.present;m.newMember=!!r.new_member;m.trainingAccount=!r.training_fee_paid && !!r.present && !r.new_member;m.debt=Number(r.debt_amount||0);m.debtReason=r.debt_note||'';}
+        else {m.training=false;m.newMember=false;m.trainingAccount=false;m.debt=0;m.debtReason='';}
+      });
+      saveCurrentTrainingAttendanceLocalOnly();
+      refreshAttendance();
+      return true;
+    }catch(e){console.warn('Guard Trainer Supabase attendance pull:',e);return false;}
+  }
+  async function pushMember(index){
+    if(!document.querySelector('.attendance-page')||!tok())return false;
+    const m=attendanceState.members[index]; if(!m)return false;
+    try{
+      const trainingId=attendanceState.trainingSupabaseId || await ensureTraining();
+      const map=await memberMap(), memberId=map[String(Number(m.id))];
+      if(!memberId) throw new Error('Člen '+m.surname+' '+m.name+' nemá Supabase ID.');
+      const body={training_id:trainingId,member_id:memberId,present:!!m.training,new_member:!!m.newMember,training_fee_paid:!!(m.training&&!m.newMember&&!m.trainingAccount),debt_amount:Number(m.debt||0),debt_note:String(m.debtReason||'')||null};
+      await fetchJson('/rest/v1/attendance?on_conflict=training_id,member_id',{
+        method:'POST',headers:headers({'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'}),body:JSON.stringify(body)
+      });
+      return true;
+    }catch(e){console.error('Guard Trainer Supabase attendance push:',e);toast('Chyba zápisu dochádzky: '+e.message);return false;}
+  }
+  window.gtSyncAttendanceSupabase=pull;
+  window.gtSaveAttendanceMemberSupabase=pushMember;
+  window.gtStartAttendanceSupabaseSync=function(){
+    if(window.__gtAttendanceSyncTimer)clearInterval(window.__gtAttendanceSyncTimer);
+    window.__gtAttendanceSyncTimer=setInterval(()=>{if(document.visibilityState==='visible')pull()},1000);
+    pull();
+  };
+  window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&document.querySelector('.attendance-page'))pull()});
+  window.addEventListener('focus',()=>{if(document.querySelector('.attendance-page'))pull()});
+})();
+
+function saveCurrentTrainingAttendanceLocalOnly(){
+  const key=trainingAttendanceKey();
+  trainingAttendanceByGroup[key]=Object.create(null);
+  (attendanceState.members||[]).forEach(a=>{trainingAttendanceByGroup[key][a.surname+'|'+a.name]={training:!!a.training,trainingAccount:!!a.trainingAccount,newMember:!!a.newMember}});
+  persistTrainingAttendanceHistory();
+  markAttendanceSavedNow(attendanceState.date,attendanceState.group);
+}
+
 function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
   return `${date}|${group}`;
 }
@@ -6180,21 +6267,9 @@ function getAttendanceSavedAt(date,group){
 }
 
 function saveCurrentTrainingAttendance(){
-  const key=trainingAttendanceKey();
-  trainingAttendanceByGroup[key]=Object.create(null);
-  (attendanceState.members||[]).forEach(a=>{
-    trainingAttendanceByGroup[key][a.surname+'|'+a.name]={
-      training:!!a.training,
-      trainingAccount:!!a.trainingAccount,
-      membershipAccountAmount:Number(a.membershipAccountAmount||0),membershipAccountDate:a.membershipAccountDate||'',
-      registrationAccountAmount:Number(a.registrationAccountAmount||0),registrationAccountDate:a.registrationAccountDate||'',
-      newMember:!!a.newMember
-    };
-  });
-  persistTrainingAttendanceHistory();
-  // Toto je rozhodujúci čas pre poradie skupín v daný deň.
-  markAttendanceSavedNow(attendanceState.date,attendanceState.group);
+  saveCurrentTrainingAttendanceLocalOnly();
 }
+
 function membershipDraftKey(memberId,date,group){
   return `${memberId}|${date}|${group}`;
 }
@@ -6539,6 +6614,7 @@ function attendance(){
     </nav>
     <div id="toast" class="toast"></div>`;
   updateAttendanceTotals();
+  if(window.gtStartAttendanceSupabaseSync) window.gtStartAttendanceSupabaseSync();
 }
 function groupClass(g){ return g==='A'?'a':g==='B'?'b':g==='C'?'c':g==='D'?'d':'dp'; }
 function openAttendanceMemberProfile(index){
@@ -7068,17 +7144,19 @@ function handleTrainingDoubleClick(event,i){
  m.trainingAccount=true;
  saveCurrentTrainingAttendance();
  refreshAttendance();
+ if(window.gtSaveAttendanceMemberSupabase) window.gtSaveAttendanceMemberSupabase(i);
  toast(`Účet ${trainingFee()} € – nezapočíta sa do vyzbieranej sumy`);
 }
 function toggleTraining(i){
  if(!attendanceEditGuard()) return;
  const m=attendanceState.members[i];
  if(!m)return;
- if(m.newMember){ m.training=true; m.trainingAccount=false; saveCurrentTrainingAttendance(); toast('NOVÝ – tréning zdarma'); refreshAttendance(); return; }
+ if(m.newMember){ m.training=true; m.trainingAccount=false; saveCurrentTrainingAttendance(); toast('NOVÝ – tréning zdarma'); refreshAttendance(); if(window.gtSaveAttendanceMemberSupabase) window.gtSaveAttendanceMemberSupabase(i); return; }
  m.training=!m.training;
  if(!m.training) m.trainingAccount=false;
  saveCurrentTrainingAttendance();
  refreshAttendance();
+ if(window.gtSaveAttendanceMemberSupabase) window.gtSaveAttendanceMemberSupabase(i);
 }
 
 function attendancePaymentPdfData(){
@@ -7307,6 +7385,7 @@ function saveDebt(i){
  updateCanonicalMemberFromAttendance(attendanceState.members[i]);
  closeDebtEditor();
  refreshAttendance();
+ if(window.gtSaveAttendanceMemberSupabase) window.gtSaveAttendanceMemberSupabase(i);
 }
 function closeDebtEditor(){const m=document.getElementById('debtModal');if(m)m.remove();}
 function deleteDebt(i){
@@ -7315,6 +7394,7 @@ function deleteDebt(i){
  updateCanonicalMemberFromAttendance(attendanceState.members[i]);
  closeDebtEditor();
  refreshAttendance();
+ if(window.gtSaveAttendanceMemberSupabase) window.gtSaveAttendanceMemberSupabase(i);
 }
 function addNewMember(){
  if(!attendanceEditGuard()) return;

@@ -4456,9 +4456,12 @@ loadPersistedMembers();
         getJson(url+'/rest/v1/members?select=id,legacy_id,first_name,last_name,date_of_birth,phone,group_id,membership_paid_first_half,membership_paid_second_half,membership_first_half_amount,membership_first_half_date,membership_first_half_group,membership_second_half_amount,membership_second_half_date,membership_second_half_group,registration_paid,registration_amount,registration_date,registration_group,application_date,active,archived,photo_url,note&order=legacy_id.asc'),
         getJson(url+'/rest/v1/member_groups?select=member_id,group_id')
       ]);
-      // A sync request may have started just before a delete. Never let its
-      // stale response overwrite the local list after the delete has begun.
-      if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
+      // A sync request may have started just before a delete or payment write.
+      // Never let its stale response overwrite the local list after that write
+      // has begun. This closes the race where the 2-second pull already fetched
+      // the old payment state before the user clicked REG.
+      if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) ||
+         window.__gtMemberDeleteInProgress || window.__gtMemberPaymentWriteInFlight) return false;
       const groupMap=Object.create(null); const groupNameById=Object.create(null);
       (groups||[]).forEach(g=>{groupMap[String(g.name||'').trim()]=g.id; groupNameById[String(g.id)]=String(g.name||'').trim();});
       const memberGroupNames=Object.create(null);

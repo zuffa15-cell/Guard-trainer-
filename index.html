@@ -6730,11 +6730,24 @@ function applyBillingSnapshotToAttendance(){
   if(!attendanceState.billingRecordSnapshot) return;
   const snap=attendanceState.billingPaymentSnapshot||{};
   const present=new Set(Array.isArray(attendanceState.billingAttendanceSnapshot)?attendanceState.billingAttendanceSnapshot:[]);
+  const br=attendanceState.billingRecordSnapshot||{};
+  const debtMap=new Map((Array.isArray(br.debtSnapshot)?br.debtSnapshot:[]).map(x=>[String(x.surname||'').trim()+'|'+String(x.name||'').trim(),x]));
+  const appMap=new Map((Array.isArray(br.applicationSnapshot)?br.applicationSnapshot:[]).map(x=>[String(x.surname||'').trim()+'|'+String(x.name||'').trim(),x]));
   (attendanceState.members||[]).forEach(a=>{
     const key=a.surname+'|'+a.name;
     const p=snap[key];
     a.training=present.has(key);
     a.trainingAccount=!!(p&&p.trainingAccount);
+    // Restore the exact saved training-level DLŽNÉ/PRIHLÁŠKA state when
+    // returning from Vyúčtovanie. These fields are part of the saved billing
+    // record and must not disappear just because attendance is rebuilt from
+    // member-level data.
+    const d=debtMap.get(key);
+    a.debt=d?Number(d.debt||0):0;
+    a.debtReason=d?String(d.reason||''):'';
+    const ap=appMap.get(key);
+    a.application=!!ap;
+    a.applicationDate=ap?String(ap.applicationDate||''):'';
     if(p){
       const mem=Number(p.membership||0);
       const reg=Number(p.registration||0);

@@ -6152,16 +6152,26 @@ try{
   }
 }catch(e){ console.warn('Attendance history load failed',e); }
 
-/* v732 – payment/application cloud sync helper. */
-function queueMemberPaymentCloudSync(member){
-  if(!member || !window.gtSaveMemberSupabase) return;
-  const id=Number(member.id); if(!Number.isFinite(id)) return;
-  // Copy the current attendance payment state into the canonical member model
-  // before writing it. This makes the cloud payload independent of whether the
-  // payment has already been committed to the local history list.
-  try{
-    const a=(attendanceState&&attendanceState.members||[]).find(x=>x.surname===member.surname&&x.name===member.name);
-    if(a){
+/* v733 – robust cloud sync for member payments/application.
+   Do NOT route these small changes through the whole-member save path: a payment
+   tap must update only the canonical payment columns and must never overwrite
+   another device's unrelated member changes. */
+(function installPaymentCloudSyncV733(){
+  function url(){return String(window.GT_SUPABASE_URL||'').trim()}
+  function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
+  function tok(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function headers(){const k=key(),t=tok(); return (k&&t)?{'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null}
+  async function patchMember(member,payload){
+    const h=headers(); if(!h) throw new Error('Nie ste prihlásený na server.');
+    const id=Number(member&&member.id);
+    if(!Number.isFinite(id)) throw new Error('Člen nemá platné ID.');
+    const r=await window.gtSupabaseFetch(url()+'/rest/v1/members?legacy_id=eq.'+encodeURIComponent(id),{method:'PATCH',headers:h,body:JSON.stringify(payload)});
+    const text=await r.text(); if(!r.ok) throw new Error('Server odmietol platbu ('+r.status+'). '+text.slice(0,240));
+  }
+  function applyAttendanceState(member){
+    try{
+      const a=(attendanceState&&attendanceState.members||[]).find(x=>x.surname===member.surname&&x.name===member.name);
+      if(!a)return;
       const p=(typeof currentMembershipPeriod==='function'?currentMembershipPeriod():2);
       if(Number(a.membershipAmount||0)>0){
         member.membership=true; member.membershipAmount=Number(a.membershipAmount||0); member.membershipDate=a.membershipDate||attendanceState.date; member.membershipPaidGroup=a.membershipPaidGroup||attendanceState.group;
@@ -6170,17 +6180,45 @@ function queueMemberPaymentCloudSync(member){
       }else if(a.membershipDate===attendanceState.date){
         if(p===1){member.membershipFirstHalf=false;member.membershipFirstHalfAmount=0;member.membershipFirstHalfDate='';member.membershipFirstHalfPaidGroup='';}
         else {member.membershipSecondHalf=false;member.membershipSecondHalfAmount=0;member.membershipSecondHalfDate='';member.membershipSecondHalfPaidGroup='';}
-        member.membership=(p===1?!!member.membershipFirstHalf:!!member.membershipSecondHalf); member.membershipAmount=p===1?Number(member.membershipFirstHalfAmount||0):Number(member.membershipSecondHalfAmount||0);
+        member.membership=(p===1?!!member.membershipFirstHalf:!!member.membershipSecondHalf);
+        member.membershipAmount=p===1?Number(member.membershipFirstHalfAmount||0):Number(member.membershipSecondHalfAmount||0);
       }
       if(a.registration){member.registration=true;member.registrationAmount=Number(a.registrationAmount||30);member.registrationDate=a.registrationDate||attendanceState.date;member.registrationPaidGroup=a.registrationPaidGroup||attendanceState.group;}
       else if(a.registrationDate===attendanceState.date){member.registration=false;member.registrationAmount=0;member.registrationDate='';member.registrationPaidGroup='';}
       if(a.application){member.application=true;member.applicationDate=a.applicationDate||member.applicationDate;member.memberSince=member.applicationDate||member.memberSince;}
-    }
-  }catch(e){ console.warn('Guard Trainer payment model sync:',e); }
-  try{ window.__gtPaymentSyncTimers=window.__gtPaymentSyncTimers||{}; clearTimeout(window.__gtPaymentSyncTimers[id]);
-    window.__gtPaymentSyncTimers[id]=setTimeout(async()=>{ try{ await window.gtSaveMemberSupabase(id); }catch(e){ console.error('Guard Trainer payment sync:',e); toast('Chyba synchronizácie platieb: '+(e.message||e)); } },80);
-  }catch(e){}
-}
+    }catch(e){console.warn('payment state model',e)}
+  }
+  window.queueMemberPaymentCloudSync=async function(member){
+    if(!member)return;
+    applyAttendanceState(member);
+    const p1=member.membershipFirstHalf; const p2=member.membershipSecondHalf;
+    const payload={
+      membership_paid_first_half:!!p1, membership_first_half_amount:Number(member.membershipFirstHalfAmount||0)||null, membership_first_half_date:member.membershipFirstHalfDate?isoPaymentDate(member.membershipFirstHalfDate):null, membership_first_half_group:member.membershipFirstHalfPaidGroup||null,
+      membership_paid_second_half:!!p2, membership_second_half_amount:Number(member.membershipSecondHalfAmount||0)||null, membership_second_half_date:member.membershipSecondHalfDate?isoPaymentDate(member.membershipSecondHalfDate):null, membership_second_half_group:member.membershipSecondHalfPaidGroup||null,
+      registration_paid:!!member.registration, registration_amount:Number(member.registrationAmount||0)||null, registration_date:member.registrationDate?isoPaymentDate(member.registrationDate):null, registration_group:member.registrationPaidGroup||null,
+      application_date:member.applicationDate?isoPaymentDate(member.applicationDate):null, club_join_date:member.memberSince?isoPaymentDate(member.memberSince):null, updated_at:new Date().toISOString()
+    };
+    window.__gtPaymentSyncTimers=window.__gtPaymentSyncTimers||{}; const id=Number(member.id);
+    clearTimeout(window.__gtPaymentSyncTimers[id]);
+    window.__gtPaymentSyncTimers[id]=setTimeout(async()=>{try{await patchMember(member,payload);}catch(e){console.error('Guard Trainer payment sync:',e);toast('Chyba synchronizácie platieb: '+(e.message||e));}},80);
+  };
+  function isoPaymentDate(v){
+    const s=String(v||'').trim(); const m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+    return m?`${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`:(/^\d{4}-\d{2}-\d{2}$/.test(s)?s:null);
+  }
+  async function pull(){
+    const h=headers(); if(!h||!window.membersData)return;
+    try{
+      const r=await window.gtSupabaseFetch(url()+'/rest/v1/members?select=legacy_id,membership_paid_first_half,membership_paid_second_half,membership_first_half_amount,membership_first_half_date,membership_first_half_group,membership_second_half_amount,membership_second_half_date,membership_second_half_group,registration_paid,registration_amount,registration_date,registration_group,application_date,club_join_date&order=legacy_id.asc',{headers:h});
+      if(!r.ok)return; const rows=await r.json(); const by=new Map((rows||[]).map(x=>[Number(x.legacy_id),x]));
+      (window.membersData||[]).forEach(m=>{const x=by.get(Number(m.id)); if(!x)return; m.membershipFirstHalf=!!x.membership_paid_first_half; m.membershipSecondHalf=!!x.membership_paid_second_half; m.membershipFirstHalfAmount=Number(x.membership_first_half_amount||0); m.membershipFirstHalfDate=x.membership_first_half_date||''; m.membershipFirstHalfPaidGroup=x.membership_first_half_group||''; m.membershipSecondHalfAmount=Number(x.membership_second_half_amount||0); m.membershipSecondHalfDate=x.membership_second_half_date||''; m.membershipSecondHalfPaidGroup=x.membership_second_half_group||''; m.registration=!!x.registration_paid; m.registrationAmount=Number(x.registration_amount||0); m.registrationDate=x.registration_date||''; m.registrationPaidGroup=x.registration_group||''; if(x.application_date){m.application=true;m.applicationDate=x.application_date;m.memberSince=x.club_join_date||x.application_date;} });
+      persistMembersData(); if(document.querySelector('.members-page'))renderMembers(); if(document.querySelector('.attendance-page')&&typeof refreshAttendance==='function')refreshAttendance();
+    }catch(e){console.warn('payment pull',e)}
+  }
+  window.gtSyncMemberPaymentsSupabase=pull;
+  setInterval(()=>{if(document.visibilityState==='visible'&&tok())pull()},1200);
+  window.addEventListener('focus',()=>{if(tok())pull()});
+})();
 
 /* v726 – Supabase attendance sync. Supabase is the shared source of truth
    for attendance; localStorage remains only a fast local cache. */

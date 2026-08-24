@@ -6950,10 +6950,21 @@ function registrationPaidHereToday(m){
   if(!m) return false;
   const today=attendanceDateKey();
   const group=String(attendanceState.group||'').trim().toUpperCase();
-  if(!!m.registration && String(m.registrationDate||'')===String(today) && (!m.registrationPaidGroup || String(m.registrationPaidGroup).trim().toUpperCase()===group)) return true;
-  return registrationPayments.some(p=>Number(p.memberId)===Number(attendanceMemberId(m)) && String(p.paidGroup||'').trim().toUpperCase()===group && String(p.date||'')===String(today));
+  if(!!m.registration){
+    const rd=parsePaymentDate(m.registrationDate||'');
+    const td=parsePaymentDate(today);
+    if(rd&&td&&rd.year===td.year&&rd.month===td.month&&rd.day===td.day && (!m.registrationPaidGroup || String(m.registrationPaidGroup).trim().toUpperCase()===group)) return true;
+  }
+  return registrationPayments.some(p=>{
+    const pd=parsePaymentDate(p.date), td=parsePaymentDate(today);
+    return Number(p.memberId)===Number(attendanceMemberId(m)) && String(p.paidGroup||'').trim().toUpperCase()===group && !!pd&&!!td&&pd.year===td.year&&pd.month===td.month&&pd.day===td.day;
+  });
 }
-function memberAccountDateMatches(m,fieldDate){ return !!(fieldDate && fieldDate===attendanceDateKey()); }
+function memberAccountDateMatches(m,fieldDate){
+  if(!fieldDate) return false;
+  const a=parsePaymentDate(fieldDate), b=parsePaymentDate(attendanceDateKey());
+  return !!(a&&b&&a.year===b.year&&a.month===b.month&&a.day===b.day);
+}
 function ensureMemberAccountHistory(m){
   if(!m) return [];
   if(!Array.isArray(m.accountPaymentHistory)) m.accountPaymentHistory=[];
@@ -7389,7 +7400,7 @@ function registrationPaidHere(m){
 }
 function registrationPaidOnDate(m){
   if(!m)return false;
-  return registrationPayments.some(p=>p.memberId===attendanceMemberId(m) && p.date===attendanceDateKey());
+  return registrationPayments.some(p=>{const a=parsePaymentDate(p.date),b=parsePaymentDate(attendanceDateKey());return Number(p.memberId)===Number(attendanceMemberId(m))&&a&&b&&a.year===b.year&&a.month===b.month&&a.day===b.day;});
 }
 
 async function toggleRegistration(i){

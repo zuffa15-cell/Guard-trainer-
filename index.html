@@ -2712,6 +2712,7 @@ html,body{color-scheme:dark!important;}
   }
 })();
 </script>
+<!-- v749 registration payment write-through race fix -->
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSplashV319">
@@ -4399,6 +4400,8 @@ loadPersistedMembers();
   function supaKey(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
   let finished=false;
   let syncInFlight=false;
+  // v749: do not let member polling repaint attendance while a payment is being written.
+  window.__gtMemberPaymentWriteInFlight=false;
   function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
   function authHeaders(){const t=token(),k=supaKey();return (t&&k)?{'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null}
   function toIsoDate(v){
@@ -4441,6 +4444,7 @@ loadPersistedMembers();
   }
   async function sync(){
     if(window.__gtMemberDeleteInProgress) return false;
+    if(window.__gtMemberPaymentWriteInFlight) return false;
     if(syncInFlight) return false;
     syncInFlight=true;
     const syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
@@ -7347,7 +7351,7 @@ function registrationPaidOnDate(m){
   return registrationPayments.some(p=>p.memberId===attendanceMemberId(m) && p.date===attendanceDateKey());
 }
 
-function toggleRegistration(i){
+async function toggleRegistration(i){
  if(!attendanceEditGuard() || !billingEditGuard() || !attendancePaymentEditGuard()) return;
  const a=attendanceState.members[i];
  const m=membersData.find(x=>x.surname===a.surname&&x.name===a.name);
@@ -7355,11 +7359,22 @@ function toggleRegistration(i){
  attendanceState.registrationDrafts=attendanceState.registrationDrafts||{};
  const key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
  const draft=attendanceState.registrationDrafts[key];
+ const saveMember=async()=>{
+   if(typeof window.gtSaveMemberSupabase!=='function') return true;
+   window.__gtMemberPaymentWriteInFlight=true;
+   try{
+     await window.gtSaveMemberSupabase(m.id);
+     return true;
+   }catch(e){
+     try{toast('Supabase zápis registrácie zlyhal: '+e.message)}catch(_){}
+     return false;
+   }finally{
+     window.__gtMemberPaymentWriteInFlight=false;
+   }
+ };
 
  // A registration paid/saved on THIS training day is still editable by the
  // trainer while this is today's attendance. A single click toggles it off.
- // Do not let the member-level 'already registered' flag block cancellation
- // of the payment recorded for the current training.
  const paidHere = registrationPayments.some(p =>
    Number(p.memberId)===Number(attendanceMemberId(m)) &&
    p.paidGroup===attendanceState.group &&
@@ -7372,10 +7387,7 @@ function toggleRegistration(i){
      if(Number(q.memberId)===Number(attendanceMemberId(m)) && q.paidGroup===attendanceState.group && q.date===attendanceDateKey()) registrationPayments.splice(j,1);
    }
    a.registration=false; a.registrationDate=''; a.registrationAmount=0; a.registrationPaidGroup='';
-   // Only clear the member-level flag when the cancelled record belongs to
-   // this member and was the current-day registration.
-   if(m.registrationDate===attendanceDateKey() &&
-      (!m.registrationPaidGroup || m.registrationPaidGroup===attendanceState.group)){
+   if(m.registrationDate===attendanceDateKey() && (!m.registrationPaidGroup || m.registrationPaidGroup===attendanceState.group)){
      m.registration=false; m.registrationDate=''; m.registrationAmount=0; m.registrationPaidGroup='';
    }
    if(attendanceState.billingPaymentSnapshot){
@@ -7383,10 +7395,8 @@ function toggleRegistration(i){
      if(attendanceState.billingPaymentSnapshot[sk]){ attendanceState.billingPaymentSnapshot[sk].registration=0; attendanceState.billingPaymentSnapshot[sk].registrationAmount=0; }
    }
    persistMembersData();
-   if(typeof window.gtSaveMemberSupabase==='function'){
-     window.gtSaveMemberSupabase(m.id).catch(e=>{ try{toast('Supabase zrušenie registrácie zlyhalo: '+e.message)}catch(_){} });
-   }
    persistPaymentHistory();
+   await saveMember();
    refreshAttendance();
    return;
  }
@@ -7411,10 +7421,19 @@ function toggleRegistration(i){
  m.registrationDate=attendanceDateKey();
  m.registrationPaidGroup=attendanceState.group;
  persistMembersData();
- if(typeof window.gtSaveMemberSupabase==='function'){
-   window.gtSaveMemberSupabase(m.id).catch(e=>{ try{toast('Supabase zápis registrácie zlyhal: '+e.message)}catch(_){} });
+ const saved=await saveMember();
+ if(saved){
+   // Keep the visual state and then allow the normal cross-device member pull.
+   refreshAttendance();
+   try{ if(typeof window.gtSyncMembersSupabase==='function') window.gtSyncMembersSupabase(); }catch(_){}
+ }else{
+   // Save failed: do not pretend the payment is synchronized.
+   a.registration=false; a.registrationDate=''; a.registrationAmount=0; a.registrationPaidGroup='';
+   delete attendanceState.registrationDrafts[key];
+   m.registration=false; m.registrationAmount=0; m.registrationDate=''; m.registrationPaidGroup='';
+   persistMembersData();
+   refreshAttendance();
  }
- refreshAttendance();
 }
 function toggleNew(i){ if(!attendanceEditGuard()) return; attendanceState.members[i].newMember=!attendanceState.members[i].newMember;refreshAttendance();}
 function enterMembership(i){

@@ -2699,6 +2699,19 @@ body.head-readonly .bottom .nav-attendance { display:none !important; }
 html,body{color-scheme:dark!important;}
 .member-month-history-row.member-month-click{background:#0a0a0a!important;background-color:#0a0a0a!important;color:#eee!important;}
 </style>
+<script id="gtFixRegistrationV747">
+(function(){
+  // Compatibility alias: some registration code paths may call the misspelled helper.
+  if(typeof window.tolsoDate !== 'function'){
+    window.tolsoDate=function(v){
+      const s=String(v||'').trim();
+      const m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+      if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+      return /^\d{4}-\d{2}-\d{2}$/.test(s)?s:null;
+    };
+  }
+})();
+</script>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSplashV319">

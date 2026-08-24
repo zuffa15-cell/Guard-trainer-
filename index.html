@@ -4494,6 +4494,24 @@ window.__gtMemberPaymentPending=window.__gtMemberPaymentPending||Object.create(n
       if(syncEpochAtStart!==Number(window.__gtMemberSyncEpoch||0) || window.__gtMemberDeleteInProgress) return false;
       persistMembersData();
       try{localStorage.setItem('gt-supabase-members-seeded','1')}catch(_){}
+      // v743: the attendance screen has its own row objects. Keep the proven
+      // attendance/TRÉNING sync untouched, but copy member-level payment state
+      // into those rows after the member sync finishes.
+      try{
+        if(document.querySelector('.attendance-page') && Array.isArray(window.attendanceState?.members)){
+          const byName=new Map((membersData||[]).map(mm=>[String(mm.surname||'')+'|'+String(mm.name||''),mm]));
+          attendanceState.members.forEach(ar=>{
+            const mm=byName.get(String(ar.surname||'')+'|'+String(ar.name||''));
+            if(!mm) return;
+            ar.membershipFirstHalf=!!mm.membershipFirstHalf;
+            ar.membershipSecondHalf=!!mm.membershipSecondHalf;
+            ar.membership=!!mm.membership;
+            ar.registration=!!mm.registration;
+            ar.application=!!mm.application;
+          });
+          if(typeof refreshAttendance==='function') refreshAttendance();
+        }
+      }catch(e){ console.warn('Guard Trainer payment UI sync:',e); }
       if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
       finished=true; return true;
     }catch(e){ console.warn('Guard Trainer Supabase members sync:',e); return false; }

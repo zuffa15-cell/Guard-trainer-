@@ -7858,16 +7858,13 @@ function getBillingRecords(){
       (rows||[]).forEach(x=>{ if(x&&x.payload&&x.record_key) serverMap.set(String(x.record_key),x.payload); });
       const localMap=new Map();
       (monthlyBillingRecords||[]).forEach(r=>localMap.set(recordKey(r),r));
-      // Server wins only when it is newer. Local newer rows are pushed back.
+      // After ULOŽIŤ VYÚČTOVANIE the server is authoritative.
+      // Never let a stale local copy from another device overwrite the
+      // already-saved shared billing record merely because its local
+      // timestamp is newer. Local changes are sent explicitly by the Save
+      // button above, so a normal pull must always take the server copy.
       for(const [rk,sr] of serverMap){
-        const lr=localMap.get(rk);
-        if(!lr || savedAt(sr)>=savedAt(lr)) localMap.set(rk,sr);
-      }
-      for(const [rk,lr] of localMap){
-        const sr=serverMap.get(rk);
-        if(!sr || savedAt(lr)>savedAt(sr)){
-          try{ await window.gtSaveBillingRecordSupabase(lr); }catch(e){ console.warn('Billing push:',e); }
-        }
+        localMap.set(rk,sr);
       }
       monthlyBillingRecords=Array.from(localMap.values());
       normalizeMonthlyBillingRecords();
@@ -7875,6 +7872,29 @@ function getBillingRecords(){
       return true;
     }catch(e){ console.warn('Guard Trainer Supabase billing sync:',e); return false; }
   };
+})();
+
+// v767 – keep billing screens in sync across devices. Unlike attendance,
+// billing is already saved/locked data, so a fresh server pull is safe.
+(function installBillingLiveRefresh(){
+  if(window.__gtBillingLiveRefreshInstalled) return;
+  window.__gtBillingLiveRefreshInstalled=true;
+  setInterval(()=>{
+    try{
+      if(window.gtSyncBillingSupabase && document.querySelector('.billing-page') && !window.__gtBillingRefreshInFlight){
+        window.__gtBillingRefreshInFlight=true;
+        window.gtSyncBillingSupabase().then(()=>{
+          window.__gtBillingRefreshInFlight=false;
+          try{ if(document.querySelector('.billing-page')) renderMonthlyBilling(); }catch(_){}
+        }).catch(()=>{window.__gtBillingRefreshInFlight=false;});
+      }
+    }catch(_){}
+  },2000);
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible' && window.gtSyncBillingSupabase){
+      try{ window.gtSyncBillingSupabase(); }catch(_){}
+    }
+  });
 })();
 
 

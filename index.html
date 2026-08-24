@@ -332,7 +332,7 @@ body{overflow-x:hidden}
 .trainer-avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#333;color:#fff;font-size:24px}
 .monthly-trainer-card div:nth-child(2){display:flex;flex-direction:column}.monthly-trainer-card b{font-size:12px;color:#ffd12b}.monthly-trainer-card span{font-size:14px}.monthly-badge{margin-left:auto;color:#4ea7ff;font-weight:700}
 .monthly-title{margin-bottom:8px}
-.monthly-table-wrap{width:100%;max-width:100%;overflow-x:scroll;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-x;overscroll-behavior-x:contain;scrollbar-width:auto;border:1px solid #8c6800;border-radius:6px;cursor:grab;position:relative;pointer-events:auto;user-select:none}.monthly-table-wrap:active{cursor:grabbing}
+.monthly-table-wrap{width:100%;max-width:100%;overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch;touch-action:auto;overscroll-behavior-x:contain;scrollbar-width:auto;border:1px solid #8c6800;border-radius:6px;cursor:grab;position:relative;pointer-events:auto;user-select:none}.monthly-table-wrap:active{cursor:grabbing}
 .monthly-table{width:max-content;min-width:1100px;border-collapse:collapse;font-size:11px;display:table}
 .monthly-table th,.monthly-table td{border:1px solid #6b5200;padding:7px 5px;text-align:center;white-space:nowrap}
 .monthly-table th{color:#eee;font-weight:700;background:#080808}.monthly-table td{color:#ddd}.monthly-table small{display:block;font-size:8px;color:#999;margin-top:2px}
@@ -4532,7 +4532,8 @@ loadPersistedMembers();
         m.registrationAccountAmount=Number(sm.registration_account_amount||0);
         m.registrationAccountDate=fromIsoDate(sm.registration_account_date)||'';
         m.active=sm.active!==false; m.archived=!!sm.archived;
-        if(sm.application_date) m.applicationDate=fromIsoDate(sm.application_date);
+        m.application=!!sm.application_date;
+        m.applicationDate=sm.application_date?fromIsoDate(sm.application_date):'';
         if(sm.club_join_date) m.memberSince=fromIsoDate(sm.club_join_date);
         if(sm.note!=null) m.note=sm.note;
       });
@@ -5106,7 +5107,7 @@ function renderMemberProfile(id, backTarget){
   <section class="member-detail-box payments-box">
    <div class="box-heading"><h3>PLATBY</h3></div>
    <div class="payment-cards">
-    <div><b>REGISTRAČNÉ</b><strong class="${registrationAccount?'account-paid-check':(regPaid?'paid-check':'unpaid-check')}">${regPaid?'✓':'!'}</strong><em>${regPaid?Number(savedReg?.amount||m.registrationAmount||registrationAccount?.amount||30)+' €':'0 €'}</em><span class="${registrationAccount?'account-paid-label':''}">${regPaid?'Zaplatené':'Nezaplatené'}</span><small>${regPaid&&regDate?formatPaymentDate(regDate):'—'}</small>${canEditMemberPayments?`<button type="button" class="profile-payment-edit" onclick="openMemberPaymentEditor(${m.id},'registration')">${regPaid?'Upraviť platbu':'Zapísať platbu'}</button>`:''}</div>
+    <div><b>REGISTRAČNÉ</b><strong class="${registrationAccount?'account-paid-check':(regPaid?'paid-check':'unpaid-check')}">${regPaid?'✓':'!'}</strong><em>${regPaid?Number(savedReg?.amount||m.registrationAmount||registrationAccount?.amount||30)+' €':'0 €'}</em><span class="${registrationAccount?'account-paid-label':''}">${regPaid?(registrationAccount?'Zaplatené na účet':'Zaplatené'):'Nezaplatené'}</span><small>${regPaid&&regDate?formatPaymentDate(regDate):'—'}</small>${canEditMemberPayments?`<button type="button" class="profile-payment-edit" onclick="openMemberPaymentEditor(${m.id},'registration')">${regPaid?'Upraviť platbu':'Zapísať platbu'}</button>`:''}</div>
     ${[1,2].map(period=>{
       const profilePayment=membershipProfilePaymentForPeriod(m,period,appToday().year);
       const paid=profilePayment && !profilePayment.account && !profilePayment.legacy ? profilePayment : null;
@@ -5115,7 +5116,7 @@ function renderMemberProfile(id, backTarget){
       const arrivalMonth=memberArrivalMonth(m);
       const inactiveFirstHalf=(period===1 && arrivalMonth && arrivalMonth>=7);
       if(inactiveFirstHalf) return `<div class="membership-period-inactive"><b>ČLENSKÉ</b><label>1. polrok 2026</label><strong></strong><em></em><span></span><small></small></div>`;
-      return `<div><b>ČLENSKÉ</b><label>${period}. polrok 2026</label><strong class="${accountPaid?'account-paid-check':(paid?'paid-check':'unpaid-check')}">${displayPaid?'✓':'!'}</strong><em>${displayPaid?Number(paid?.amount||accountPaid?.amount||30)+' €':'0 €'}</em><span class="${accountPaid?'account-paid-label':''}">${displayPaid?'Zaplatené':'Nezaplatené'}</span><small>${displayPaid?formatPaymentDate(paid?.date||accountPaid?.date):'—'}</small>${canEditMemberPayments?`<button type="button" class="profile-payment-edit" onclick="openMemberPaymentEditor(${m.id},'membership',${period})">${displayPaid?'Upraviť platbu':'Zapísať platbu'}</button>`:''}</div>`;
+      return `<div><b>ČLENSKÉ</b><label>${period}. polrok 2026</label><strong class="${accountPaid?'account-paid-check':(paid?'paid-check':'unpaid-check')}">${displayPaid?'✓':'!'}</strong><em>${displayPaid?Number(paid?.amount||accountPaid?.amount||30)+' €':'0 €'}</em><span class="${accountPaid?'account-paid-label':''}">${displayPaid?(accountPaid?'Zaplatené na účet':'Zaplatené'):'Nezaplatené'}</span><small>${displayPaid?formatPaymentDate(paid?.date||accountPaid?.date):'—'}</small>${canEditMemberPayments?`<button type="button" class="profile-payment-edit" onclick="openMemberPaymentEditor(${m.id},'membership',${period})">${displayPaid?'Upraviť platbu':'Zapísať platbu'}</button>`:''}</div>`;
     }).join('')}
    </div>
    <button class="history-row" onclick="renderMemberPaymentHistory(${m.id})">◔ &nbsp; História platieb <span>›</span></button>
@@ -5498,14 +5499,25 @@ function renderMemberEditForm(id,isNew=false){
  </section></main>`;
 }
 
-function deleteMemberApplication(id){
+async function deleteMemberApplication(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
+ const old={application:m.application,applicationDate:m.applicationDate,applicationFile:m.applicationFile,applicationFileName:m.applicationFileName,memberSince:m.memberSince};
  m.application=false; m.applicationDate=''; m.applicationFile=''; m.applicationFileName='';
- // Po odstránení prihlášky už dátum členstva nie je dátum prihlášky.
  m.memberSince='';
  persistMembersData();
+ try{
+   if(typeof window.gtSaveMemberSupabase==='function') await window.gtSaveMemberSupabase(m.id);
+ }catch(e){
+   Object.assign(m,old); persistMembersData();
+   toast('Prihlášku sa nepodarilo vymazať zo servera: '+e.message);
+   return;
+ }
  const preview=document.getElementById('applicationPreview'); if(preview)preview.textContent='';
  const btn=document.querySelector('.delete-application-btn'); if(btn)btn.remove();
+ try{
+   const a=(attendanceState.members||[]).find(x=>x.surname===m.surname&&x.name===m.name);
+   if(a){a.application=false;a.applicationDate='';}
+ }catch(_){}
  toast('Prihláška bola vymazaná');
 }
 function previewMemberApplication(input){
@@ -6276,6 +6288,35 @@ try{
       const rows=await fetchJson('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(trainingId)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
       const map=await memberMap();
       const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
+
+      // v788: PRIHLÁŠKA is authoritative on the member row in Supabase.
+      // The billing snapshot is historical only and must never restore a
+      // deleted application on another device.
+      try{
+        const localMembers=(attendanceState.members||[]).filter(Boolean);
+        const ids=localMembers.map(m=>Number(m.id)).filter(Number.isFinite);
+        if(ids.length){
+          const serverMembers=await fetchJson('/rest/v1/members?legacy_id=in.('+ids.join(',')+')&select=legacy_id,application_date,club_join_date');
+          const byLegacy=new Map((serverMembers||[]).map(x=>[String(Number(x.legacy_id)),x]));
+          const norm=s=>String(s||'').trim().toUpperCase();
+          for(const a of localMembers){
+            const sm=byLegacy.get(String(Number(a.id)));
+            if(!sm) continue;
+            const has=!!sm.application_date;
+            a.application=has;
+            a.applicationDate=has?String(sm.application_date).slice(0,10):'';
+            const mm=(membersData||[]).find(x=>norm(x.surname)===norm(a.surname)&&norm(x.name)===norm(a.name));
+            if(mm){
+              mm.application=has;
+              mm.applicationDate=a.applicationDate;
+              if(sm.club_join_date) mm.memberSince=String(sm.club_join_date).slice(0,10);
+              else if(!has) mm.memberSince='';
+            }
+          }
+          try{persistMembersData();}catch(_e){}
+        }
+      }catch(e){ console.warn('Guard Trainer member application pull:',e); }
+
       const now=Date.now();
       (attendanceState.members||[]).forEach((m,i)=>{
         const pk=String(i);
@@ -6325,10 +6366,22 @@ try{
     for(let i=0;i<members.length;i++){ await pushMember(i); }
     return true;
   };
-  // Offline attendance mode: do not poll or pull while a trainer is editing.
-  // The complete state is pushed only by ULOŽIŤ VYÚČTOVANIE.
-  window.gtStartAttendanceSupabaseSync=function(){};
+  // v787: attendance must pull the shared state when the screen is opened.
+  // Previously this hook was disabled, so another device never loaded the
+  // saved DLŽNÉ / PRIHLÁŠKA state. Local edits are still pushed only by
+  // ULOŽIŤ VYÚČTOVANIE, but opening/returning to Dochádzka performs a fresh pull.
+  window.gtStartAttendanceSupabaseSync=function(){
+    if(!tok()) return;
+    if(window.__gtAttendancePullInFlight) return;
+    window.__gtAttendancePullInFlight=true;
+    Promise.resolve(pull()).finally(()=>{ window.__gtAttendancePullInFlight=false; });
+  };
   window.__gtAttendanceSyncTimer=null;
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState==='visible' && document.querySelector('.attendance-page')){
+      try{ window.gtStartAttendanceSupabaseSync(); }catch(_e){}
+    }
+  });
 })();
 
 function saveCurrentTrainingAttendanceLocalOnly(){
@@ -7883,7 +7936,7 @@ function getBillingRecords(){
     try{
       if(window.gtSyncBillingSupabase && document.querySelector('.monthly-billing-page') && !window.__gtBillingRefreshInFlight){
         window.__gtBillingRefreshInFlight=true;
-        const before=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
+        const before=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.debtSum||0,r.applicationCount||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
         const wasHeadDetail=location.hash==='#head-trainer-detail' || !!document.querySelector('.head-profile-main');
         const headName=(window.__gtHeadTrainerDetailName||'');
         const headMonth=Number(window.__gtHeadTrainerDetailMonth||appToday().month);
@@ -7891,7 +7944,7 @@ function getBillingRecords(){
         window.gtSyncBillingSupabase().then(()=>{
           window.__gtBillingRefreshInFlight=false;
           try{
-            const after=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
+            const after=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.debtSum||0,r.applicationCount||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
             if(before===after) return;
             const oldWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
             const oldLeft=oldWrap ? oldWrap.scrollLeft : 0;
@@ -8171,7 +8224,7 @@ function trainingBilling(){
 
       <div class="billing-note">Dlžné: <b>${debt} €</b> — do sumy odovzdávanej klubu sa nezapočítava.</div>
 
-      <button type="button" id="saveTrainingBillingBtn" class="confirm-billing" onclick="return saveTrainingBilling()">✓ ULOŽIŤ VYÚČTOVANIE</button>
+      <button type="button" id="saveTrainingBillingBtn" id="saveTrainingBillingBtn" class="confirm-billing" onclick="return saveTrainingBilling()">✓ ULOŽIŤ VYÚČTOVANIE</button>
     </main>
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
@@ -8302,6 +8355,18 @@ async function saveTrainingBilling(){
         return {surname:m.surname,name:m.name,membership:Number(pt.membership||0),registration:Number(pt.registration||0),trainingAccount:!!m.trainingAccount,training:!!m.training,newMember:!!m.newMember};
       })
       .filter(x=>x.training||x.membership>0||x.registration>0),
+    // Shared metadata for the training-billing screen. These values travel
+    // with the saved billing record so every trainer device sees the same
+    // DLŽNÉ and PRIHLÁŠKA state after ULOŽIŤ VYÚČTOVANIE.
+    debtSum:attendanceState.members.reduce((s,m)=>s+Number(m.debt||0),0),
+    debtCount:attendanceState.members.filter(m=>Number(m.debt||0)>0).length,
+    debtSnapshot:(attendanceState.members||[])
+      .filter(m=>Number(m.debt||0)>0)
+      .map(m=>({surname:m.surname,name:m.name,debt:Number(m.debt||0),reason:String(m.debtReason||'')})),
+    applicationCount:attendanceState.members.filter(m=>!!m.application).length,
+    applicationSnapshot:(attendanceState.members||[])
+      .filter(m=>!!m.application)
+      .map(m=>({surname:m.surname,name:m.name,applicationDate:String(m.applicationDate||'')})),
     presentCount:attendanceState.members.filter(m=>m.training).length,
     newCount:attendanceState.members.filter(m=>m.training&&m.newMember).length,
     // Aktuálny čas uloženia určuje poradie skupiny v rámci rovnakého dňa.
@@ -10257,11 +10322,11 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   // When the server has newer data, redraw once the pull finishes.
   if(window.gtSyncBillingSupabase && !window.__gtBillingRefreshInFlight){
     window.__gtBillingRefreshInFlight=true;
-    const before=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
+    const before=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.debtSum||0,r.applicationCount||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
     window.gtSyncBillingSupabase().then(()=>{
       window.__gtBillingRefreshInFlight=false;
       try{
-        const after=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
+        const after=JSON.stringify((monthlyBillingRecords||[]).map(r=>[r.record_key||'',r.trainer||'',r.date||'',r.group||'',r.trainingSum||0,r.membershipSum||0,r.registrationSum||0,r.debtSum||0,r.applicationCount||0,r.otherPlus||0,r.otherMinus||0,r.clubAmount||0,r.savedAt||0]));
         if(before===after) return;
         const oldWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
         const oldLeft=oldWrap ? oldWrap.scrollLeft : 0;

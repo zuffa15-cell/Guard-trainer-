@@ -6299,16 +6299,26 @@ try{
         const g=String(attendanceState.group||'');
         const tr=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
         const brs=await fetchJson('/rest/v1/billing_records?training_date=eq.'+encodeURIComponent(d)+'&group_code=eq.'+encodeURIComponent(g)+'&select=record_key,payload,updated_at&order=updated_at.desc&limit=20');
-        const candidates=(brs||[]).map(x=>x&&x.payload).filter(Boolean);
-        const trainerCandidates=candidates.filter(x=>String(x.trainer||'').trim().toUpperCase()===tr.toUpperCase());
-        const candidate=trainerCandidates[0] || candidates[0] || null;
-        // Never let an older server copy overwrite a freshly committed local
-        // snapshot. This was the cause of the new values appearing briefly
-        // and then disappearing after the next sync cycle.
+        // IMPORTANT: do not trust row order alone. Multiple devices can have
+        // billing rows with different updated_at values, while the payload's
+        // savedAt is the actual version of the complete attendance snapshot.
+        // Always select the newest complete snapshot for this trainer/date/group.
+        const rawCandidates=(brs||[]).filter(x=>x&&x.payload).map(x=>({payload:x.payload,updatedAt:String(x.updated_at||'')}));
+        const trainerCandidates=rawCandidates.filter(x=>String(x.payload.trainer||'').trim().toUpperCase()===tr.toUpperCase());
+        const pool=trainerCandidates.length?trainerCandidates:rawCandidates;
+        pool.sort((a,b)=>{
+          const sa=Number(a.payload&&a.payload.savedAt||0), sb=Number(b.payload&&b.payload.savedAt||0);
+          if(sb!==sa) return sb-sa;
+          return String(b.updatedAt).localeCompare(String(a.updatedAt));
+        });
+        const candidate=pool.length?pool[0].payload:null;
+        // A device may still have an older local snapshot. The newest version
+        // wins. Once a server snapshot is received it becomes the authoritative
+        // local snapshot, so the following attendance pull cannot roll it back.
         const localCommitted=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
         const localSavedAt=Number(localCommitted&&localCommitted.savedAt||window.__gtCommittedTrainingSnapshotSavedAt||0);
         const serverSavedAt=Number(candidate&&candidate.savedAt||0);
-        if(candidate && (!localCommitted || serverSavedAt>=localSavedAt)){
+        if(candidate && serverSavedAt>=localSavedAt){
           serverBillingSnapshot=candidate;
           attendanceState.billingRecordSnapshot=candidate;
           persistCommittedTrainingSnapshot(candidate);
@@ -6331,6 +6341,10 @@ try{
         refreshAttendance();
         return true;
       }
+      // If a complete billing snapshot exists, it is the single source of truth
+      // for this training. Do not merge the older attendance table underneath it.
+      // That merge was the reason mobile 2 briefly showed the new state and then
+      // lost it again on the next refresh.
       const byMember={}; (rows||[]).forEach(r=>byMember[r.member_id]=r);
 
       // v788: PRIHLÁŠKA is authoritative on the member row in Supabase.
@@ -6448,6 +6462,7 @@ try{
   });
 })();
 
+// v797: committed training snapshots use the same ISO date key as openGroup().
 function billingSnapshotStorageKey(){
   const d=String(attendanceState&&attendanceState.date||'');
   const g=String(attendanceState&&attendanceState.group||'');
@@ -6456,7 +6471,13 @@ function billingSnapshotStorageKey(){
 function persistCommittedTrainingSnapshot(record){
   try{
     if(!record)return;
-    const key='gt-training-billing-snapshot|'+String(record.date||'')+'|'+String(record.group||'');
+    // v797: billing records display the date as e.g. "24. 8. 2026", while
+    // attendance storage is keyed by ISO "2026-08-24".  Using record.date
+    // directly created a different localStorage key, so opening the group from
+    // Dochádzka could not find the latest saved snapshot and loaded an old state.
+    const parsed=typeof parsePaymentDate==='function'?parsePaymentDate(record.date):null;
+    const snapshotDate=parsed&&parsed.year?`${parsed.year}-${String(parsed.month).padStart(2,'0')}-${String(parsed.day).padStart(2,'0')}`:String(record.date||'');
+    const key='gt-training-billing-snapshot|'+snapshotDate+'|'+String(record.group||'');
     const savedAt=Number(record.savedAt||0);
     // The committed snapshot is the last state the user explicitly saved.
     // Keep its timestamp separately so a delayed/older Supabase pull can
@@ -6716,11 +6737,11 @@ function loadAttendanceFromMembers(){
  
  attendanceState.members=selected.map(m=>{
    const old=byName.get(m.surname+'|'+m.name);
+   const saved=getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name);
+   const hasSaved=!!saved && typeof saved==='object' && (Object.prototype.hasOwnProperty.call(saved,'training') || Object.prototype.hasOwnProperty.call(saved,'trainingAccount') || Object.prototype.hasOwnProperty.call(saved,'debt') || Object.prototype.hasOwnProperty.call(saved,'application'));
    return {
-     surname:m.surname,name:m.name,training:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).training
-      || ((old && old.group===attendanceState.group)?!!old.training:false)),
-     trainingAccount:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).trainingAccount
-      || ((old && old.group===attendanceState.group)?!!old.trainingAccount:false)),
+     surname:m.surname,name:m.name,training:hasSaved ? !!saved.training : ((old && old.group===attendanceState.group)?!!old.training:false),
+     trainingAccount:hasSaved ? !!saved.trainingAccount : ((old && old.group===attendanceState.group)?!!old.trainingAccount:false),
      membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
      registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
      newMember:(Object.prototype.hasOwnProperty.call(
@@ -10743,6 +10764,15 @@ function openGroup(code,name,time='',source='calendar'){
   saveCurrentTrainingAttendance();
   attendanceState.date=openDate;
   attendanceState.group=code;
+  // A group opened from the attendance list is a fresh exact date+group context.
+  // Never carry a billing snapshot belonging to another training into it.
+  const exactSnapKey='gt-training-billing-snapshot|'+openDate+'|'+code;
+  try{
+    const rawExact=localStorage.getItem(exactSnapKey);
+    attendanceState.billingRecordSnapshot=rawExact?JSON.parse(rawExact):null;
+  }catch(_e){ attendanceState.billingRecordSnapshot=null; }
+  attendanceState.billingPaymentSnapshot=null;
+  attendanceState.billingAttendanceSnapshot=null;
   attendanceState.name=name;
   attendanceState.trainingTime=String(time||'');
   applyTrainingSettingsForAttendance();

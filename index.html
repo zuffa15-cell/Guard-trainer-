@@ -4488,6 +4488,10 @@ loadPersistedMembers();
       registration_amount:Number(m.registrationAmount||0)||null,
       registration_date:iso(m.registrationDate||''),
       registration_group:String(m.registrationPaidGroup||'')||null,
+      membership_account_amount:Number(m.membershipAccountAmount||0)||null,
+      membership_account_date:toIsoDate(m.membershipAccountDate||''),
+      registration_account_amount:Number(m.registrationAccountAmount||0)||null,
+      registration_account_date:toIsoDate(m.registrationAccountDate||''),
       application_date:toIsoDate(m.applicationDate||''),
       club_join_date:toIsoDate(m.memberSince||''),
       active:m.active!==false, archived:!!m.archived, note:String(m.note||'')||null,
@@ -4505,7 +4509,7 @@ loadPersistedMembers();
     if(window.__gtMemberPaymentWriteInFlight) return false;
     // Dochádzka is edited offline. While it is open, never pull member data
     // from Supabase and overwrite the trainer's in-progress changes.
-    if(document.querySelector('.attendance-page')) return false;
+    if(document.querySelector('.attendance-page') && !window.__gtExplicitAttendanceRefresh) return false;
     if(syncInFlight) return false;
     syncInFlight=true;
     let syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
@@ -7311,7 +7315,7 @@ async function refreshAttendanceAppV918(){
     if(typeof saveCurrentTrainingAttendanceLocalOnly==='function') saveCurrentTrainingAttendanceLocalOnly(false);
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-    if(typeof toast==='function') toast('Dochádzka aktualizovaná ✓');
+    if(typeof toast==='function') toast('Členské aktualizované ✓');
   }catch(e){
     console.error('refresh error', e);
     if(typeof toast==='function') toast('Chyba: '+e.message);

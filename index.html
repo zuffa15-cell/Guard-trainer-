@@ -6878,44 +6878,13 @@ function saveCurrentTrainingAttendanceLocalOnly(markDirty=true){
       debt:Number(a.debt||0),debtReason:String(a.debtReason||''),application:!!a.application,applicationDate:String(a.applicationDate||'')}});
   persistTrainingAttendanceHistory();
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
-  // v957 FIX: push to server immediately so second mobile can see it
   if(navigator.onLine){
     try{
       if(typeof window.gtSaveAttendanceAllSupabase==='function'){
-        window.gtSaveAttendanceAllSupabase().catch(e=>console.warn('attendance push failed', e)); // v958 immediate push
+        window.gtSaveAttendanceAllSupabase().catch(e=>console.warn('attendance push failed', e));
       }
-    }catch(e){ console.warn('auto push failed', e); }
+    }catch(e){}
   }
-}
-
-function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
-  return `${date}|${group}`;
-}
-function persistTrainingAttendanceHistory(){
-  try{
-    localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup));
-  }catch(e){ console.warn('Attendance history save failed',e); }
-}
-// After the trainer confirms attendance, membership and registration payments
-// for that training are locked. Only the administrator can change them.
-function attendanceFullLockKey(){
-  let trainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
-  return `gt-attendance-full-lock|${attendanceDateKey()}|${attendanceState.group}|${trainer}`;
-}
-function isAttendanceTodayForTrainer(){
-  if(typeof attendanceState==='undefined' || !attendanceState.date) return false;
-  try{
-    let d=appToday();
-    return String(attendanceState.date)===`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-  }catch(e){ return false; }
-}
-function isAttendanceFullyLocked(){
-  if(isAdmin()) return false;
-  if(isHeadTrainer()) return true;
-  // Tréner môže upravovať iba aktuálny kalendárny deň.
-  // Každý starší deň je vždy iba na čítanie, bez ohľadu na to,
-  // či bol uložený cez Kalendár, Vyúčtovanie alebo inou cestou.
-  return !isAttendanceTodayForTrainer();
 }
 function attendanceEditGuard(){
   if(isAttendanceFullyLocked()){

@@ -4610,7 +4610,8 @@ loadPersistedMembers();
   // v719 – live cross-device member refresh. Supabase remains the only source
   // of truth; this frequent, non-destructive pull never writes the local list
   // back to the server. It also refreshes when the app becomes visible again.
-  setInterval(()=>{try{if(token()) sync()}catch(e){}},2000);
+  // v953 removed duplicate 2s poll - replaced by Realtime
+  // setInterval removed
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){ try{ if(token()) sync(); }catch(e){} }
   });
@@ -6171,7 +6172,8 @@ function selectScheduleColor(c){
   // polling - 3s namiesto 700ms aby nevznikol race
   let tries=0;
   let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=15)clearInterval(timer)},1500);
-  setInterval(()=>{try{if(token()) pull()}catch(_){}} ,3000);
+  // v953 removed duplicate 3s pull - replaced by Realtime
+  // setInterval removed
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
   window.addEventListener('focus',()=>pull(true));
   // Ak máte Supabase Realtime zapnuté v dashboardu, odkomentujte a pridajte supabase-js client
@@ -10814,6 +10816,82 @@ html,body{color-scheme:dark!important;}
       console.log('✅ Guard Trainer Realtime active for 3 trainers');
     }catch(e){ console.warn('Realtime init failed', e); }
   });
+})();
+
+
+
+window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }catch(e){ console.warn('JSON parse failed', e); return fallback; } };
+
+/* v952 OFFLINE FIX + queue for 3 trainers */
+(function(){
+  if(window.__gtOfflineFix) return;
+  window.__gtOfflineFix=true;
+  var PENDING_KEY='gt_pending_schedules_v952';
+  
+  function getPending(){ try{ return JSON.parse(localStorage.getItem(PENDING_KEY)||'[]'); }catch(_){return [];} }
+  function savePending(a){ try{ localStorage.setItem(PENDING_KEY, JSON.stringify(a)); }catch(_){} }
+  
+  // Override push to queue when offline
+  var origPush = window.gtPushSchedulesSupabase;
+  window.gtPushSchedulesSupabase = async function(templates, localUpdatedAt){
+    if(!navigator.onLine){
+      console.log('[Offline] queueing push', templates.length);
+      var pending=getPending();
+      pending.push({templates: templates, updatedAt: localUpdatedAt||Date.now(), ts: Date.now()});
+      savePending(pending);
+      // still save locally so user sees it
+      try{ localStorage.setItem('guard_schedule_templates_v2', JSON.stringify(templates)); }catch(_){}
+      return true;
+    }
+    try{
+      var res = await origPush(templates, localUpdatedAt);
+      return res;
+    }catch(e){
+      console.warn('[Offline] push failed, queueing', e);
+      var pending=getPending();
+      pending.push({templates: templates, updatedAt: localUpdatedAt||Date.now(), ts: Date.now()});
+      savePending(pending);
+      return false;
+    }
+  };
+  
+  // Flush queue when online
+  async function flushPending(){
+    if(!navigator.onLine) return;
+    var pending=getPending();
+    if(!pending.length) return;
+    console.log('[Offline] flushing', pending.length, 'queued');
+    // merge all pending - take latest
+    var latest = pending[pending.length-1];
+    try{
+      if(origPush){
+        await origPush(latest.templates, latest.updatedAt);
+        localStorage.removeItem(PENDING_KEY);
+        console.log('[Offline] flush ok');
+      }
+    }catch(e){ console.warn('[Offline] flush failed', e); }
+  }
+  
+  window.addEventListener('online', function(){ console.log('Back online, flushing'); flushPending(); });
+  // also try every 10s
+  setInterval(flushPending, 10000);
+  
+  // Patch pull to NOT overwrite if we have pending
+  var origPull = window.gtPullSchedulesSupabase;
+  window.gtPullSchedulesSupabase = async function(force){
+    var pending=getPending();
+    if(pending.length){
+      console.log('[Offline] skip pull, have pending', pending.length);
+      return false; // don't overwrite local work
+    }
+    if(!navigator.onLine && !force){
+      console.log('[Offline] skip pull, offline');
+      return false;
+    }
+    return await origPull(force);
+  };
+  
+  console.log('✅ Offline queue active - telocvična bez signálu ok');
 })();
 
 </body>

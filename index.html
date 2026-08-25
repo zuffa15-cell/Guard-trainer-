@@ -4488,10 +4488,6 @@ loadPersistedMembers();
       registration_amount:Number(m.registrationAmount||0)||null,
       registration_date:iso(m.registrationDate||''),
       registration_group:String(m.registrationPaidGroup||'')||null,
-      membership_account_amount:Number(m.membershipAccountAmount||0)||null,
-      membership_account_date:toIsoDate(m.membershipAccountDate||''),
-      registration_account_amount:Number(m.registrationAccountAmount||0)||null,
-      registration_account_date:toIsoDate(m.registrationAccountDate||''),
       application_date:toIsoDate(m.applicationDate||''),
       club_join_date:toIsoDate(m.memberSince||''),
       active:m.active!==false, archived:!!m.archived, note:String(m.note||'')||null,
@@ -4509,7 +4505,7 @@ loadPersistedMembers();
     if(window.__gtMemberPaymentWriteInFlight) return false;
     // Dochádzka is edited offline. While it is open, never pull member data
     // from Supabase and overwrite the trainer's in-progress changes.
-    if(document.querySelector('.attendance-page') && !window.__gtExplicitAttendanceRefresh) return false;
+    if(document.querySelector('.attendance-page')) return false;
     if(syncInFlight) return false;
     syncInFlight=true;
     let syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
@@ -7297,25 +7293,21 @@ async function refreshAttendanceAppV918(){
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
   try{
     window.__gtExplicitAttendanceRefresh=true;
-    clearAttendanceDirty();
-    attendanceState.trainingSupabaseId='';
-    attendanceState.trainingIdentityKey='';
-    attendanceState.billingRecordSnapshot=null;
-    attendanceState.billingRecordKey='';
-    attendanceState.billingPaymentSnapshot=null;
-    attendanceState.billingAttendanceSnapshot=null;
-    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-    if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase();
-    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
-    if(window.gtSyncAttendanceSupabase){
-      await window.gtSyncAttendanceSupabase();
-      await new Promise(r=>setTimeout(r,400));
-      await window.gtSyncAttendanceSupabase();
+    if(window.__gtSimpleSync && window.__gtSimpleSync.loadFullAttendance){
+      await window.__gtSimpleSync.loadFullAttendance();
     }
-    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function') saveCurrentTrainingAttendanceLocalOnly(false);
+    // Also try old sync for fallback
+    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase().catch(()=>{});
+    if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase().catch(()=>{});
+    if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase().catch(()=>{});
+    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
+    // Re-apply simple snapshot again after rebuild
+    if(window.__gtSimpleSync && window.__gtSimpleSync.loadFullAttendance){
+      await window.__gtSimpleSync.loadFullAttendance();
+    }
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-    if(typeof toast==='function') toast('Členské aktualizované ✓');
+    if(typeof toast==='function') toast('Dochádzka stiahnutá zo servera ✓');
   }catch(e){
     console.error('refresh error', e);
     if(typeof toast==='function') toast('Chyba: '+e.message);
@@ -7346,6 +7338,20 @@ window.__gtAutoPullAttendance = async function(source){
 };
 
 function attendance(){
+  // v962 SIMPLE: try load full attendance from server immediately
+  setTimeout(async ()=>{
+    try{
+      if(window.__gtSimpleSync && window.__gtSimpleSync.loadFullAttendance){
+        let ok = await window.__gtSimpleSync.loadFullAttendance();
+        if(ok){
+          console.log('[SIMPLE] attendance loaded from server');
+          if(typeof renderAttendance==='function') renderAttendance();
+          if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+        }
+      }
+    }catch(e){}
+  }, 800);
+
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
   if(window.__attendanceOpenSource==='home' || window.__attendanceHomeDate){
@@ -8668,7 +8674,192 @@ function getBillingRecords(){
 // Only active when Dochádzka was opened from Vyúčtovanie. It does not change
 // normal attendance screens.
 (function installBillingAttendanceCrossDevice(){
-  if(window.__gtBillingAttendanceCrossDeviceInstalled) return;
+  if(
+// === v962 SIMPLE SYNC - CELA DOCHADZKA AKO JEDEN BALIK ===
+window.__gtSimpleSync = window.__gtSimpleSync || {};
+window.__gtSimpleSync.saveFullAttendance = async function(){
+  try{
+    if(!attendanceState || !attendanceState.date || !attendanceState.group) return false;
+    let d = String(attendanceState.date);
+    let g = String(attendanceState.group);
+    let key = d + '|' + g;
+    // Full snapshot of what trainer edited
+    let fullSnapshot = (attendanceState.members||[]).map(m=>({
+      surname: m.surname,
+      name: m.name,
+      id: m.id,
+      training: !!m.training,
+      trainingAccount: !!m.trainingAccount,
+      newMember: !!m.newMember,
+      newMemberDate: m.newMemberDate||'',
+      membershipAmount: Number(m.membershipAmount||0),
+      membershipDate: m.membershipDate||'',
+      membershipPaidGroup: m.membershipPaidGroup||'',
+      membershipAccountAmount: Number(m.membershipAccountAmount||0),
+      membershipAccountDate: m.membershipAccountDate||'',
+      registration: !!m.registration,
+      registrationDate: m.registrationDate||'',
+      registrationAccountAmount: Number(m.registrationAccountAmount||0),
+      registrationAccountDate: m.registrationAccountDate||'',
+      debt: Number(m.debt||0),
+      debtReason: String(m.debtReason||''),
+      application: !!m.application,
+      applicationDate: m.applicationDate||'',
+      note: m.note||''
+    }));
+    let payload = {
+      date: d,
+      group: g,
+      key: key,
+      members: fullSnapshot,
+      savedAt: Date.now(),
+      savedBy: String(attendanceState.name||''),
+      trainer: String(attendanceState.name||'')
+    };
+    // Save to localStorage as primary
+    try{
+      localStorage.setItem('gt-simple-attendance|'+key, JSON.stringify(payload));
+    }catch(e){}
+    // Also push to billing_records as backup sync via Supabase
+    if(window.gtSaveBillingRecordSupabase){
+      try{
+        let recordKey = 'simple|'+key;
+        let billingLike = {
+          record_key: recordKey,
+          date: d,
+          group: g,
+          trainer: payload.trainer,
+          training_date: d,
+          savedAt: payload.savedAt,
+          attendanceSnapshot: fullSnapshot,
+          payload: payload,
+          isSimpleAttendance: true
+        };
+        // Use billing_records table for sync
+        let url = String(window.GT_SUPABASE_URL||'').trim();
+        let token = '';
+        try{ token = localStorage.getItem('gt-supabase-access-token')||'' }catch(e){}
+        let apikey = String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
+        if(url && token && apikey){
+          await window.gtSupabaseFetch(url+'/rest/v1/billing_records?on_conflict=record_key',{
+            method:'POST',
+            headers:{
+              'apikey': apikey,
+              'Authorization': 'Bearer '+token,
+              'Content-Type':'application/json',
+              'Prefer':'resolution=merge-duplicates,return=minimal'
+            },
+            body: JSON.stringify({
+              record_key: recordKey,
+              trainer: payload.trainer,
+              training_date: d,
+              group_code: g,
+              payload: billingLike,
+              updated_at: new Date().toISOString()
+            })
+          });
+        }
+      }catch(e){ console.warn('simple sync billing save failed', e); }
+    }
+    return true;
+  }catch(e){ console.warn('saveFullAttendance error', e); return false; }
+};
+
+window.__gtSimpleSync.loadFullAttendance = async function(){
+  try{
+    if(!attendanceState || !attendanceState.date || !attendanceState.group) return false;
+    let d = String(attendanceState.date);
+    let g = String(attendanceState.group);
+    let key = d + '|' + g;
+    // Try Supabase first
+    try{
+      let url = String(window.GT_SUPABASE_URL||'').trim();
+      let token = '';
+      try{ token = localStorage.getItem('gt-supabase-access-token')||'' }catch(e){}
+      let apikey = String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
+      if(url && token && apikey){
+        let r = await window.gtSupabaseFetch(url+'/rest/v1/billing_records?record_key=eq.'+encodeURIComponent('simple|'+key)+'&select=payload&limit=1',{
+          headers:{'apikey': apikey, 'Authorization': 'Bearer '+token}
+        });
+        if(r && r.ok){
+          let rows = await r.json();
+          if(rows && rows[0] && rows[0].payload && rows[0].payload.members){
+            let remote = rows[0].payload;
+            console.log('[SIMPLE SYNC] loaded from server', key, remote.members.length);
+            // Merge into attendanceState
+            let byName = new Map((attendanceState.members||[]).map(m=>[m.surname+'|'+m.name, m]));
+            remote.members.forEach(rm=>{
+              let k = rm.surname+'|'+rm.name;
+              let local = byName.get(k);
+              if(local){
+                Object.assign(local, rm);
+              }
+            });
+            // Save locally
+            try{ localStorage.setItem('gt-simple-attendance|'+key, JSON.stringify(remote)); }catch(e){}
+            return true;
+          }
+        }
+      }
+    }catch(e){ console.warn('simple sync load server failed', e); }
+    // Fallback localStorage
+    try{
+      let raw = localStorage.getItem('gt-simple-attendance|'+key);
+      if(raw){
+        let data = JSON.parse(raw);
+        if(data && data.members){
+          let byName = new Map((attendanceState.members||[]).map(m=>[m.surname+'|'+m.name, m]));
+          data.members.forEach(rm=>{
+            let k = rm.surname+'|'+rm.name;
+            let local = byName.get(k);
+            if(local) Object.assign(local, rm);
+          });
+          return true;
+        }
+      }
+    }catch(e){}
+    return false;
+  }catch(e){ console.warn('loadFullAttendance error', e); return false; }
+};
+
+// Hook into existing ULOZIT VYUCTOVANIE
+(function hookBillingSave(){
+  if(window.__gtSimpleHookInstalled) return;
+  window.__gtSimpleHookInstalled = true;
+  let orig = window.saveBilling || window.saveBillingRecord || null;
+  // Also hook saveBilling button click via function name search
+  let check = setInterval(()=>{
+    let btn = document.querySelector('[onclick*="saveBilling"]');
+    // patch global saveBilling if exists
+    if(typeof window.saveBilling === 'function' && !window.saveBilling.__simplePatched){
+      let oldFn = window.saveBilling;
+      window.saveBilling = async function(){
+        let res = await oldFn.apply(this, arguments);
+        try{ await window.__gtSimpleSync.saveFullAttendance(); }catch(e){}
+        return res;
+      };
+      window.saveBilling.__simplePatched = true;
+      console.log('[SIMPLE SYNC] hooked saveBilling');
+    }
+  }, 1000);
+})();
+
+// Auto-load when opening attendance
+window.addEventListener('hashchange', ()=>{
+  if(location.hash.includes('attendance')){
+    setTimeout(async ()=>{
+      try{
+        if(window.__gtSimpleSync && window.__gtSimpleSync.loadFullAttendance){
+          await window.__gtSimpleSync.loadFullAttendance();
+          if(typeof renderAttendance === 'function') renderAttendance();
+          if(typeof updateAttendanceTotals === 'function') updateAttendanceTotals();
+        }
+      }catch(e){}
+    }, 600);
+  }
+});
+
+window.__gtBillingAttendanceCrossDeviceInstalled) return;
   window.__gtBillingAttendanceCrossDeviceInstalled=true;
 
   async function pullExactTraining(){

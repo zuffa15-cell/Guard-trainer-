@@ -4488,10 +4488,6 @@ loadPersistedMembers();
       registration_amount:Number(m.registrationAmount||0)||null,
       registration_date:iso(m.registrationDate||''),
       registration_group:String(m.registrationPaidGroup||'')||null,
-      membership_account_amount:Number(m.membershipAccountAmount||0)||null,
-      membership_account_date:toIsoDate(m.membershipAccountDate||''),
-      registration_account_amount:Number(m.registrationAccountAmount||0)||null,
-      registration_account_date:toIsoDate(m.registrationAccountDate||''),
       application_date:toIsoDate(m.applicationDate||''),
       club_join_date:toIsoDate(m.memberSince||''),
       active:m.active!==false, archived:!!m.archived, note:String(m.note||'')||null,
@@ -4509,7 +4505,7 @@ loadPersistedMembers();
     if(window.__gtMemberPaymentWriteInFlight) return false;
     // Dochádzka is edited offline. While it is open, never pull member data
     // from Supabase and overwrite the trainer's in-progress changes.
-    if(document.querySelector('.attendance-page') && !window.__gtExplicitAttendanceRefresh) return false;
+    if(document.querySelector('.attendance-page')) return false;
     if(syncInFlight) return false;
     syncInFlight=true;
     let syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
@@ -4614,8 +4610,7 @@ loadPersistedMembers();
   // v719 – live cross-device member refresh. Supabase remains the only source
   // of truth; this frequent, non-destructive pull never writes the local list
   // back to the server. It also refreshes when the app becomes visible again.
-  // v953 removed duplicate 2s poll - replaced by Realtime
-  // setInterval removed
+  setInterval(()=>{try{if(token()) sync()}catch(e){}},2000);
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){ try{ if(token()) sync(); }catch(e){} }
   });
@@ -6176,8 +6171,7 @@ function selectScheduleColor(c){
   // polling - 3s namiesto 700ms aby nevznikol race
   let tries=0;
   let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=15)clearInterval(timer)},1500);
-  // v953 removed duplicate 3s pull - replaced by Realtime
-  // setInterval removed
+  setInterval(()=>{try{if(token()) pull()}catch(_){}} ,3000);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
   window.addEventListener('focus',()=>pull(true));
   // Ak máte Supabase Realtime zapnuté v dashboardu, odkomentujte a pridajte supabase-js client
@@ -6387,7 +6381,7 @@ try{
   let pending={};
   let protectedUntil={};
   let mutationSeq={};
-  async function pull(){ window.__attendancePull = pull; window.gtSyncAttendanceSupabase = pull;
+  async function pull(){
     if(!tok())return false;
     // v801: newest complete billing snapshot wins; never roll back a newer local save.
 
@@ -6757,11 +6751,11 @@ try{
       // Keep the row protected until a later pull has definitely had a chance
       // to read the just-written value. This also makes switching attendance
       // OFF reliable; a stale in-flight pull can no longer turn it back ON.
-      if(mutationSeq[pk]===mySeq) protectedUntil[pk]=Date.now()+300; // v958 fast sync
+      if(mutationSeq[pk]===mySeq) protectedUntil[pk]=Date.now()+1800;
       return true;
     }catch(e){
       console.error('Guard Trainer Supabase attendance push:',e);
-      protectedUntil[pk]=Date.now()+300; // v958 fast sync
+      protectedUntil[pk]=Date.now()+1200;
       toast('Chyba zápisu dochádzky: '+e.message);
       return false;
     }finally{ delete pending[pk]; }
@@ -6882,14 +6876,6 @@ function saveCurrentTrainingAttendanceLocalOnly(markDirty=true){
       debt:Number(a.debt||0),debtReason:String(a.debtReason||''),application:!!a.application,applicationDate:String(a.applicationDate||'')}});
   persistTrainingAttendanceHistory();
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
-  // v957 FIX: push to server immediately so second mobile can see it
-  if(navigator.onLine){
-    try{
-      if(typeof window.gtSaveAttendanceAllSupabase==='function'){
-        window.gtSaveAttendanceAllSupabase().catch(e=>console.warn('attendance push failed', e)); // v958 immediate push
-      }
-    }catch(e){ console.warn('auto push failed', e); }
-  }
 }
 
 function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
@@ -7295,56 +7281,53 @@ async function refreshAttendanceAppV918(){
   const btn=document.querySelector('.attendance-page .calendar-head button');
   if(btn && btn.dataset.refreshing==='1') return false;
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
+
+  // Keep the known-good v935 synchronization path. The only change is that
+  // an explicit ↻ performs a short confirmation pull after the first pull.
+  // This handles the brief delay before a just-saved server snapshot becomes
+  // visible to a second device, without changing the save/sync architecture.
+  const oldBillingOpen=window.__attendanceOpenedFromBillingRecord;
+  const oldExplicit=window.__gtExplicitAttendanceRefresh;
   try{
     window.__gtExplicitAttendanceRefresh=true;
     clearAttendanceDirty();
+
     attendanceState.trainingSupabaseId='';
     attendanceState.trainingIdentityKey='';
     attendanceState.billingRecordSnapshot=null;
     attendanceState.billingRecordKey='';
     attendanceState.billingPaymentSnapshot=null;
     attendanceState.billingAttendanceSnapshot=null;
+
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-    if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase();
-    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
-    if(window.gtSyncAttendanceSupabase){
-      await window.gtSyncAttendanceSupabase();
-      await new Promise(r=>setTimeout(r,400));
-      await window.gtSyncAttendanceSupabase();
-    }
-    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function') saveCurrentTrainingAttendanceLocalOnly(false);
+
+    window.__attendanceOpenedFromBillingRecord=true;
+    if(!window.gtSyncAttendanceSupabase)
+      throw new Error('Attendance server sync function is unavailable');
+
+    // First pull: normal v935 server synchronization.
+    await window.gtSyncAttendanceSupabase();
+
+    // Confirm the just-downloaded state once more. This is intentionally
+    // sequential: the second request must see the server after the first
+    // request has completed, rather than racing two reads.
+    await new Promise(resolve=>setTimeout(resolve,250));
+    await window.gtSyncAttendanceSupabase();
+
+    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function')
+      saveCurrentTrainingAttendanceLocalOnly(false);
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-    if(typeof toast==='function') toast('Členské aktualizované ✓');
   }catch(e){
-    console.error('refresh error', e);
-    if(typeof toast==='function') toast('Chyba: '+e.message);
+    console.error('Guard Trainer attendance refresh:',e);
+    if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
   }finally{
-    window.__gtExplicitAttendanceRefresh=false;
+    window.__attendanceOpenedFromBillingRecord=oldBillingOpen;
+    window.__gtExplicitAttendanceRefresh=oldExplicit;
     if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
   }
   return false;
 }
-
-// Also fix auto-refresh to use same logic
-window.__gtAutoPullAttendance = async function(source){
-  console.log('[v959 Auto] pulling due to', source);
-  try{
-    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
-    if(window.__attendancePull) await window.__attendancePull();
-    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function') saveCurrentTrainingAttendanceLocalOnly(false);
-    if(typeof refreshAttendance==='function') refreshAttendance();
-    if(typeof renderAttendance==='function'){
-      // Only render if on attendance page
-      if(location.hash.includes('attendance')) renderAttendance();
-    }
-    if(source!=='local' && typeof toast==='function'){
-      toast('Dochádzka aktualizovaná z iného zariadenia ✓');
-    }
-  }catch(e){ console.warn('v959 auto pull failed', e); }
-};
-
 function attendance(){
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -7861,7 +7844,7 @@ function enterMembershipAccount(i){
   document.body.appendChild(modal);
   setTimeout(()=>{let inp=document.getElementById('membershipAccountAmountInput');if(inp){inp.focus();inp.select();}},50);
 }
-async function confirmMembershipAccount(i){
+function confirmMembershipAccount(i){
  if(!attendanceEditGuard() || !billingEditGuard()) return;
   let input=document.getElementById('membershipAccountAmountInput');
   if(!input)return;
@@ -7876,8 +7859,6 @@ async function confirmMembershipAccount(i){
   }
   let key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
   if(attendanceState.membershipDrafts) delete attendanceState.membershipDrafts[key];
-  let oldMembership={membership:m.membership, amount:m.membershipAmount, date:m.membershipDate, group:m.membershipPaidGroup};
-  let oldAcc={amount:m.membershipAccountAmount, date:m.membershipAccountDate};
   m.membership=false; m.membershipAmount=0; m.membershipDate=''; m.membershipPaidGroup='';
   a.membershipAmount=0; a.membershipDate=''; a.membershipPaidGroup='';
   m.membershipAccountAmount=n; m.membershipAccountDate=attendanceDateKey();
@@ -7887,23 +7868,7 @@ async function confirmMembershipAccount(i){
   persistMembersData();
   let modal=document.getElementById('membershipAccountPrompt'); if(modal)modal.remove();
   refreshAttendance();
-  // FIX v954: musí sa uložiť aj na server, inak po prepnutí karty sa vráti späť
-  try{
-    if(typeof window.gtSaveMemberSupabase==='function'){
-      await window.gtSaveMemberSupabase(m.id);
-      toast('ÚČET 30€ uložené na server ✓');
-    } else {
-      toast('Členské na účet klubu – nezapočítava sa do platieb');
-    }
-  }catch(e){
-    // rollback pri chybe servera
-    m.membership=oldMembership.membership; m.membershipAmount=oldMembership.amount; m.membershipDate=oldMembership.date; m.membershipPaidGroup=oldMembership.group;
-    m.membershipAccountAmount=oldAcc.amount; m.membershipAccountDate=oldAcc.date;
-    a.membershipAccountAmount=oldAcc.amount; a.membershipAccountDate=oldAcc.date;
-    removeMemberAccountHistory(m,'membership',attendanceDateKey());
-    persistMembersData(); persistPaymentHistory(); refreshAttendance();
-    toast('Supabase zápis účtu zlyhal: '+e.message);
-  }
+  toast('Členské na účet klubu – nezapočítava sa do platieb');
 }
 async function enterRegistrationAccount(i){
  if(!attendanceEditGuard() || !billingEditGuard() || !attendancePaymentEditGuard()) return;
@@ -10849,253 +10814,6 @@ html,body{color-scheme:dark!important;}
       console.log('✅ Guard Trainer Realtime active for 3 trainers');
     }catch(e){ console.warn('Realtime init failed', e); }
   });
-})();
-
-
-
-window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }catch(e){ console.warn('JSON parse failed', e); return fallback; } };
-
-
-// v955 FIX: attendance realtime was calling non-existing function
-(function(){
-  if(window.__gtAttendanceRealtimeFix) return;
-  window.__gtAttendanceRealtimeFix=true;
-  // After original installSupabaseAttendanceSync is defined, expose its pull
-  const origInstall = window.installSupabaseAttendanceSync;
-  // Wait for it to init, then patch channel handler
-  window.gtSyncAttendanceSupabase = async function(){
-    console.log('[Realtime] attendance change -> pulling');
-    try{
-      // Call the internal pull if available via closure hack: we stored it in window.__attendancePull
-      if(window.__attendancePull) {
-        await window.__attendancePull();
-      }
-      // Force refresh UI if on attendance screen
-      if(typeof refreshAttendance==='function'){
-        try{ refreshAttendance(); }catch(e){}
-      }
-      if(typeof renderAttendance==='function'){
-        try{ 
-          if(location.hash==='#attendance' || document.querySelector('#attendance')?.offsetParent) renderAttendance(); 
-        }catch(e){}
-      }
-    }catch(e){ console.warn('attendance realtime pull failed', e); }
-  };
-  
-  // Patch installSupabaseAttendanceSync to store its pull function
-  if(typeof installSupabaseAttendanceSync==='function'){
-    const orig = installSupabaseAttendanceSync;
-    window.installSupabaseAttendanceSync = function(){
-      const res = orig.apply(this, arguments);
-      // Try to capture pull from closure - we will monkey-patch inside
-      // The pull is defined inside, so we override fetch to expose
-      return res;
-    };
-  }
-  
-  // Also fix the channel to also call members sync for membershipAccount changes
-  window.addEventListener('load', ()=>{
-    // If members change (ÚČET), attendance must refresh too
-    if(window.gtSyncMembersSupabase){
-      const origMembers = window.gtSyncMembersSupabase;
-      window.gtSyncMembersSupabase = async function(){
-        await origMembers.apply(this, arguments);
-        if(typeof refreshAttendance==='function'){
-          try{ refreshAttendance(); }catch(e){}
-        }
-      };
-    }
-  });
-})();
-
-
-// v956 AUTO-REFRESH DOCHÁDZKY bez tlačítka - pre 3 trénerov
-(function(){
-  if(window.__gtAutoRefresh956) return;
-  window.__gtAutoRefresh956=true;
-  
-  console.log('Installing v956 auto-refresh for attendance');
-  
-  // 1. Keď sa uloží dochádzka lokálne, označ že treba poslať na server
-  const origSaveLocal = window.saveCurrentTrainingAttendanceLocalOnly;
-  if(origSaveLocal){
-    window.saveCurrentTrainingAttendanceLocalOnly = function(markDirty){
-      const res = origSaveLocal.apply(this, arguments);
-      // Also try to push to server immediately if online
-      if(navigator.onLine && window.gtSaveAttendanceAllSupabase){
-        setTimeout(()=>{ try{ window.gtSaveAttendanceAllSupabase(); }catch(e){} }, 500);
-      }
-      return res;
-    };
-  }
-  
-  // 2. Funkcia na auto-pull keď príde zmena z iného mobilu
-  window.__gtAutoPullAttendance = async function(source){
-    console.log('[AutoRefresh] pulling attendance due to', source);
-    try{
-      // If on attendance screen, pull and refresh
-      if(typeof window.gtPullAttendanceSupabase === 'function'){
-        await window.gtPullAttendanceSupabase();
-      }
-      if(window.__attendancePull){
-        await window.__attendancePull();
-      }
-      if(typeof refreshAttendance === 'function'){
-        refreshAttendance();
-      }
-      // Show small toast that it auto-refreshed
-      if(typeof toast === 'function' && source!=='local'){
-        toast('Dochádzka aktualizovaná z iného zariadenia ✓');
-      }
-    }catch(e){ console.warn('auto pull failed', e); }
-  };
-  
-  // 3. Polling fallback každých 5s ak Realtime zlyhá - len keď je otvorená dochádzka
-  setInterval(()=>{
-    try{
-      if(!navigator.onLine) return;
-      const hash = location.hash||'';
-      const isAttendanceOpen = hash.includes('attendance') || document.querySelector('#attendance-view')?.offsetParent || document.querySelector('[data-view="attendance"]');
-      // Even if not open, if we are on same date as last edit, pull silently
-      if(isAttendanceOpen || window.__gtLastAttendanceView){
-        // Only pull if we didn't edit locally in last 10s
-        const lastEdit = window.__gtLastLocalAttendanceEdit||0;
-        if(Date.now() - lastEdit > 10000){
-          if(window.__attendancePull) window.__attendancePull().then(()=>{ 
-            if(isAttendanceOpen && typeof refreshAttendance==='function') refreshAttendance(); 
-          }).catch(()=>{});
-        }
-      }
-    }catch(e){}
-  }, 2000); // v958 faster polling
-  
-  // 4. Mark local edits
-  const origRefresh = window.refreshAttendance;
-  if(origRefresh){
-    window.refreshAttendance = function(){
-      window.__gtLastLocalAttendanceEdit = Date.now();
-      window.__gtLastAttendanceView = true;
-      return origRefresh.apply(this, arguments);
-    };
-  }
-  
-  // 5. Hook into Supabase Realtime channel - when billing_records changes, auto pull attendance
-  window.addEventListener('load', ()=>{
-    setTimeout(()=>{
-      try{
-        // Find existing supabase client
-        const client = window.supabase || window.__supabase || window.gtSupabaseClient;
-        if(!client) return;
-        // Subscribe to billing_records changes for auto-refresh
-        const ch = client.channel('gt-auto-attendance-956')
-          .on('postgres_changes', {event:'*', schema:'public', table:'billing_records'}, (payload)=>{
-            console.log('[AutoRefresh] billing_records changed', payload.eventType);
-            window.__gtAutoPullAttendance('billing_records:'+payload.eventType);
-          })
-          .on('postgres_changes', {event:'*', schema:'public', table:'attendance'}, (payload)=>{
-            console.log('[AutoRefresh] attendance changed', payload.eventType);
-            window.__gtAutoPullAttendance('attendance:'+payload.eventType);
-          })
-          .on('postgres_changes', {event:'*', schema:'public', table:'members'}, (payload)=>{
-            // When membership account (ÚČET) changes
-            if(payload.new && (payload.new.membership_account_amount || payload.new.membership_account_date)){
-              console.log('[AutoRefresh] member account changed');
-              window.__gtAutoPullAttendance('members:account');
-            }
-          })
-          .subscribe((status)=>{
-            console.log('[AutoRefresh] channel status', status);
-          });
-        console.log('✅ v956 auto-refresh channel subscribed');
-      }catch(e){ console.warn('v956 auto-refresh channel failed', e); }
-    }, 2000);
-  });
-  
-  console.log('✅ v956 auto-refresh installed - druhý mobil už nepotrebuje refresh tlačítko');
-})();
-
-
-// v958: force pull when returning to app (fixes tab switching sync)
-document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState==='visible'){
-    if(location.hash.includes('attendance')){
-      console.log('[v958] tab visible -> force pull');
-      if(window.__attendancePull) window.__attendancePull().then(()=>{ if(typeof refreshAttendance==='function') refreshAttendance(); }).catch(()=>{});
-      if(window.gtSyncBillingSupabase) window.gtSyncBillingSupabase().then(()=>{ if(typeof refreshAttendance==='function') refreshAttendance(); }).catch(()=>{});
-    }
-  }
-});
-
-/* v952 OFFLINE FIX + queue for 3 trainers */
-(function(){
-  if(window.__gtOfflineFix) return;
-  window.__gtOfflineFix=true;
-  var PENDING_KEY='gt_pending_schedules_v952';
-  
-  function getPending(){ try{ return JSON.parse(localStorage.getItem(PENDING_KEY)||'[]'); }catch(_){return [];} }
-  function savePending(a){ try{ localStorage.setItem(PENDING_KEY, JSON.stringify(a)); }catch(_){} }
-  
-  // Override push to queue when offline
-  var origPush = window.gtPushSchedulesSupabase;
-  window.gtPushSchedulesSupabase = async function(templates, localUpdatedAt){
-    if(!navigator.onLine){
-      console.log('[Offline] queueing push', templates.length);
-      var pending=getPending();
-      pending.push({templates: templates, updatedAt: localUpdatedAt||Date.now(), ts: Date.now()});
-      savePending(pending);
-      // still save locally so user sees it
-      try{ localStorage.setItem('guard_schedule_templates_v2', JSON.stringify(templates)); }catch(_){}
-      return true;
-    }
-    try{
-      var res = await origPush(templates, localUpdatedAt);
-      return res;
-    }catch(e){
-      console.warn('[Offline] push failed, queueing', e);
-      var pending=getPending();
-      pending.push({templates: templates, updatedAt: localUpdatedAt||Date.now(), ts: Date.now()});
-      savePending(pending);
-      return false;
-    }
-  };
-  
-  // Flush queue when online
-  async function flushPending(){
-    if(!navigator.onLine) return;
-    var pending=getPending();
-    if(!pending.length) return;
-    console.log('[Offline] flushing', pending.length, 'queued');
-    // merge all pending - take latest
-    var latest = pending[pending.length-1];
-    try{
-      if(origPush){
-        await origPush(latest.templates, latest.updatedAt);
-        localStorage.removeItem(PENDING_KEY);
-        console.log('[Offline] flush ok');
-      }
-    }catch(e){ console.warn('[Offline] flush failed', e); }
-  }
-  
-  window.addEventListener('online', function(){ console.log('Back online, flushing'); flushPending(); });
-  // also try every 10s
-  setInterval(flushPending, 10000);
-  
-  // Patch pull to NOT overwrite if we have pending
-  var origPull = window.gtPullSchedulesSupabase;
-  window.gtPullSchedulesSupabase = async function(force){
-    var pending=getPending();
-    if(pending.length){
-      console.log('[Offline] skip pull, have pending', pending.length);
-      return false; // don't overwrite local work
-    }
-    if(!navigator.onLine && !force){
-      console.log('[Offline] skip pull, offline');
-      return false;
-    }
-    return await origPull(force);
-  };
-  
-  console.log('✅ Offline queue active - telocvična bez signálu ok');
 })();
 
 </body>

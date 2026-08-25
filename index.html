@@ -4505,7 +4505,7 @@ loadPersistedMembers();
     if(window.__gtMemberPaymentWriteInFlight) return false;
     // Dochádzka is edited offline. While it is open, never pull member data
     // from Supabase and overwrite the trainer's in-progress changes.
-    if(document.querySelector('.attendance-page')) return false;
+    if(document.querySelector('.attendance-page') && !window.__gtExplicitAttendanceRefresh) return false;
     if(syncInFlight) return false;
     syncInFlight=true;
     let syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
@@ -4611,10 +4611,10 @@ loadPersistedMembers();
   // of truth; this frequent, non-destructive pull never writes the local list
   // back to the server. It also refreshes when the app becomes visible again.
   setInterval(()=>{try{if(token()) sync()}catch(e){}},2000);
-  document.addEventListener('visibilitychange',()=>{
+  // v951b disabled document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){ try{ if(token()) sync(); }catch(e){} }
   });
-  window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
+  // v951b disabled window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
   window.gtSyncMembersSupabase=sync;
 })();
 loadMemberNotes();
@@ -6172,8 +6172,8 @@ function selectScheduleColor(c){
   let tries=0;
   let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=15)clearInterval(timer)},1500);
   setInterval(()=>{try{if(token()) pull()}catch(_){}} ,3000);
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
-  window.addEventListener('focus',()=>pull(true));
+  // v951b disabled document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
+  // v951b disabled window.addEventListener('focus',()=>pull(true));
   // Ak máte Supabase Realtime zapnuté v dashboardu, odkomentujte a pridajte supabase-js client
   // Tento kód ostáva kompatibilný aj bez neho vďaka pollingu
 })();
@@ -6773,6 +6773,12 @@ try{
   // saved DLŽNÉ / PRIHLÁŠKA state. Local edits are still pushed only by
   // ULOŽIŤ VYÚČTOVANIE, but opening/returning to Dochádzka performs a fresh pull.
   window.gtStartAttendanceSupabaseSync=function(){
+  // v951b - auto sync vypnuté, len jednorazovo pri otvorení dochádzky
+  if(window.__gtAttendanceAutoStarted) return Promise.resolve(false);
+  window.__gtAttendanceAutoStarted=true;
+  return window.gtStartAttendanceSupabaseSync_ORIG();
+};
+window.gtStartAttendanceSupabaseSync_ORIG=function(){
     if(!tok()) return Promise.resolve(false);
 
     // V917: never drop a refresh request just because another pull is running.
@@ -7281,53 +7287,24 @@ async function refreshAttendanceAppV918(){
   const btn=document.querySelector('.attendance-page .calendar-head button');
   if(btn && btn.dataset.refreshing==='1') return false;
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
-
-  // Keep the known-good v935 synchronization path. The only change is that
-  // an explicit ↻ performs a short confirmation pull after the first pull.
-  // This handles the brief delay before a just-saved server snapshot becomes
-  // visible to a second device, without changing the save/sync architecture.
-  const oldBillingOpen=window.__attendanceOpenedFromBillingRecord;
-  const oldExplicit=window.__gtExplicitAttendanceRefresh;
   try{
     window.__gtExplicitAttendanceRefresh=true;
-    clearAttendanceDirty();
-
-    attendanceState.trainingSupabaseId='';
-    attendanceState.trainingIdentityKey='';
-    attendanceState.billingRecordSnapshot=null;
-    attendanceState.billingRecordKey='';
-    attendanceState.billingPaymentSnapshot=null;
-    attendanceState.billingAttendanceSnapshot=null;
-
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-
-    window.__attendanceOpenedFromBillingRecord=true;
-    if(!window.gtSyncAttendanceSupabase)
-      throw new Error('Attendance server sync function is unavailable');
-
-    // First pull: normal v935 server synchronization.
-    await window.gtSyncAttendanceSupabase();
-
-    // Confirm the just-downloaded state once more. This is intentionally
-    // sequential: the second request must see the server after the first
-    // request has completed, rather than racing two reads.
-    await new Promise(resolve=>setTimeout(resolve,250));
-    await window.gtSyncAttendanceSupabase();
-
-    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function')
-      saveCurrentTrainingAttendanceLocalOnly(false);
+    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
+    if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase();
+    if(window.gtStartAttendanceSupabaseSync_ORIG) await window.gtStartAttendanceSupabaseSync_ORIG();
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+    if(typeof toast==='function') toast('Dochádzka stiahnutá ✓');
   }catch(e){
-    console.error('Guard Trainer attendance refresh:',e);
-    if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
+    if(typeof toast==='function') toast('Chyba: '+e.message);
   }finally{
-    window.__attendanceOpenedFromBillingRecord=oldBillingOpen;
-    window.__gtExplicitAttendanceRefresh=oldExplicit;
+    window.__gtExplicitAttendanceRefresh=false;
     if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
   }
   return false;
 }
+
 function attendance(){
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -8739,7 +8716,7 @@ function getBillingRecords(){
   window.__gtPullExactTraining= pullExactTraining;
   setInterval(pullExactTraining,2000);
 
-  document.addEventListener('visibilitychange',()=>{
+  // v951b disabled document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible') pullExactTraining();
   });
 })();
@@ -8747,7 +8724,7 @@ function getBillingRecords(){
 // Bidirectional attendance refresh: when the first device returns to the
 // foreground, immediately pull the exact shared billing record before waiting
 // for the next 2-second polling tick.
-document.addEventListener('visibilitychange',()=>{
+// v951b disabled document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState!=='visible') return;
   try{
     if(!window.__attendanceOpenedFromBillingRecord) return;
@@ -8847,7 +8824,7 @@ document.addEventListener('visibilitychange',()=>{
  window.__gtCanonicalAttendancePullV903=pull;
  window.__gtCanonicalAttendancePushV903=push;
  setInterval(()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();},2000);
- document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
+ // v951b disabled document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
 })();
 
 // v767 – keep billing screens in sync across devices. Unlike attendance,
@@ -8883,7 +8860,7 @@ document.addEventListener('visibilitychange',()=>{
       }
     }catch(_){}
   },2000);
-  document.addEventListener('visibilitychange',()=>{
+  // v951b disabled document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible' && window.gtSyncBillingSupabase){
       try{ window.gtSyncBillingSupabase(); }catch(_){}
     }

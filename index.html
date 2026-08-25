@@ -10893,6 +10893,112 @@ window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }
   });
 })();
 
+
+// v956 AUTO-REFRESH DOCHÁDZKY bez tlačítka - pre 3 trénerov
+(function(){
+  if(window.__gtAutoRefresh956) return;
+  window.__gtAutoRefresh956=true;
+  
+  console.log('Installing v956 auto-refresh for attendance');
+  
+  // 1. Keď sa uloží dochádzka lokálne, označ že treba poslať na server
+  const origSaveLocal = window.saveCurrentTrainingAttendanceLocalOnly;
+  if(origSaveLocal){
+    window.saveCurrentTrainingAttendanceLocalOnly = function(markDirty){
+      const res = origSaveLocal.apply(this, arguments);
+      // Also try to push to server immediately if online
+      if(navigator.onLine && window.gtPushAttendanceSupabase){
+        setTimeout(()=>{ try{ window.gtPushAttendanceSupabase(); }catch(e){} }, 500);
+      }
+      return res;
+    };
+  }
+  
+  // 2. Funkcia na auto-pull keď príde zmena z iného mobilu
+  window.__gtAutoPullAttendance = async function(source){
+    console.log('[AutoRefresh] pulling attendance due to', source);
+    try{
+      // If on attendance screen, pull and refresh
+      if(typeof window.gtPullAttendanceSupabase === 'function'){
+        await window.gtPullAttendanceSupabase();
+      }
+      if(window.__attendancePull){
+        await window.__attendancePull();
+      }
+      if(typeof refreshAttendance === 'function'){
+        refreshAttendance();
+      }
+      // Show small toast that it auto-refreshed
+      if(typeof toast === 'function' && source!=='local'){
+        toast('Dochádzka aktualizovaná z iného zariadenia ✓');
+      }
+    }catch(e){ console.warn('auto pull failed', e); }
+  };
+  
+  // 3. Polling fallback každých 5s ak Realtime zlyhá - len keď je otvorená dochádzka
+  setInterval(()=>{
+    try{
+      if(!navigator.onLine) return;
+      const hash = location.hash||'';
+      const isAttendanceOpen = hash.includes('attendance') || document.querySelector('#attendance-view')?.offsetParent || document.querySelector('[data-view="attendance"]');
+      // Even if not open, if we are on same date as last edit, pull silently
+      if(isAttendanceOpen || window.__gtLastAttendanceView){
+        // Only pull if we didn't edit locally in last 10s
+        const lastEdit = window.__gtLastLocalAttendanceEdit||0;
+        if(Date.now() - lastEdit > 10000){
+          if(window.__attendancePull) window.__attendancePull().then(()=>{ 
+            if(isAttendanceOpen && typeof refreshAttendance==='function') refreshAttendance(); 
+          }).catch(()=>{});
+        }
+      }
+    }catch(e){}
+  }, 5000);
+  
+  // 4. Mark local edits
+  const origRefresh = window.refreshAttendance;
+  if(origRefresh){
+    window.refreshAttendance = function(){
+      window.__gtLastLocalAttendanceEdit = Date.now();
+      window.__gtLastAttendanceView = true;
+      return origRefresh.apply(this, arguments);
+    };
+  }
+  
+  // 5. Hook into Supabase Realtime channel - when billing_records changes, auto pull attendance
+  window.addEventListener('load', ()=>{
+    setTimeout(()=>{
+      try{
+        // Find existing supabase client
+        const client = window.supabase || window.__supabase || window.gtSupabaseClient;
+        if(!client) return;
+        // Subscribe to billing_records changes for auto-refresh
+        const ch = client.channel('gt-auto-attendance-956')
+          .on('postgres_changes', {event:'*', schema:'public', table:'billing_records'}, (payload)=>{
+            console.log('[AutoRefresh] billing_records changed', payload.eventType);
+            window.__gtAutoPullAttendance('billing_records:'+payload.eventType);
+          })
+          .on('postgres_changes', {event:'*', schema:'public', table:'attendance'}, (payload)=>{
+            console.log('[AutoRefresh] attendance changed', payload.eventType);
+            window.__gtAutoPullAttendance('attendance:'+payload.eventType);
+          })
+          .on('postgres_changes', {event:'*', schema:'public', table:'members'}, (payload)=>{
+            // When membership account (ÚČET) changes
+            if(payload.new && (payload.new.membership_account_amount || payload.new.membership_account_date)){
+              console.log('[AutoRefresh] member account changed');
+              window.__gtAutoPullAttendance('members:account');
+            }
+          })
+          .subscribe((status)=>{
+            console.log('[AutoRefresh] channel status', status);
+          });
+        console.log('✅ v956 auto-refresh channel subscribed');
+      }catch(e){ console.warn('v956 auto-refresh channel failed', e); }
+    }, 2000);
+  });
+  
+  console.log('✅ v956 auto-refresh installed - druhý mobil už nepotrebuje refresh tlačítko');
+})();
+
 /* v952 OFFLINE FIX + queue for 3 trainers */
 (function(){
   if(window.__gtOfflineFix) return;

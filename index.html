@@ -7256,39 +7256,48 @@ async function refreshAttendanceAppV918(){
   const btn=document.querySelector('.attendance-page .calendar-head button');
   if(btn && btn.dataset.refreshing==='1') return false;
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
+
+  // Explicit ↻ is the ONLY operation that replaces this device's local
+  // attendance with the authoritative saved server snapshot.
+  const oldBillingOpen=window.__attendanceOpenedFromBillingRecord;
+  const oldExplicit=window.__gtExplicitAttendanceRefresh;
   try{
-    // ↻ = authoritative server download. Explicit refresh bypasses the
-    // normal in-flight/dirty guards and performs a fresh Supabase read.
     window.__gtExplicitAttendanceRefresh=true;
     clearAttendanceDirty();
 
-    // A trainingSupabaseId can be an old in-memory ID from the previous
-    // session/device. For an explicit server refresh, resolve the training
-    // again from the selected date + group + time before reading attendance.
+    // Do not reuse a stale training id from a previous screen/device.
     attendanceState.trainingSupabaseId='';
     attendanceState.trainingIdentityKey='';
+    attendanceState.billingRecordSnapshot=null;
+    attendanceState.billingRecordKey='';
+    attendanceState.billingPaymentSnapshot=null;
+    attendanceState.billingAttendanceSnapshot=null;
 
+    // First synchronize the member list, then pull the COMPLETE saved
+    // training snapshot. Mark this as a billing-origin pull so the pull uses
+    // the exact saved billing snapshot for this training when one exists.
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
 
-    // Call the actual attendance pull directly. It is the same Supabase
-    // function used by the app, but this explicit path must never be skipped.
-    if(window.gtSyncAttendanceSupabase){
-      await window.gtSyncAttendanceSupabase();
-    }else{
+    window.__attendanceOpenedFromBillingRecord=true;
+    if(!window.gtSyncAttendanceSupabase)
       throw new Error('Attendance server sync function is unavailable');
-    }
 
-    // Make the downloaded server state the local baseline on this device.
-    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function'){
+    await window.gtSyncAttendanceSupabase();
+
+    // The canonical v903 live poll must NOT immediately overwrite the freshly
+    // downloaded snapshot. It is only allowed to run again after this explicit
+    // refresh has completed.
+    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function')
       saveCurrentTrainingAttendanceLocalOnly(false);
-    }
+
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
   }catch(e){
     console.error('Guard Trainer attendance refresh:',e);
     if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
   }finally{
-    window.__gtExplicitAttendanceRefresh=false;
+    window.__attendanceOpenedFromBillingRecord=oldBillingOpen;
+    window.__gtExplicitAttendanceRefresh=oldExplicit;
     if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
   }
   return false;
@@ -8751,6 +8760,9 @@ document.addEventListener('visibilitychange',()=>{
  }
  async function pull(){
   try{
+   // During an explicit ↻ the main Supabase attendance sync owns the screen.
+   // Do not race it with the legacy canonical poll.
+   if(window.__gtExplicitAttendanceRefresh) return;
    // Unsaved local attendance is authoritative on this device. Do not let the
    // 2-second server poll or a card switch replace it before ULOŽIŤ.
    if(isAttendanceDirtyForCurrentTraining()) return;

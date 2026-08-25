@@ -6598,6 +6598,13 @@ try{
             if(key && !billingPeople.has(key)) billingPeople.set(key,{training:true,newMember:false,trainingAccount:false});
           });
       }
+      // Keep the shared/server-loaded attendance list in the same alphabetical
+      // order as device 1. New members are sorted by surname, not appended at
+      // the bottom.
+      (attendanceState.members||[]).sort((a,b)=>{
+        let sa=String(a&&a.surname||'').trim().localeCompare(String(b&&b.surname||'').trim(),'sk',{sensitivity:'base'});
+        return sa || String(a&&a.name||'').trim().localeCompare(String(b&&b.name||'').trim(),'sk',{sensitivity:'base'});
+      });
       (attendanceState.members||[]).forEach((m,i)=>{
         let pk=String(i);
         // A pull can have started before a local tap and finish afterwards.
@@ -7257,15 +7264,16 @@ async function refreshAttendanceAppV918(){
   if(btn && btn.dataset.refreshing==='1') return false;
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
 
-  // Explicit ↻ is the ONLY operation that replaces this device's local
-  // attendance with the authoritative saved server snapshot.
+  // Keep the known-good v935 synchronization path. The only change is that
+  // an explicit ↻ performs a short confirmation pull after the first pull.
+  // This handles the brief delay before a just-saved server snapshot becomes
+  // visible to a second device, without changing the save/sync architecture.
   const oldBillingOpen=window.__attendanceOpenedFromBillingRecord;
   const oldExplicit=window.__gtExplicitAttendanceRefresh;
   try{
     window.__gtExplicitAttendanceRefresh=true;
     clearAttendanceDirty();
 
-    // Do not reuse a stale training id from a previous screen/device.
     attendanceState.trainingSupabaseId='';
     attendanceState.trainingIdentityKey='';
     attendanceState.billingRecordSnapshot=null;
@@ -7273,33 +7281,25 @@ async function refreshAttendanceAppV918(){
     attendanceState.billingPaymentSnapshot=null;
     attendanceState.billingAttendanceSnapshot=null;
 
-    // First synchronize the member list, then pull the COMPLETE saved
-    // training snapshot. Mark this as a billing-origin pull so the pull uses
-    // the exact saved billing snapshot for this training when one exists.
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
 
     window.__attendanceOpenedFromBillingRecord=true;
     if(!window.gtSyncAttendanceSupabase)
       throw new Error('Attendance server sync function is unavailable');
 
+    // First pull: normal v935 server synchronization.
     await window.gtSyncAttendanceSupabase();
 
-    // v936: the explicit refresh is authoritative. Keep the exact state
-    // returned by the server as this device's local attendance snapshot.
-    // Do not call attendance() or rebuild from membersData here.
-    try{
-      if(typeof saveCurrentTrainingAttendanceLocalOnly==='function'){
-        saveCurrentTrainingAttendanceLocalOnly(false);
-      }
-    }catch(_e){}
+    // Confirm the just-downloaded state once more. This is intentionally
+    // sequential: the second request must see the server after the first
+    // request has completed, rather than racing two reads.
+    await new Promise(resolve=>setTimeout(resolve,250));
+    await window.gtSyncAttendanceSupabase();
 
+    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function')
+      saveCurrentTrainingAttendanceLocalOnly(false);
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-
-    // The canonical v903 live poll must NOT immediately overwrite the freshly
-    // downloaded snapshot. It is only allowed to run again after this explicit
-    // refresh has completed.
-    // v936: render/save was already done immediately after the server pull.
   }catch(e){
     console.error('Guard Trainer attendance refresh:',e);
     if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
@@ -7440,6 +7440,11 @@ function setAttendanceClickState(m,state){
 }
 
 function renderAttendanceRows(){
+  attendanceState.members.sort((a,b)=>{
+    let sa=String(a&&a.surname||'').trim().localeCompare(String(b&&b.surname||'').trim(),'sk',{sensitivity:'base'});
+    return sa || String(a&&a.name||'').trim().localeCompare(String(b&&b.name||'').trim(),'sk',{sensitivity:'base'});
+  });
+
  let locked=isAttendanceFullyLocked()&&!isAdmin();
  return attendanceState.members.map((m,i)=>{
    let label='TRÉNING', cls='';
@@ -7447,7 +7452,7 @@ function renderAttendanceRows(){
    if(clickState==='new'){ label='NOVÝ'; cls='new-blue'; }
    else if(clickState==='account'){ label='ÚČET<br><strong>5 €</strong>'; cls='account-on'; }
    else if(clickState==='training'){ label='TRÉNING'; cls='training-on'; }
-   let showTrainingAmount=!!m.training && !m.trainingAccount;
+   let showTrainingAmount=!!m.training && !m.trainingAccount && !m.newMember;
    return `
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>

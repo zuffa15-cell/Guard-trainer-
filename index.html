@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
-<title>Guard Trainer v932 – Guard Trainer v879 – Guard Trainer v725</title>
+<title>Guard Trainer v932</title>
 <style>
 :root{
   --bg:#030303; --panel:#080808; --line:#383838; --gold:#f3b51b; --gold2:#ffc928;
@@ -3405,7 +3405,7 @@ function renderHeadHomeList(title,rows,kind){
   }catch(e){}
   let app=document.querySelector('.app');
   let body=kind==='new'?rows.map(m=>`<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${m.memberSince||m.newMemberDate||'—'}</span></div>`).join(''):rows.map(m=>{let d=headHomeLastVisit(m);return `<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${d?d.toLocaleDateString('sk-SK'):'Žiadna návšteva'}</span></div>`}).join('');
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast-1" class="toast"></div>`;
 }
 function syncRegistrationPaymentsFromMembers(){
   try{
@@ -3456,7 +3456,7 @@ function renderHeadHome(){
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
   <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
-  </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+  </main>${headHomeNav('home')}<div id="toast-2" class="toast"></div>`;
 }
 function renderHome(){
   if(isHeadTrainer()){ renderHeadHome(); return; }
@@ -3515,7 +3515,7 @@ function renderCalendar(){
       <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
       <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
-    </nav><div id="toast" class="toast"></div>`;
+    </nav><div id="toast-3" class="toast"></div>`;
 }
 function getGroupColors(){
   try{return JSON.parse(localStorage.getItem('gt-group-colors')||'{}')||{};}catch(e){return {};}
@@ -4616,10 +4616,10 @@ loadPersistedMembers();
   // back to the server. It also refreshes when the app becomes visible again.
   // v953 removed duplicate 2s poll - replaced by Realtime
   // setInterval removed
-  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
+  document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){ try{ if(token()) sync(); }catch(e){} }
   });
-  // v970 disabled focus auto pull - window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
+  window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
   window.gtSyncMembersSupabase=sync;
 })();
 loadMemberNotes();
@@ -6178,8 +6178,8 @@ function selectScheduleColor(c){
   let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=15)clearInterval(timer)},1500);
   // v953 removed duplicate 3s pull - replaced by Realtime
   // setInterval removed
-  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
-  // v970 disabled focus auto pull - window.addEventListener('focus',()=>pull(true));
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
+  window.addEventListener('focus',()=>pull(true));
   // Ak máte Supabase Realtime zapnuté v dashboardu, odkomentujte a pridajte supabase-js client
   // Tento kód ostáva kompatibilný aj bez neho vďaka pollingu
 })();
@@ -6263,7 +6263,7 @@ function renderMore(){
      <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
      <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
      <a class="nav active" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
-   </nav><div id="toast" class="toast"></div>`;
+   </nav><div id="toast-4" class="toast"></div>`;
  applyThemeUI();
 }
 // Guard Trainer používa iba tmavý režim.
@@ -6778,12 +6778,7 @@ try{
   // Previously this hook was disabled, so another device never loaded the
   // saved DLŽNÉ / PRIHLÁŠKA state. Local edits are still pushed only by
   // ULOŽIŤ VYÚČTOVANIE, but opening/returning to Dochádzka performs a fresh pull.
-  
-window.gtStartAttendanceSupabaseSync=function(){
-  // v970 - vypnuté automatické sťahovanie, len manuálne ↻
-  return Promise.resolve(false);
-};
-window.gtStartAttendanceSupabaseSync_ORIG=function(){
+  window.gtStartAttendanceSupabaseSync=function(){
     if(!tok()) return Promise.resolve(false);
 
     // V917: never drop a refresh request just because another pull is running.
@@ -6810,7 +6805,7 @@ window.gtStartAttendanceSupabaseSync_ORIG=function(){
       }
     });
   };
-  window.__gtAttendanceSyncTimer=null; // v970 disabled auto sync to stop blinking
+  window.__gtAttendanceSyncTimer=null;
   // No automatic visibility/background pull. Attendance is local while editing;
   // the user explicitly requests a server download with ↻.
 
@@ -7185,7 +7180,7 @@ function renderCancelledAttendance(){
       <div class="members-list cancelled-members-list"></div>
     </main>
     <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance active" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>
-    <div id="toast" class="toast"></div>`;
+    <div id="toast-5" class="toast"></div>`;
 }
 function attendanceChooser(){
   let today=appToday().iso;
@@ -7232,7 +7227,7 @@ function attendanceChooser(){
       <div class="group-people"><b>${getGroupMemberCount(code)}</b><span>členov</span></div>
     </article>`;
   }).join(''):`<div class="empty-state"><b>DNES NIE JE NAPLANOVANÝ ŽIADNY TRÉNING</b><small>Dochádzka sa dá otvoriť iba pre aktuálne naplánovaný tréning.</small></div>`;
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast-6" class="toast"></div>`;
 }
 
 function applyBillingSnapshotToAttendance(){
@@ -7302,18 +7297,27 @@ async function refreshAttendanceAppV918(){
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
   try{
     window.__gtExplicitAttendanceRefresh=true;
-    // Len jeden pull, nie dva - aby neblikalo
+    clearAttendanceDirty();
+    attendanceState.trainingSupabaseId='';
+    attendanceState.trainingIdentityKey='';
+    attendanceState.billingRecordSnapshot=null;
+    attendanceState.billingRecordKey='';
+    attendanceState.billingPaymentSnapshot=null;
+    attendanceState.billingAttendanceSnapshot=null;
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
     if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase();
-    // Dochádzku stiahni len raz
-    if(window.gtStartAttendanceSupabaseSync_ORIG){
-      await window.gtStartAttendanceSupabaseSync_ORIG();
+    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
+    if(window.gtSyncAttendanceSupabase){
+      await window.gtSyncAttendanceSupabase();
+      await new Promise(r=>setTimeout(r,400));
+      await window.gtSyncAttendanceSupabase();
     }
+    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function') saveCurrentTrainingAttendanceLocalOnly(false);
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-    if(typeof toast==='function') toast('Dochádzka stiahnutá ✓');
+    if(typeof toast==='function') toast('Dochádzka aktualizovaná ✓');
   }catch(e){
+    console.error('refresh error', e);
     if(typeof toast==='function') toast('Chyba: '+e.message);
   }finally{
     window.__gtExplicitAttendanceRefresh=false;
@@ -7323,8 +7327,7 @@ async function refreshAttendanceAppV918(){
 }
 
 // Also fix auto-refresh to use same logic
-window.__gtAutoPullAttendance = async function(source){ return false; };
-window.__gtAutoPullAttendance_DISABLED = async function(source){
+window.__gtAutoPullAttendance = async function(source){
   console.log('[v959 Auto] pulling due to', source);
   try{
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
@@ -7424,7 +7427,7 @@ function attendance(){
       <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
     </nav>
-    <div id="toast" class="toast"></div>`;
+    <div id="toast-7" class="toast"></div>`;
   updateAttendanceTotals();
   // Opening/returning to Dochádzka is LOCAL ONLY. The explicit ↻ button is the
   // only operation that downloads the server state and replaces this local
@@ -8771,7 +8774,7 @@ function getBillingRecords(){
   window.__gtPullExactTraining= pullExactTraining;
   setInterval(pullExactTraining,2000);
 
-  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
+  document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible') pullExactTraining();
   });
 })();
@@ -8779,7 +8782,7 @@ function getBillingRecords(){
 // Bidirectional attendance refresh: when the first device returns to the
 // foreground, immediately pull the exact shared billing record before waiting
 // for the next 2-second polling tick.
-// v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
+document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState!=='visible') return;
   try{
     if(!window.__attendanceOpenedFromBillingRecord) return;
@@ -8879,7 +8882,7 @@ function getBillingRecords(){
  window.__gtCanonicalAttendancePullV903=pull;
  window.__gtCanonicalAttendancePushV903=push;
  setInterval(()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();},2000);
- // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
 })();
 
 // v767 – keep billing screens in sync across devices. Unlike attendance,
@@ -8915,7 +8918,7 @@ function getBillingRecords(){
       }
     }catch(_){}
   },2000);
-  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
+  document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible' && window.gtSyncBillingSupabase){
       try{ window.gtSyncBillingSupabase(); }catch(_){}
     }
@@ -9179,7 +9182,7 @@ function trainingBilling(){
 
       <div class="billing-note">Dlžné: <b>${debt} €</b> — do sumy odovzdávanej klubu sa nezapočítava.</div>
 
-      <button type="button" id="saveTrainingBillingBtn" id="saveTrainingBillingBtn" class="confirm-billing" onclick="return saveTrainingBilling()">✓ ULOŽIŤ VYÚČTOVANIE</button>
+      <button type="button" id="saveTrainingBillingBtn" id="saveTrainingBillingBtn-1" class="confirm-billing" onclick="return saveTrainingBilling()">✓ ULOŽIŤ VYÚČTOVANIE</button>
     </main>
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
@@ -9189,7 +9192,7 @@ function trainingBilling(){
       <a class="nav active" href="#trainer-month" onclick="return openMyBilling()" data-nav="billing"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
     </nav>
-    <div id="toast" class="toast"></div>`;
+    <div id="toast-8" class="toast"></div>`;
 }
 
 function commitRegistrationDraftsForCurrentTraining(){
@@ -10399,7 +10402,7 @@ function showHeadTrainerMembershipReport(){
       .total{font-size:9px;font-weight:bold;border-top:1px solid #111;padding-top:4px;margin-top:5px;text-align:right}
       @media print{body{padding:0}}
     </style>
-<style id="v491-final-navigation">
+<style id="v491-final-navigation-1">
 /* v491: trainer/admin always have 6; head always 5 */
 body:not(.head-readonly) .bottom .nav-attendance{display:block!important;}
 body:not(.head-readonly) .bottom{grid-template-columns:repeat(6,minmax(0,1fr))!important;}
@@ -10407,7 +10410,7 @@ body.head-readonly .bottom .nav-attendance{display:none!important;}
 body.head-readonly .bottom{grid-template-columns:repeat(5,minmax(0,1fr))!important;}
 </style>
 
-<style id="v495-fixed-role-navigation">
+<style id="v495-fixed-role-navigation-1">
 /* v495: pevná spodná navigácia podľa role na všetkých obrazovkách */
 body:not(.head-readonly) .bottom { grid-template-columns: repeat(6,minmax(0,1fr)) !important; }
 body:not(.head-readonly) .bottom .nav-attendance { display:block !important; }
@@ -10419,7 +10422,7 @@ body.head-readonly .bottom .nav-attendance { display:none !important; }
 .pay-btn.billing-locked{opacity:.82!important;filter:saturate(.7)!important;cursor:not-allowed!important;}
 </style>
 
-<style id="gt-v640-inline-dark-fix">
+<style id="gt-v640-inline-dark-fix-1">
 html,body{color-scheme:dark!important;}
 .member-month-history-row.member-month-click{background:#0a0a0a!important;background-color:#0a0a0a!important;color:#eee!important;}
 </style>
@@ -10447,7 +10450,7 @@ html,body{color-scheme:dark!important;}
       </table>
       <div class="total">${total}</div>
     
-<script>\n(function(){\n  let CARD_CLASSES = [
+\x3cscript>\n(function(){\n  let CARD_CLASSES = [
     'training','q','info-bar','calendar-card','day-trainings','day-row','finance','att-group',
     'member-row','member-hero','member-detail-box','profile-card','profile-info','trainer-row',
     'billing-card','billing-summary','billing-row','stats-card','stat-card','more-card','settings-card',
@@ -10927,8 +10930,7 @@ window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }
   }
   
   // 2. Funkcia na auto-pull keď príde zmena z iného mobilu
-  window.__gtAutoPullAttendance = async function(source){ return false; };
-window.__gtAutoPullAttendance_DISABLED = async function(source){
+  window.__gtAutoPullAttendance = async function(source){
     console.log('[AutoRefresh] pulling attendance due to', source);
     try{
       // If on attendance screen, pull and refresh
@@ -11014,7 +11016,7 @@ window.__gtAutoPullAttendance_DISABLED = async function(source){
 
 
 // v958: force pull when returning to app (fixes tab switching sync)
-// v970 disabled visibility auto pull - document.addEventListener('visibilitychange', ()=>{
+document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='visible'){
     if(location.hash.includes('attendance')){
       console.log('[v958] tab visible -> force pull');
@@ -12818,7 +12820,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 
 
 /* v777 – mesačná tabuľka: zachovať horizontálnu pozíciu po prekreslení.
-   Dôležité: tento kód je priamo v hlavnom JS bloku, nie ako vnorený <script>.
+   Dôležité: tento kód je priamo v hlavnom JS bloku, nie ako vnorený \x3cscript>.
    Predchádzajúca v775 týmto predčasne ukončila hlavný script a zobrazovala starý kód. */
 (function installMonthlyScrollPersistenceV776(){
   if(window.__gtMonthlyScrollPersistenceV776) return;
@@ -13254,7 +13256,8 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     .observe(document.documentElement,{subtree:true,childList:true,attributes:true});
 })();
 </script>
-</html>
+
+
 <style>
 .day.selected span{
   background:transparent!important;
@@ -13666,3 +13669,5 @@ body.head-readonly .bottom.head-billing-nav .nav-attendance { display: none !imp
   .photo-btn{left:51px!important;right:auto!important;}
 }
 </style>
+
+</html>

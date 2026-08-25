@@ -6040,11 +6040,12 @@ function selectScheduleColor(c){
  document.querySelectorAll('.schedule-color').forEach(b=>b.classList.toggle('selected',b.dataset.color===c));
 }
 
-/* v720 – shared schedule/rozvrh sync. Supabase is the single source of truth. */
+/* v950 – FIXED multi-device schedule sync – Supabase is single source of truth, no local overwrite race */
 (function installSupabaseScheduleSync(){
   if(window.__gtScheduleSupabaseSyncInstalled) return;
   window.__gtScheduleSupabaseSyncInstalled=true;
-  let inFlight=false, seeded=false;
+  let pullInFlight=false, pushInFlight=false;
+  let lastPullHash='';
   function url(){return String(window.GT_SUPABASE_URL||'').trim()}
   function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
   function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
@@ -6079,7 +6080,8 @@ function selectScheduleColor(c){
       trainerIds:Array.isArray(r.trainer_ids)?r.trainer_ids.map(Number):[],
       trainers:Array.isArray(r.trainers)?r.trainers:[], trainerId:r.trainer_id==null?null:Number(r.trainer_id),
       trainer:r.trainer||'', color:r.color||'gold', trainingFee:Number(r.training_fee??5),
-      trainerReward:Number(r.trainer_reward??2)
+      trainerReward:Number(r.trainer_reward??2),
+      updated_at:r.updated_at||''
     };
   }
   async function request(path,opts){
@@ -6089,75 +6091,91 @@ function selectScheduleColor(c){
     if(!r.ok) throw new Error('server odmietol požiadavku ('+r.status+'). '+text.slice(0,220));
     return text?JSON.parse(text):[];
   }
-  async function pull(){
-    if(inFlight){
-      if(window.__gtExplicitAttendanceRefresh && window.__gtAttendancePullPromise)
-        return await window.__gtAttendancePullPromise;
-      return false;
+  async function pull(force){
+    if(pullInFlight) return false;
+    // Neťahaj keď práve ukladáme, a keď je otvorený editor rozvrhu
+    if(!force && document.querySelector('.schedule-page') && !document.querySelector('.schedule-manager-page') && !document.querySelector('.calendar-page') && !document.querySelector('.home-page')){
+       // ak je otvorený create/edit formulár, neprepisuj
+       if(window.currentScheduleEditId!=null || document.getElementById('schName')) return false;
     }
     let h=headers(); if(!h||!url()) return false;
-    inFlight=true;
+    pullInFlight=true;
     try{
-      let rows=await request('/rest/v1/schedule_templates?select=*&order=id.asc');
-      let local=getSavedSchedules();
-      if(!rows.length && local.length && !seeded){
-        for(let x of local) await request('/rest/v1/schedule_templates?on_conflict=id',{
-          method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload(x))
-        });
-        seeded=true;
-        try{localStorage.setItem('gt-schedule-seeded','1')}catch(_){}
+      let rows=await request('/rest/v1/schedule_templates?select=*&order=updated_at.desc, id.asc');
+      // jednoduchý hash aby sme nerenderovali ak sa nič nezmenilo
+      let hash = JSON.stringify(rows.map(r=>r.id+':'+(r.updated_at||'')));
+      if(hash===lastPullHash && !force) return true;
+      lastPullHash=hash;
+      let isSeeded = false;
+      try{isSeeded=localStorage.getItem('gt-schedule-seeded')==='1'}catch(_){}
+      // seed len raz, len ak server prázdny a my máme lokálne dáta
+      if(!rows.length){
+        let local=getSavedSchedules();
+        if(local.length && !isSeeded){
+          for(let x of local){
+            await request('/rest/v1/schedule_templates?on_conflict=id',{
+              method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload(x))
+            });
+          }
+          try{localStorage.setItem('gt-schedule-seeded','1')}catch(_){}
+          return true;
+        }
+        if(!local.length){
+          // server prázdny, local prázdny -> vyčisti
+          localStorage.setItem('gt-schedule',JSON.stringify([]));
+          window.guardSchedule=[];
+          if(typeof renderHome==='function') renderHome();
+          return true;
+        }
         return true;
       }
-      if(rows.length || local.length===0){
-        let next=rows.map(fromRow);
-        localStorage.setItem('gt-schedule',JSON.stringify(next));
-        window.guardSchedule=next;
-        syncTrainerGroupsFromSchedules();
-        // Re-render only the schedule views. Do not touch the create/edit form.
-        if(typeof renderCalendar==='function' && (location.hash==='#calendar' || document.querySelector('.calendar-page'))) renderCalendar();
-        if(typeof openScheduleManager==='function' && document.querySelector('.schedule-manager-page')) openScheduleManager();
-        // Realtime/polling must also refresh Domov: its training cards are derived from the same schedule.
-        if((location.hash==='' || location.hash==='#home') && typeof renderHome==='function') renderHome();
-      }
-      seeded=true;
+      // SERVER MÁ DÁTA -> SERVER JE PRAVDA, prepíš local
+      let next=rows.map(fromRow).sort((a,b)=>a.id-b.id);
+      localStorage.setItem('gt-schedule',JSON.stringify(next));
+      window.guardSchedule=next;
+      try{localStorage.setItem('gt-schedule-seeded','1')}catch(_){}
+      if(typeof syncTrainerGroupsFromSchedules==='function') syncTrainerGroupsFromSchedules();
+      if(typeof renderCalendar==='function' && (location.hash==='#calendar' || document.querySelector('.calendar-page'))) renderCalendar();
+      if(typeof openScheduleManager==='function' && document.querySelector('.schedule-manager-page')) openScheduleManager();
+      if((location.hash==='' || location.hash==='#home' || document.querySelector('.home-page')) && typeof renderHome==='function') renderHome();
       return true;
     }catch(e){showErr(e);return false}
-    finally{inFlight=false}
+    finally{pullInFlight=false}
   }
   window.gtSaveScheduleSupabase=async function(x){
+    if(pushInFlight) { await new Promise(r=>setTimeout(r,300)); }
+    pushInFlight=true;
     try{
-      inFlight=true;
       await request('/rest/v1/schedule_templates?on_conflict=id',{
         method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload(x))
       });
+      lastPullHash=''; // vynúť refresh
+      setTimeout(()=>pull(true),400);
       return true;
     }catch(e){showErr(e);return false}
-    finally{inFlight=false}
+    finally{pushInFlight=false}
   };
   window.gtDeleteScheduleSupabase=async function(id){
+    pushInFlight=true;
     try{
-      inFlight=true;
       await request('/rest/v1/schedule_templates?id=eq.'+encodeURIComponent(Number(id)),{
         method:'DELETE',headers:{'Prefer':'return=minimal'}
       });
+      lastPullHash='';
+      setTimeout(()=>pull(true),400);
       return true;
     }catch(e){showErr(e);return false}
-    finally{inFlight=false}
+    finally{pushInFlight=false}
   };
-  window.gtPullSchedulesSupabase=pull;
-  // Supabase Realtime: schedule changes arrive without waiting for refresh.
-  try{
-    if(window.supabase && typeof window.supabase.channel==='function'){
-      window.supabase.channel('gt-schedule-realtime')
-        .on('postgres_changes',{event:'*',schema:'public',table:'schedule_templates'},async()=>{ await pull(); if(typeof renderHome==='function' && (location.hash==='' || location.hash==='#home')) renderHome(); })
-        .subscribe();
-    }
-  }catch(e){ console.warn('Supabase schedule realtime unavailable; polling remains active.',e); }
+  window.gtPullSchedulesSupabase=(force)=>pull(force===true);
+  // polling - 3s namiesto 700ms aby nevznikol race
   let tries=0;
-  let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=20)clearInterval(timer)},1200);
-  setInterval(()=>{try{if(token())pull()}catch(_){}} ,700);
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pull()});
-  window.addEventListener('focus',()=>pull());
+  let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=15)clearInterval(timer)},1500);
+  setInterval(()=>{try{if(token()) pull()}catch(_){}} ,3000);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
+  window.addEventListener('focus',()=>pull(true));
+  // Ak máte Supabase Realtime zapnuté v dashboardu, odkomentujte a pridajte supabase-js client
+  // Tento kód ostáva kompatibilný aj bez neho vďaka pollingu
 })();
 
 async function saveSchedule(){
@@ -10745,6 +10763,58 @@ html,body{color-scheme:dark!important;}
 }
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
+
+
+/* v951 – INSTANT REALTIME for 3 trainers */
+(function initInstantRealtime(){
+  if(window.__gtRealtimeInit) return;
+  window.__gtRealtimeInit=true;
+  // load supabase-js if not present
+  function loadSupabaseJs(cb){
+    if(window.supabase && window.supabase.createClient) { cb(); return; }
+    var s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.43.4/dist/umd/supabase.min.js';
+    s.onload=cb;
+    s.onerror=function(){ console.warn('Supabase-js failed to load, polling remains'); };
+    document.head.appendChild(s);
+  }
+  loadSupabaseJs(function(){
+    try{
+      var url=String(window.GT_SUPABASE_URL||'').trim();
+      var key=String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
+      if(!url||!key) return;
+      var client = window.supabase.createClient(url, key, {
+        auth: { persistSession: true, autoRefreshToken: true, storageKey: 'gt-supabase-auth' }
+      });
+      window.gtSupabaseClient=client;
+      // copy session token to our custom storage if needed
+      client.auth.onAuthStateChange(function(event, session){
+        try{
+          if(session && session.access_token){
+            localStorage.setItem('gt-supabase-access-token', session.access_token);
+            if(session.refresh_token) localStorage.setItem('gt-supabase-refresh-token', session.refresh_token);
+            localStorage.setItem('gt-supabase-session-json', JSON.stringify(session));
+          }
+        }catch(_){}
+      });
+      // subscribe to all important tables
+      var tables=['schedule_templates','members','attendance','billing_records','billing','groups','member_groups','applications'];
+      tables.forEach(function(tbl){
+        try{
+          client.channel('gt-'+tbl+'-realtime')
+            .on('postgres_changes',{event:'*',schema:'public',table:tbl}, function(payload){
+              console.log('[Realtime] '+tbl+' change', payload.eventType);
+              if(tbl==='schedule_templates' && window.gtPullSchedulesSupabase) window.gtPullSchedulesSupabase(true);
+              if(tbl==='members' && window.gtSyncMembersSupabase) window.gtSyncMembersSupabase();
+              if(tbl==='attendance' && window.gtSyncAttendanceSupabase) window.gtSyncAttendanceSupabase();
+              if((tbl==='billing_records'||tbl==='billing') && window.gtSyncBillingSupabase) window.gtSyncBillingSupabase();
+            }).subscribe();
+        }catch(e){ console.warn('Realtime sub failed for '+tbl, e); }
+      });
+      console.log('✅ Guard Trainer Realtime active for 3 trainers');
+    }catch(e){ console.warn('Realtime init failed', e); }
+  });
+})();
 
 </body>
 <style id="v650-statistika-fit-final">

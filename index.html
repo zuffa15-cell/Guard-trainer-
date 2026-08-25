@@ -6826,18 +6826,26 @@ function attendanceDirtyKey(){
 }
 function markAttendanceDirty(){
   try{
-    window.__gtUnsavedAttendanceKey=attendanceDirtyKey();
+    const k=attendanceDirtyKey();
+    window.__gtUnsavedAttendanceKey=k;
+    // Persist only the fact that this training has an unsaved local edit.
+    // The actual local attendance is already stored by saveCurrentTrainingAttendance().
+    sessionStorage.setItem('gt-unsaved-attendance-key-v924',k);
   }catch(_e){}
 }
 function isAttendanceDirtyForCurrentTraining(){
   try{
-    return String(window.__gtUnsavedAttendanceKey||'')===attendanceDirtyKey();
+    const k=attendanceDirtyKey();
+    return String(window.__gtUnsavedAttendanceKey||sessionStorage.getItem('gt-unsaved-attendance-key-v924')||'')===k;
   }catch(_e){ return false; }
 }
 function clearAttendanceDirty(){
   try{
-    if(String(window.__gtUnsavedAttendanceKey||'')===attendanceDirtyKey())
+    const k=attendanceDirtyKey();
+    if(String(window.__gtUnsavedAttendanceKey||sessionStorage.getItem('gt-unsaved-attendance-key-v924')||'')===k){
       window.__gtUnsavedAttendanceKey='';
+      sessionStorage.removeItem('gt-unsaved-attendance-key-v924');
+    }
   }catch(_e){}
 }
 
@@ -7354,16 +7362,23 @@ function attendance(){
     </nav>
     <div id="toast" class="toast"></div>`;
   updateAttendanceTotals();
-  // Every opening starts from the current server state. The pull then stores
-  // that state locally as the baseline for this editing session.
-  clearAttendanceDirty();
-  (async()=>{
+  // Opening Dochádzka: if this training has an unsaved local edit, restore
+  // that local edit and DO NOT pull the server over it. Otherwise this is a
+  // fresh session, so pull the server state and use it as the local baseline.
+  if(isAttendanceDirtyForCurrentTraining()){
     try{
-      if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-      if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase();
-      else if(window.gtStartAttendanceSupabaseSync) await window.gtStartAttendanceSupabaseSync();
-    }catch(e){ console.warn('Attendance open sync:',e); }
-  })();
+      loadAttendanceFromMembers();
+      refreshAttendance();
+    }catch(e){ console.warn('Attendance local restore:',e); }
+  }else{
+    (async()=>{
+      try{
+        if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
+        if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase();
+        else if(window.gtStartAttendanceSupabaseSync) await window.gtStartAttendanceSupabaseSync();
+      }catch(e){ console.warn('Attendance open sync:',e); }
+    })();
+  }
 }
 function groupClass(g){ return g==='A'?'a':g==='B'?'b':g==='C'?'c':g==='D'?'d':'dp'; }
 function openAttendanceMemberProfile(index){

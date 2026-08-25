@@ -7284,14 +7284,22 @@ async function refreshAttendanceAppV918(){
 
     await window.gtSyncAttendanceSupabase();
 
-    // The canonical v903 live poll must NOT immediately overwrite the freshly
-    // downloaded snapshot. It is only allowed to run again after this explicit
-    // refresh has completed.
-    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function')
-      saveCurrentTrainingAttendanceLocalOnly(false);
+    // v936: the explicit refresh is authoritative. Keep the exact state
+    // returned by the server as this device's local attendance snapshot.
+    // Do not call attendance() or rebuild from membersData here.
+    try{
+      if(typeof saveCurrentTrainingAttendanceLocalOnly==='function'){
+        saveCurrentTrainingAttendanceLocalOnly(false);
+      }
+    }catch(_e){}
 
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+
+    // The canonical v903 live poll must NOT immediately overwrite the freshly
+    // downloaded snapshot. It is only allowed to run again after this explicit
+    // refresh has completed.
+    // v936: render/save was already done immediately after the server pull.
   }catch(e){
     console.error('Guard Trainer attendance refresh:',e);
     if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');

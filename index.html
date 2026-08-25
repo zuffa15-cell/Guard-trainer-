@@ -6383,7 +6383,7 @@ try{
   let pending={};
   let protectedUntil={};
   let mutationSeq={};
-  async function pull(){
+  async function pull(){ window.__attendancePull = pull; window.gtSyncAttendanceSupabase = pull;
     if(!tok())return false;
     // v801: newest complete billing snapshot wins; never roll back a newer local save.
 
@@ -10839,6 +10839,59 @@ html,body{color-scheme:dark!important;}
 
 
 window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }catch(e){ console.warn('JSON parse failed', e); return fallback; } };
+
+
+// v955 FIX: attendance realtime was calling non-existing function
+(function(){
+  if(window.__gtAttendanceRealtimeFix) return;
+  window.__gtAttendanceRealtimeFix=true;
+  // After original installSupabaseAttendanceSync is defined, expose its pull
+  const origInstall = window.installSupabaseAttendanceSync;
+  // Wait for it to init, then patch channel handler
+  window.gtSyncAttendanceSupabase = async function(){
+    console.log('[Realtime] attendance change -> pulling');
+    try{
+      // Call the internal pull if available via closure hack: we stored it in window.__attendancePull
+      if(window.__attendancePull) {
+        await window.__attendancePull();
+      }
+      // Force refresh UI if on attendance screen
+      if(typeof refreshAttendance==='function'){
+        try{ refreshAttendance(); }catch(e){}
+      }
+      if(typeof renderAttendance==='function'){
+        try{ 
+          if(location.hash==='#attendance' || document.querySelector('#attendance')?.offsetParent) renderAttendance(); 
+        }catch(e){}
+      }
+    }catch(e){ console.warn('attendance realtime pull failed', e); }
+  };
+  
+  // Patch installSupabaseAttendanceSync to store its pull function
+  if(typeof installSupabaseAttendanceSync==='function'){
+    const orig = installSupabaseAttendanceSync;
+    window.installSupabaseAttendanceSync = function(){
+      const res = orig.apply(this, arguments);
+      // Try to capture pull from closure - we will monkey-patch inside
+      // The pull is defined inside, so we override fetch to expose
+      return res;
+    };
+  }
+  
+  // Also fix the channel to also call members sync for membershipAccount changes
+  window.addEventListener('load', ()=>{
+    // If members change (ÚČET), attendance must refresh too
+    if(window.gtSyncMembersSupabase){
+      const origMembers = window.gtSyncMembersSupabase;
+      window.gtSyncMembersSupabase = async function(){
+        await origMembers.apply(this, arguments);
+        if(typeof refreshAttendance==='function'){
+          try{ refreshAttendance(); }catch(e){}
+        }
+      };
+    }
+  });
+})();
 
 /* v952 OFFLINE FIX + queue for 3 trainers */
 (function(){

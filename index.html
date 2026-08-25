@@ -7338,19 +7338,21 @@ window.__gtAutoPullAttendance = async function(source){
 };
 
 function attendance(){
-  // v962 SIMPLE: try load full attendance from server immediately
+  // v963 SIMPLE: load real data from server, not old local cache
   setTimeout(async ()=>{
     try{
+      // First sync billing to get latest simple records
+      if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase().catch(()=>{});
       if(window.__gtSimpleSync && window.__gtSimpleSync.loadFullAttendance){
         let ok = await window.__gtSimpleSync.loadFullAttendance();
         if(ok){
-          console.log('[SIMPLE] attendance loaded from server');
+          console.log('[SIMPLE v963] applied real attendance from server');
           if(typeof renderAttendance==='function') renderAttendance();
           if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
         }
       }
-    }catch(e){}
-  }, 800);
+    }catch(e){ console.warn('v963 initial load failed', e); }
+  }, 1000);
 
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.

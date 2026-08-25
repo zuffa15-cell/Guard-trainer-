@@ -2817,7 +2817,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 
 <script>
 /* v457 – FIX: trainer calendar permissions use profile-assigned groups */
-let APP_START_DATE = '2020-01-01';
+let APP_START_DATE = '2026-05-08';
 function appToday(){
   let d=new Date();
   return {year:d.getFullYear(),month:d.getMonth()+1,day:d.getDate(),
@@ -2831,8 +2831,9 @@ function appStartDate(){
 }
 function clampToAppRange(date){
   let d=new Date(date.getFullYear(),date.getMonth(),date.getDate());
-  let start=appStartDate();
+  let today=appTodayDate(), start=appStartDate();
   if(d<start) return start;
+  if(d>today) return today;
   return d;
 }
 function formatAppDate(date){
@@ -4487,6 +4488,10 @@ loadPersistedMembers();
       registration_amount:Number(m.registrationAmount||0)||null,
       registration_date:iso(m.registrationDate||''),
       registration_group:String(m.registrationPaidGroup||'')||null,
+      membership_account_amount:Number(m.membershipAccountAmount||0)||null,
+      membership_account_date:toIsoDate(m.membershipAccountDate||''),
+      registration_account_amount:Number(m.registrationAccountAmount||0)||null,
+      registration_account_date:toIsoDate(m.registrationAccountDate||''),
       application_date:toIsoDate(m.applicationDate||''),
       club_join_date:toIsoDate(m.memberSince||''),
       active:m.active!==false, archived:!!m.archived, note:String(m.note||'')||null,
@@ -4504,7 +4509,7 @@ loadPersistedMembers();
     if(window.__gtMemberPaymentWriteInFlight) return false;
     // Dochádzka is edited offline. While it is open, never pull member data
     // from Supabase and overwrite the trainer's in-progress changes.
-    if(document.querySelector('.attendance-page')) return false;
+    if(document.querySelector('.attendance-page') && !window.__gtExplicitAttendanceRefresh) return false;
     if(syncInFlight) return false;
     syncInFlight=true;
     let syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
@@ -4611,10 +4616,10 @@ loadPersistedMembers();
   // back to the server. It also refreshes when the app becomes visible again.
   // v953 removed duplicate 2s poll - replaced by Realtime
   // setInterval removed
-  document.addEventListener('visibilitychange',()=>{
+  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){ try{ if(token()) sync(); }catch(e){} }
   });
-  window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
+  // v970 disabled focus auto pull - window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
   window.gtSyncMembersSupabase=sync;
 })();
 loadMemberNotes();
@@ -6173,8 +6178,8 @@ function selectScheduleColor(c){
   let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=15)clearInterval(timer)},1500);
   // v953 removed duplicate 3s pull - replaced by Realtime
   // setInterval removed
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
-  window.addEventListener('focus',()=>pull(true));
+  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
+  // v970 disabled focus auto pull - window.addEventListener('focus',()=>pull(true));
   // Ak máte Supabase Realtime zapnuté v dashboardu, odkomentujte a pridajte supabase-js client
   // Tento kód ostáva kompatibilný aj bez neho vďaka pollingu
 })();
@@ -6773,7 +6778,12 @@ try{
   // Previously this hook was disabled, so another device never loaded the
   // saved DLŽNÉ / PRIHLÁŠKA state. Local edits are still pushed only by
   // ULOŽIŤ VYÚČTOVANIE, but opening/returning to Dochádzka performs a fresh pull.
-  window.gtStartAttendanceSupabaseSync=function(){
+  
+window.gtStartAttendanceSupabaseSync=function(){
+  // v970 - vypnuté automatické sťahovanie, len manuálne ↻
+  return Promise.resolve(false);
+};
+window.gtStartAttendanceSupabaseSync_ORIG=function(){
     if(!tok()) return Promise.resolve(false);
 
     // V917: never drop a refresh request just because another pull is running.
@@ -6800,7 +6810,7 @@ try{
       }
     });
   };
-  window.__gtAttendanceSyncTimer=null;
+  window.__gtAttendanceSyncTimer=null; // v970 disabled auto sync to stop blinking
   // No automatic visibility/background pull. Attendance is local while editing;
   // the user explicitly requests a server download with ↻.
 
@@ -7288,28 +7298,33 @@ function applyBillingSnapshotToAttendance(){
 
 async function refreshAttendanceAppV918(){
   const btn=document.querySelector('.attendance-page .calendar-head button');
-  if(btn){ btn.disabled=true; btn.textContent='…'; }
+  if(btn && btn.dataset.refreshing==='1') return false;
+  if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
   try{
-    if(window.__gtReal && window.__gtReal.load){
-      let ok = await window.__gtReal.load();
-      if(ok){
-        if(typeof renderAttendance==='function') renderAttendance();
-        if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-        if(typeof toast==='function') toast('Dochádzka aktualizovaná ✓');
-        return false;
-      }
+    window.__gtExplicitAttendanceRefresh=true;
+    // Len jeden pull, nie dva - aby neblikalo
+    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
+    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
+    if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase();
+    // Dochádzku stiahni len raz
+    if(window.gtStartAttendanceSupabaseSync_ORIG){
+      await window.gtStartAttendanceSupabaseSync_ORIG();
     }
-    if(typeof toast==='function') toast('Na serveri nie je uložená dochádzka');
+    if(typeof renderAttendance==='function') renderAttendance();
+    if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+    if(typeof toast==='function') toast('Dochádzka stiahnutá ✓');
   }catch(e){
     if(typeof toast==='function') toast('Chyba: '+e.message);
   }finally{
-    if(btn){ btn.disabled=false; btn.textContent='↻'; }
+    window.__gtExplicitAttendanceRefresh=false;
+    if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
   }
   return false;
 }
 
 // Also fix auto-refresh to use same logic
-window.__gtAutoPullAttendance = async function(source){
+window.__gtAutoPullAttendance = async function(source){ return false; };
+window.__gtAutoPullAttendance_DISABLED = async function(source){
   console.log('[v959 Auto] pulling due to', source);
   try{
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
@@ -7325,130 +7340,6 @@ window.__gtAutoPullAttendance = async function(source){
       toast('Dochádzka aktualizovaná z iného zariadenia ✓');
     }
   }catch(e){ console.warn('v959 auto pull failed', e); }
-};
-
-
-// v968 - VYPNI VSETKO STARE, NECHAJ LEN REAL
-window.__gtAttendancePull = async function(){ return false; };
-window.gtSyncAttendanceSupabase = async function(){ return false; };
-window.gtStartAttendanceSupabaseSync = function(){ return Promise.resolve(false); };
-window.__gtAutoPullAttendance = async function(){ return false; };
-if(window.__gtAttendanceSyncTimer){ clearInterval(window.__gtAttendanceSyncTimer); window.__gtAttendanceSyncTimer=null; }
-
-// Vypni stary member sync na dochadzke
-let _origInstall = window.installSupabaseMembersSync || null;
-
-
-// v968 - JEDNA DOCHADZKA, ZIADNE BLIKANIE
-window.__gtReal = {
-  save: async function(){
-    if(!attendanceState || !attendanceState.date || !attendanceState.group) return;
-    let d = String(attendanceState.date);
-    let norm = d;
-    if(d.indexOf('.')>-1){
-      let p=d.replace(/ /g,'').split('.');
-      if(p.length>=3) norm=p[2]+'-'+p[1].padStart(2,'0')+'-'+p[0].padStart(2,'0');
-    }
-    let key = norm+'|'+attendanceState.group;
-    let payload = {
-      date: norm,
-      group: attendanceState.group,
-      members: JSON.parse(JSON.stringify(attendanceState.members||[])),
-      savedAt: Date.now()
-    };
-    try{ localStorage.setItem('gt-one|'+key, JSON.stringify(payload)); }catch(e){}
-    // prepíš lokálnu históriu aby neblikala
-    try{
-      let tKey = typeof trainingAttendanceKey==='function' ? trainingAttendanceKey() : key;
-      if(typeof trainingAttendanceByGroup!=='undefined'){
-        trainingAttendanceByGroup[tKey] = {};
-        payload.members.forEach(function(m){
-          trainingAttendanceByGroup[tKey][m.surname+'|'+m.name] = {
-            training: !!m.training,
-            trainingAccount: !!m.trainingAccount,
-            newMember: !!m.newMember,
-            debt: Number(m.debt||0),
-            debtReason: String(m.debtReason||''),
-            application: !!m.application,
-            applicationDate: String(m.applicationDate||'')
-          };
-        });
-        if(typeof persistTrainingAttendanceHistory==='function') persistTrainingAttendanceHistory();
-      }
-    }catch(e){}
-    try{
-      let token=''; try{token=localStorage.getItem('gt-supabase-access-token')||''}catch(e){}
-      let apikey=String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
-      let url=String(window.GT_SUPABASE_URL).trim();
-      if(token && apikey){
-        await window.gtSupabaseFetch(url+'/rest/v1/billing_records?on_conflict=record_key',{
-          method:'POST',
-          headers:{'apikey':apikey,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
-          body: JSON.stringify({
-            record_key: 'ONE|'+key,
-            trainer: 'shared',
-            training_date: norm,
-            group_code: attendanceState.group,
-            payload: payload,
-            updated_at: new Date().toISOString()
-          })
-        });
-        console.log('ONE saved', key);
-      }
-    }catch(e){ console.warn(e); }
-  },
-  load: async function(){
-    if(!attendanceState || !attendanceState.date || !attendanceState.group) return false;
-    let d = String(attendanceState.date);
-    let norm = d;
-    if(d.indexOf('.')>-1){
-      let p=d.replace(/ /g,'').split('.');
-      if(p.length>=3) norm=p[2]+'-'+p[1].padStart(2,'0')+'-'+p[0].padStart(2,'0');
-    }
-    let key = norm+'|'+attendanceState.group;
-    let found=null;
-    try{
-      let token=''; try{token=localStorage.getItem('gt-supabase-access-token')||''}catch(e){}
-      let apikey=String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
-      let url=String(window.GT_SUPABASE_URL).trim();
-      if(token && apikey){
-        let r = await window.gtSupabaseFetch(url+'/rest/v1/billing_records?record_key=eq.'+encodeURIComponent('ONE|'+key)+'&select=payload&limit=1',{
-          headers:{'apikey':apikey,'Authorization':'Bearer '+token}
-        });
-        if(r.ok){
-          let rows=await r.json();
-          if(rows && rows[0] && rows[0].payload && rows[0].payload.members) found=rows[0].payload;
-        }
-      }
-    }catch(e){}
-    if(!found){
-      try{ let raw=localStorage.getItem('gt-one|'+key); if(raw) found=JSON.parse(raw); }catch(e){}
-    }
-    if(!found || !found.members) return false;
-    // FULL REPLACE - žiadny merge, žiadne blikanie
-    attendanceState.members = found.members.map(function(m){ return Object.assign({}, m); });
-    // prepíš históriu
-    try{
-      let tKey = typeof trainingAttendanceKey==='function' ? trainingAttendanceKey() : key;
-      if(typeof trainingAttendanceByGroup!=='undefined'){
-        trainingAttendanceByGroup[tKey] = {};
-        attendanceState.members.forEach(function(m){
-          trainingAttendanceByGroup[tKey][m.surname+'|'+m.name] = {
-            training: !!m.training,
-            trainingAccount: !!m.trainingAccount,
-            newMember: !!m.newMember,
-            debt: Number(m.debt||0),
-            debtReason: String(m.debtReason||''),
-            application: !!m.application,
-            applicationDate: String(m.applicationDate||'')
-          };
-        });
-        if(typeof persistTrainingAttendanceHistory==='function') persistTrainingAttendanceHistory();
-        if(typeof clearAttendanceDirty==='function') clearAttendanceDirty();
-      }
-    }catch(e){}
-    return true;
-  }
 };
 
 function attendance(){
@@ -7480,13 +7371,6 @@ function attendance(){
     attendanceState.billingAttendanceSnapshot=null;
   }
   loadAttendanceFromMembers();
-  // v968 - skús ONE sync hneď, synchronne z localStorage
-  try{
-    let d=String(attendanceState.date); let norm=d; if(d.indexOf(".")>-1){ let p=d.replace(/ /g,"").split("."); if(p.length>=3) norm=p[2]+"-"+p[1].padStart(2,"0")+"-"+p[0].padStart(2,"0"); }
-    let key=norm+"|"+attendanceState.group;
-    let raw=localStorage.getItem("gt-one|"+key);
-    if(raw){ let found=JSON.parse(raw); if(found && found.members){ attendanceState.members = found.members.map(function(m){ return Object.assign({}, m); }); } }
-  }catch(e){}
   if(committedBeforeMembers){
     attendanceState.billingRecordSnapshot=committedBeforeMembers;
     applyBillingSnapshotToAttendance();
@@ -8665,8 +8549,6 @@ function normalizeMonthlyBillingRecords(){
   let map=new Map();
   let norm=s=>String(s||'').trim().toUpperCase();
   (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
-    let rk = String(r.record_key||'').toUpperCase();
-    if(rk.indexOf('ONE|')===0 || rk.indexOf('REAL|')===0 || rk.indexOf('SIMPLE|')===0) return;
     let d=parsePaymentDate(r.date);
     if(!d) return;
     let trainer=String(r.trainer||CURRENT_TRAINER_NAME||'').trim();
@@ -8889,7 +8771,7 @@ function getBillingRecords(){
   window.__gtPullExactTraining= pullExactTraining;
   setInterval(pullExactTraining,2000);
 
-  document.addEventListener('visibilitychange',()=>{
+  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible') pullExactTraining();
   });
 })();
@@ -8897,7 +8779,7 @@ function getBillingRecords(){
 // Bidirectional attendance refresh: when the first device returns to the
 // foreground, immediately pull the exact shared billing record before waiting
 // for the next 2-second polling tick.
-document.addEventListener('visibilitychange',()=>{
+// v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState!=='visible') return;
   try{
     if(!window.__attendanceOpenedFromBillingRecord) return;
@@ -8997,7 +8879,7 @@ document.addEventListener('visibilitychange',()=>{
  window.__gtCanonicalAttendancePullV903=pull;
  window.__gtCanonicalAttendancePushV903=push;
  setInterval(()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();},2000);
- document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
+ // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
 })();
 
 // v767 – keep billing screens in sync across devices. Unlike attendance,
@@ -9033,7 +8915,7 @@ document.addEventListener('visibilitychange',()=>{
       }
     }catch(_){}
   },2000);
-  document.addEventListener('visibilitychange',()=>{
+  // v970 disabled visibility auto pull - document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible' && window.gtSyncBillingSupabase){
       try{ window.gtSyncBillingSupabase(); }catch(_){}
     }
@@ -9394,7 +9276,6 @@ async function saveTrainingBilling(){
   try{ syncAllRegistrationBillingFromMembers(); }catch(e){ console.warn('registration billing sync:',e); }
   // Persist the exact edited attendance state before leaving the screen.
   saveCurrentTrainingAttendanceLocalOnly();
-  try{ if(window.__gtReal && window.__gtReal.save) window.__gtReal.save().catch(function(){}); }catch(e){}
   let fee=trainingFee();
   let paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
   let trainingPaid=attendanceState.members.filter(m=>m.training&&!m.trainingAccount).length;
@@ -11046,7 +10927,8 @@ window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }
   }
   
   // 2. Funkcia na auto-pull keď príde zmena z iného mobilu
-  window.__gtAutoPullAttendance = async function(source){
+  window.__gtAutoPullAttendance = async function(source){ return false; };
+window.__gtAutoPullAttendance_DISABLED = async function(source){
     console.log('[AutoRefresh] pulling attendance due to', source);
     try{
       // If on attendance screen, pull and refresh
@@ -11132,7 +11014,7 @@ window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }
 
 
 // v958: force pull when returning to app (fixes tab switching sync)
-document.addEventListener('visibilitychange', ()=>{
+// v970 disabled visibility auto pull - document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='visible'){
     if(location.hash.includes('attendance')){
       console.log('[v958] tab visible -> force pull');

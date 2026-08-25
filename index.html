@@ -2388,96 +2388,6 @@ function getGroupColor(code,fallback='gold'){
   }catch(e){}
   return scheduleColorValue(fallback||'gold');
 }
-
-// V904: load canonical attendance immediately when the Dochádzka card opens.
-(function(){
-  if(window.__gtAttendanceOpenPullV904) return;
-  window.__gtAttendanceOpenPullV904=true;
-
-  function isAttendanceOpen(){
-    const h=String(location.hash||'').toLowerCase();
-    return h==='#attendance' || h.includes('attendance') || h.includes('dochadzka');
-  }
-  function pullNow(){
-    if(!isAttendanceOpen()) return;
-    if(typeof window.__gtCanonicalAttendancePullV903==='function'){
-      setTimeout(()=>window.__gtCanonicalAttendancePullV903(),0);
-    }
-  }
-
-  window.addEventListener('hashchange',pullNow);
-  window.addEventListener('popstate',pullNow);
-  document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='visible') pullNow();
-  });
-
-  // Also catch SPA card navigation where the hash does not change.
-  document.addEventListener('click',(e)=>{
-    const el=e.target&&e.target.closest?e.target.closest('a,button,[data-screen],[data-tab]'):null;
-    if(!el)return;
-    const txt=(el.textContent||'').trim().toLowerCase();
-    const attr=String(el.getAttribute('data-screen')||el.getAttribute('data-tab')||'').toLowerCase();
-    if(txt==='dochádzka'||txt==='dochadzka'||attr==='attendance'||attr==='dochadzka'){
-      setTimeout(pullNow,0);
-    }
-  },true);
-
-  // Initial open if the app is already on Dochádzka.
-  setTimeout(pullNow,0);
-})();
-
-
-// V905: symmetric immediate attendance pull on BOTH devices.
-(function(){
-  if(window.__gtAttendanceOpenPullV905) return;
-  window.__gtAttendanceOpenPullV905=true;
-
-  let lastPull=0;
-  function attendanceVisible(){
-    const h=String(location.hash||'').toLowerCase();
-    if(h==='#attendance'||h.includes('attendance')||h.includes('dochadzka')) return true;
-    const els=document.querySelectorAll('[data-screen],[data-tab],button,a');
-    for(const el of els){
-      const a=String(el.getAttribute('data-screen')||el.getAttribute('data-tab')||'').toLowerCase();
-      if((a==='attendance'||a==='dochadzka') && el.offsetParent!==null) return true;
-    }
-    const body=(document.body&&document.body.innerText||'').toLowerCase();
-    return body.includes('dochádzka') && body.includes('prítomní');
-  }
-  function pull(){
-    if(!attendanceVisible()) return;
-    const now=Date.now();
-    if(now-lastPull<500) return;
-    lastPull=now;
-    if(typeof window.__gtCanonicalAttendancePullV903==='function'){
-      Promise.resolve(window.__gtCanonicalAttendancePullV903()).catch(()=>{});
-    }
-  }
-
-  // SPA route changes.
-  const push=history.pushState, replace=history.replaceState;
-  history.pushState=function(){const r=push.apply(this,arguments);setTimeout(pull,0);return r;};
-  history.replaceState=function(){const r=replace.apply(this,arguments);setTimeout(pull,0);return r;};
-  window.addEventListener('popstate',()=>setTimeout(pull,0));
-  window.addEventListener('hashchange',()=>setTimeout(pull,0));
-
-  // Covers navigation implementations that don't touch history/hash.
-  document.addEventListener('click',()=>setTimeout(pull,0),true);
-
-  // Covers the case where the card is rendered asynchronously.
-  const mo=new MutationObserver(()=>setTimeout(pull,0));
-  mo.observe(document.documentElement,{subtree:true,childList:true});
-
-  // Returning to the app/card.
-  document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='visible') setTimeout(pull,0);
-  });
-  window.addEventListener('focus',()=>setTimeout(pull,0));
-
-  // Initial state.
-  setTimeout(pull,50);
-})();
-
 </script><style id="gtDynamicAttendanceColorsV348">
 .att-group[style*="--admin-group-color"]{
   background:var(--admin-group-color)!important;
@@ -6832,10 +6742,31 @@ try{
   // saved DLŽNÉ / PRIHLÁŠKA state. Local edits are still pushed only by
   // ULOŽIŤ VYÚČTOVANIE, but opening/returning to Dochádzka performs a fresh pull.
   window.gtStartAttendanceSupabaseSync=function(){
-    if(!tok()) return;
-    if(window.__gtAttendancePullInFlight) return;
+    if(!tok()) return Promise.resolve(false);
+
+    // V917: never drop a refresh request just because another pull is running.
+    // When the Dochádzka card opens while an older poll is in flight, queue one
+    // fresh pull so the newly opened screen is guaranteed to read the server
+    // state after the older request has finished.
+    if(window.__gtAttendancePullInFlight){
+      window.__gtAttendancePullQueued=true;
+      return window.__gtAttendancePullPromise||Promise.resolve(false);
+    }
+
     window.__gtAttendancePullInFlight=true;
-    Promise.resolve(pull()).finally(()=>{ window.__gtAttendancePullInFlight=false; });
+    let run=Promise.resolve().then(()=>pull());
+    window.__gtAttendancePullPromise=run;
+
+    return run.finally(()=>{
+      window.__gtAttendancePullInFlight=false;
+      window.__gtAttendancePullPromise=null;
+      if(window.__gtAttendancePullQueued){
+        window.__gtAttendancePullQueued=false;
+        setTimeout(()=>{
+          try{window.gtStartAttendanceSupabaseSync()}catch(_e){}
+        },0);
+      }
+    });
   };
   window.__gtAttendanceSyncTimer=null;
   document.addEventListener('visibilitychange',function(){
@@ -7295,6 +7226,26 @@ function applyBillingSnapshotToAttendance(){
   attendanceState.otherMinusReason=String(r.otherMinusReason||'');
 }
 
+
+function refreshAttendanceAppV918(){
+  try{
+    // Save the exact training context before the real browser refresh.
+    sessionStorage.setItem('gt-v918-refresh-attendance-context',JSON.stringify({
+      date:String(attendanceState.date||''),
+      group:String(attendanceState.group||''),
+      name:String(attendanceState.name||''),
+      trainingTime:String(attendanceState.trainingTime||''),
+      trainingSupabaseId:String(attendanceState.trainingSupabaseId||''),
+      trainingIdentityKey:String(attendanceState.trainingIdentityKey||'')
+    }));
+    sessionStorage.setItem('gt-v918-refresh-attendance','1');
+  }catch(_e){}
+  // This is intentionally the same full-page refresh that the user currently
+  // performs with pull-to-refresh. No attendance data is rewritten locally.
+  try{ window.location.reload(); }catch(_e){ location.reload(); }
+  return false;
+}
+
 function attendance(){
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -7337,7 +7288,10 @@ function attendance(){
     <main class="content attendance-page ${isAttendanceFullyLocked()?'attendance-readonly':''}">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
-        <div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button type="button" class="month-btn" onclick="return refreshAttendanceAppV918()" title="Obnoviť dochádzku zo servera" style="min-width:48px;padding:10px 12px;font-size:22px;line-height:1">↻</button>
+          <div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div>
+        </div>
       </div>
       <div class="att-group" style="--admin-group-color:${getGroupColor(attendanceState.group,'gold')};background:var(--admin-group-color) !important;background-image:none !important;">
         <span>${attendanceState.group}</span><b>${attendanceState.name}</b>
@@ -7376,17 +7330,12 @@ function attendance(){
     </nav>
     <div id="toast" class="toast"></div>`;
   updateAttendanceTotals();
-  if(window.gtStartAttendanceSupabaseSync) window.gtStartAttendanceSupabaseSync();
-
-  // IMPORTANT: when switching to Dochádzka, pull the canonical server state
-  // immediately. Do not wait for the 2-second poll and do not require a
-  // full-page refresh. This is the actual SPA entry point used by both devices.
-  if(window.__gtCanonicalAttendancePullV903){
-    setTimeout(()=>{
-      if(location.hash==='#attendance' || document.querySelector('.attendance-page')){
-        window.__gtCanonicalAttendancePullV903();
-      }
-    },0);
+  if(window.gtStartAttendanceSupabaseSync){
+    window.gtStartAttendanceSupabaseSync();
+    // A second request is intentional: if the first pull was already running
+    // when this card opened, V917 queues it and performs a fresh server pull
+    // immediately after the first one completes.
+    setTimeout(()=>{try{window.gtStartAttendanceSupabaseSync()}catch(_e){}},300);
   }
 }
 function groupClass(g){ return g==='A'?'a':g==='B'?'b':g==='C'?'c':g==='D'?'d':'dp'; }
@@ -8786,7 +8735,6 @@ document.addEventListener('visibilitychange',()=>{
     m.debt=Number(r.debt_amount||0);m.debtReason=String(r.debt_note||'');
    }
    if(typeof renderAttendance==='function')renderAttendance();
-   if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
   }catch(e){console.warn('canonical attendance pull',e);}
  }
  async function push(){
@@ -12694,6 +12642,52 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   setTimeout(fixStats,300); setTimeout(fixStats,1000);
 })();
 </script>
+
+
+(function(){
+  if(window.__gtV918RefreshRestoreInstalled) return;
+  window.__gtV918RefreshRestoreInstalled=true;
+
+  function restoreAfterRefresh(){
+    let raw=null,flag=null;
+    try{
+      flag=sessionStorage.getItem('gt-v918-refresh-attendance');
+      raw=sessionStorage.getItem('gt-v918-refresh-attendance-context');
+    }catch(_e){}
+    if(flag!=='1'||!raw) return false;
+    if(typeof attendance!=='function'||typeof attendanceState==='undefined') return false;
+    let c;
+    try{c=JSON.parse(raw)}catch(_e){return false;}
+
+    // Wait until the normal app boot/auth has completed.
+    if(!document.querySelector('.app')) return false;
+
+    try{
+      attendanceState.date=String(c.date||attendanceState.date||'');
+      attendanceState.group=String(c.group||attendanceState.group||'');
+      attendanceState.name=String(c.name||attendanceState.name||'');
+      attendanceState.trainingTime=String(c.trainingTime||attendanceState.trainingTime||'');
+      attendanceState.trainingSupabaseId=String(c.trainingSupabaseId||attendanceState.trainingSupabaseId||'');
+      attendanceState.trainingIdentityKey=String(c.trainingIdentityKey||attendanceState.trainingIdentityKey||'');
+      sessionStorage.removeItem('gt-v918-refresh-attendance');
+      sessionStorage.removeItem('gt-v918-refresh-attendance-context');
+      location.hash='#attendance';
+      attendance();
+      return true;
+    }catch(e){
+      console.warn('V918 attendance refresh restore',e);
+      return false;
+    }
+  }
+
+  let n=0;
+  function wait(){
+    if(restoreAfterRefresh()) return;
+    if(++n<100) setTimeout(wait,100);
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(wait,100));
+  else setTimeout(wait,100);
+})();
 
 </body>
 

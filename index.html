@@ -2388,6 +2388,96 @@ function getGroupColor(code,fallback='gold'){
   }catch(e){}
   return scheduleColorValue(fallback||'gold');
 }
+
+// V904: load canonical attendance immediately when the Dochádzka card opens.
+(function(){
+  if(window.__gtAttendanceOpenPullV904) return;
+  window.__gtAttendanceOpenPullV904=true;
+
+  function isAttendanceOpen(){
+    const h=String(location.hash||'').toLowerCase();
+    return h==='#attendance' || h.includes('attendance') || h.includes('dochadzka');
+  }
+  function pullNow(){
+    if(!isAttendanceOpen()) return;
+    if(typeof window.__gtCanonicalAttendancePullV903==='function'){
+      setTimeout(()=>window.__gtCanonicalAttendancePullV903(),0);
+    }
+  }
+
+  window.addEventListener('hashchange',pullNow);
+  window.addEventListener('popstate',pullNow);
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible') pullNow();
+  });
+
+  // Also catch SPA card navigation where the hash does not change.
+  document.addEventListener('click',(e)=>{
+    const el=e.target&&e.target.closest?e.target.closest('a,button,[data-screen],[data-tab]'):null;
+    if(!el)return;
+    const txt=(el.textContent||'').trim().toLowerCase();
+    const attr=String(el.getAttribute('data-screen')||el.getAttribute('data-tab')||'').toLowerCase();
+    if(txt==='dochádzka'||txt==='dochadzka'||attr==='attendance'||attr==='dochadzka'){
+      setTimeout(pullNow,0);
+    }
+  },true);
+
+  // Initial open if the app is already on Dochádzka.
+  setTimeout(pullNow,0);
+})();
+
+
+// V905: symmetric immediate attendance pull on BOTH devices.
+(function(){
+  if(window.__gtAttendanceOpenPullV905) return;
+  window.__gtAttendanceOpenPullV905=true;
+
+  let lastPull=0;
+  function attendanceVisible(){
+    const h=String(location.hash||'').toLowerCase();
+    if(h==='#attendance'||h.includes('attendance')||h.includes('dochadzka')) return true;
+    const els=document.querySelectorAll('[data-screen],[data-tab],button,a');
+    for(const el of els){
+      const a=String(el.getAttribute('data-screen')||el.getAttribute('data-tab')||'').toLowerCase();
+      if((a==='attendance'||a==='dochadzka') && el.offsetParent!==null) return true;
+    }
+    const body=(document.body&&document.body.innerText||'').toLowerCase();
+    return body.includes('dochádzka') && body.includes('prítomní');
+  }
+  function pull(){
+    if(!attendanceVisible()) return;
+    const now=Date.now();
+    if(now-lastPull<500) return;
+    lastPull=now;
+    if(typeof window.__gtCanonicalAttendancePullV903==='function'){
+      Promise.resolve(window.__gtCanonicalAttendancePullV903()).catch(()=>{});
+    }
+  }
+
+  // SPA route changes.
+  const push=history.pushState, replace=history.replaceState;
+  history.pushState=function(){const r=push.apply(this,arguments);setTimeout(pull,0);return r;};
+  history.replaceState=function(){const r=replace.apply(this,arguments);setTimeout(pull,0);return r;};
+  window.addEventListener('popstate',()=>setTimeout(pull,0));
+  window.addEventListener('hashchange',()=>setTimeout(pull,0));
+
+  // Covers navigation implementations that don't touch history/hash.
+  document.addEventListener('click',()=>setTimeout(pull,0),true);
+
+  // Covers the case where the card is rendered asynchronously.
+  const mo=new MutationObserver(()=>setTimeout(pull,0));
+  mo.observe(document.documentElement,{subtree:true,childList:true});
+
+  // Returning to the app/card.
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible') setTimeout(pull,0);
+  });
+  window.addEventListener('focus',()=>setTimeout(pull,0));
+
+  // Initial state.
+  setTimeout(pull,50);
+})();
+
 </script><style id="gtDynamicAttendanceColorsV348">
 .att-group[style*="--admin-group-color"]{
   background:var(--admin-group-color)!important;
@@ -6528,8 +6618,11 @@ try{
       // When opened from Vyúčtovanie, the saved billing snapshot is authoritative
       // for the displayed attendance. A normal Dochádzka screen still uses the
       // live Supabase attendance table.
-      let committed=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
-      if(serverBillingSnapshot){
+      let committed=null;
+      if(window.__attendanceOpenedFromBillingRecord){
+        committed=attendanceState.billingRecordSnapshot || loadCommittedTrainingSnapshot();
+      }
+      if(serverBillingSnapshot && window.__attendanceOpenedFromBillingRecord){
         attendanceState.billingRecordSnapshot=serverBillingSnapshot;
       } else if(committed){
         attendanceState.billingRecordSnapshot=committed;
@@ -6567,6 +6660,13 @@ try{
       let now=Date.now();
       let billingIsAuthoritative=!!serverBillingSnapshot &&
         !!window.__attendanceOpenedFromBillingRecord;
+
+      if(!billingIsAuthoritative){
+        // Normal Dochádzka: server attendance is authoritative.
+        serverBillingSnapshot=null;
+        attendanceState.billingRecordSnapshot=null;
+        attendanceState.billingAttendanceSnapshot=null;
+      }
       let billingPeople=new Map();
       if(billingIsAuthoritative){
         // paymentSnapshot contains the exact state that produced the saved
@@ -6618,7 +6718,9 @@ try{
 
         // Debt/application metadata always comes from the saved billing snapshot
         // when one exists.
-        let br=serverBillingSnapshot || attendanceState.billingRecordSnapshot || null;
+        let br=window.__attendanceOpenedFromBillingRecord
+        ? (serverBillingSnapshot || attendanceState.billingRecordSnapshot || null)
+        : null;
         if(br){
           let ds=Array.isArray(br.debtSnapshot)?br.debtSnapshot:[];
           let as=Array.isArray(br.applicationSnapshot)?br.applicationSnapshot:[];
@@ -7275,6 +7377,17 @@ function attendance(){
     <div id="toast" class="toast"></div>`;
   updateAttendanceTotals();
   if(window.gtStartAttendanceSupabaseSync) window.gtStartAttendanceSupabaseSync();
+
+  // IMPORTANT: when switching to Dochádzka, pull the canonical server state
+  // immediately. Do not wait for the 2-second poll and do not require a
+  // full-page refresh. This is the actual SPA entry point used by both devices.
+  if(window.__gtCanonicalAttendancePullV903){
+    setTimeout(()=>{
+      if(location.hash==='#attendance' || document.querySelector('.attendance-page')){
+        window.__gtCanonicalAttendancePullV903();
+      }
+    },0);
+  }
 }
 function groupClass(g){ return g==='A'?'a':g==='B'?'b':g==='C'?'c':g==='D'?'d':'dp'; }
 function openAttendanceMemberProfile(index){
@@ -8483,30 +8596,113 @@ function getBillingRecords(){
 (function installBillingAttendanceCrossDevice(){
   if(window.__gtBillingAttendanceCrossDeviceInstalled) return;
   window.__gtBillingAttendanceCrossDeviceInstalled=true;
-  setInterval(async()=>{
+
+  async function pullExactTraining(){
     try{
-      if(!window.__attendanceOpenedFromBillingRecord) return;
-      let rk=String(attendanceState&&attendanceState.billingRecordKey||'').trim();
-      if(!rk) return;
-      let rows=await request('/rest/v1/billing_records?record_key=eq.'+encodeURIComponent(rk)+'&select=record_key,payload,updated_at&limit=1');
-      let br=rows&&rows[0]&&rows[0].payload;
-      if(!br) return;
+      if(!attendanceState) return;
+      let tid=String(attendanceState.trainingSupabaseId||'').trim();
+
+      // Resolve the exact training identity if the local screen does not have
+      // it yet. This is needed for older saved trainings and keeps both
+      // devices on the same canonical training.
+      if(!tid){
+        let d=String(attendanceState.date||'').trim();
+        let g=String(attendanceState.group||'').trim();
+        if(!d || !g) return;
+        try{
+          let tr=await request('/rest/v1/trainings?training_date=eq.'+
+            encodeURIComponent(d)+'&group_code=eq.'+encodeURIComponent(g)+
+            '&select=id&order=id.desc&limit=1');
+          if(tr&&tr[0]&&tr[0].id){
+            tid=String(tr[0].id);
+            attendanceState.trainingSupabaseId=tid;
+          }
+        }catch(_e){}
+      }
+      if(!tid) return;
+
+      // Find ALL billing records for this exact training. Do not use
+      // record_key because the two devices/trainers can have different keys.
+      let rows=await request('/rest/v1/billing_records?select=record_key,payload,updated_at&limit=1000');
+      let matches=(rows||[]).filter(x=>{
+        let p=x&&x.payload||{};
+        return String(p.trainingId||p.trainingSupabaseId||'').trim()===tid;
+      });
+      if(!matches.length) return;
+
+      matches.sort((a,b)=>{
+        let aa=Number((a.payload||{}).savedAt||0);
+        let bb=Number((b.payload||{}).savedAt||0);
+        return bb-aa;
+      });
+      let row=matches[0], br=row.payload||{};
       let old=Number((attendanceState.billingRecordSnapshot||{}).savedAt||0);
       let fresh=Number(br.savedAt||0);
-      // Same record_key means the same training. A newer savedAt is a save
-      // made by either device. Always accept that newer server snapshot.
-      if(fresh<=old) return;
-      attendanceState.billingRecordSnapshot=br;
-      attendanceState.billingAttendanceSnapshot=Array.isArray(br.attendanceSnapshot)?br.attendanceSnapshot.slice():[];
-      attendanceState.billingRecordKey=String(rows[0].record_key||rk);
-      if(br.trainingId||br.trainingSupabaseId){
-        attendanceState.trainingSupabaseId=String(br.trainingId||br.trainingSupabaseId);
+      if(window.__attendanceOpenedFromBillingRecord){
+        let oldSig=JSON.stringify((attendanceState.billingRecordSnapshot||{}).attendanceSnapshot||[]);
+        let newSig=JSON.stringify(br.attendanceSnapshot||[]);
+        let oldPay=JSON.stringify((attendanceState.billingRecordSnapshot||{}).paymentSnapshot||[]);
+        let newPay=JSON.stringify(br.paymentSnapshot||[]);
+        if(fresh<old || (fresh===old && oldSig===newSig && oldPay===newPay)) return;
+        attendanceState.billingRecordSnapshot=br;
+        attendanceState.billingAttendanceSnapshot=Array.isArray(br.attendanceSnapshot)?br.attendanceSnapshot.slice():[];
+        attendanceState.billingRecordKey=String(row.record_key||'');
+        if(br.trainingId||br.trainingSupabaseId)
+          attendanceState.trainingSupabaseId=String(br.trainingId||br.trainingSupabaseId);
+        try{persistCommittedTrainingSnapshot(br);}catch(_e){}
+        serverBillingSnapshot=br;
+        if(typeof refreshAttendance==='function') refreshAttendance();
+        return;
       }
-      try{ persistCommittedTrainingSnapshot(br); }catch(_e){}
-      serverBillingSnapshot=br;
-      if(typeof refreshAttendance==='function') refreshAttendance();
-    }catch(_){}
-  },2000);
+
+      // NORMAL ATTENDANCE: billing_records is not the authority. Pull the
+      // exact attendance rows for this training so device 1 and device 2
+      // converge on the same canonical source.
+      try{
+        let ar=await request('/rest/v1/attendance?training_id=eq.'+
+          encodeURIComponent(tid)+
+          '&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
+        if(Array.isArray(ar)){
+          // Device 2 may have a different local member ID/cache. Resolve the
+          // server attendance row to the member by the canonical Supabase UUID
+          // and, as fallback, exact surname+name. Do not silently skip a row.
+          let remoteIds=[...(new Set((ar||[]).map(x=>String(x.member_id||'').trim()).filter(Boolean)))];
+          let remoteMembers=remoteIds.length
+            ? await request('/rest/v1/members?id=in.('+remoteIds.map(encodeURIComponent).join(',')+')&select=id,legacy_id,first_name,last_name')
+            : [];
+          for(let rr of ar){
+            let sm=(remoteMembers||[]).find(x=>String(x.id)===String(rr.member_id));
+            let m=null;
+            if(sm){
+              let key=String(sm.last_name||'').trim().toUpperCase()+'|'+String(sm.first_name||'').trim().toUpperCase();
+              m=(attendanceState.members||[]).find(x=>
+                String(x.surname||'').trim().toUpperCase()+'|'+String(x.name||'').trim().toUpperCase()===key ||
+                String(x.supabaseId||'')===String(sm.id)
+              );
+            }
+            if(!m) continue;
+
+            m.supabaseId=String(rr.member_id);
+            m.newMember=!!rr.new_member;
+            m.training=!!rr.present || !!rr.training_fee_paid;
+            m.trainingAccount=!rr.training_fee_paid && !!rr.present && !m.newMember;
+            if(m.newMember) m.trainingAccount=false;
+            m.debt=Number(rr.debt_amount||0);
+            m.debtReason=String(rr.debt_note||'');
+          }
+          if(typeof renderAttendance==='function') renderAttendance();
+        }
+      }catch(_attendanceErr){}
+
+    }catch(e){ console.warn('Guard Trainer cross-device training sync:',e); }
+  }
+
+  window.__gtPullExactTraining= pullExactTraining;
+  setInterval(pullExactTraining,2000);
+
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible') pullExactTraining();
+  });
 })();
 
 // Bidirectional attendance refresh: when the first device returns to the
@@ -8538,6 +8734,77 @@ document.addEventListener('visibilitychange',()=>{
     })();
   }catch(_e){}
 });
+
+
+(function(){
+ if(window.__gtCanonicalSaveHookV903)return;
+ window.__gtCanonicalSaveHookV903=true;
+ document.addEventListener('click',function(e){
+  const b=e.target&&e.target.closest?e.target.closest('button'):null;if(!b)return;
+  const t=(b.textContent||'').trim().toUpperCase();
+  if(t==='ULOŽIŤ'||t==='ULOŽIŤ DOCHÁDZKU'){
+   setTimeout(()=>window.__gtCanonicalAttendancePushV903&&window.__gtCanonicalAttendancePushV903(),400);
+  }
+ },true);
+})();
+
+
+// V903 CANONICAL ATTENDANCE: Supabase attendance is the single source of truth.
+(function(){
+ if(window.__gtCanonicalAttendanceV903)return;
+ window.__gtCanonicalAttendanceV903=true;
+ async function tid(){
+  let x=String(attendanceState.trainingSupabaseId||'').trim();
+  if(x)return x;
+  let d=String(attendanceState.date||'').trim(),g=String(attendanceState.group||'').trim().toUpperCase();
+  if(!d||!g)return '';
+  let a=await request('/rest/v1/trainings?training_date=eq.'+encodeURIComponent(d)+'&group_code=eq.'+encodeURIComponent(g)+'&select=id&order=id.desc&limit=1');
+  if(a&&a[0]&&a[0].id){x=String(a[0].id);attendanceState.trainingSupabaseId=x;}
+  return x;
+ }
+ async function pull(){
+  try{
+   let t=await tid(); if(!t)return;
+   let a=await request('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(t)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
+   if(!Array.isArray(a))return;
+   let ids=[...new Set(a.map(x=>String(x.member_id||'').trim()).filter(Boolean))];
+   if(!ids.length)return;
+   let ms=await request('/rest/v1/members?id=in.('+ids.map(encodeURIComponent).join(',')+')&select=id,legacy_id,first_name,last_name');
+   for(const r of a){
+    const sm=(ms||[]).find(x=>String(x.id)===String(r.member_id)); if(!sm)continue;
+    const k=String(sm.last_name||'').trim().toUpperCase()+'|'+String(sm.first_name||'').trim().toUpperCase();
+    const m=(attendanceState.members||[]).find(x=>
+      String(x.surname||'').trim().toUpperCase()+'|'+String(x.name||'').trim().toUpperCase()===k ||
+      String(x.supabaseId||'')===String(r.member_id));
+    if(!m)continue;
+    m.supabaseId=String(r.member_id);
+    if(Number.isFinite(Number(sm.legacy_id)))m.id=Number(sm.legacy_id);
+    m.newMember=!!r.new_member;
+    m.training=!!r.present||!!r.training_fee_paid;
+    m.trainingAccount=!!r.present&&!r.training_fee_paid&&!m.newMember;
+    if(m.newMember)m.trainingAccount=false;
+    m.debt=Number(r.debt_amount||0);m.debtReason=String(r.debt_note||'');
+   }
+   if(typeof renderAttendance==='function')renderAttendance();
+   if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+  }catch(e){console.warn('canonical attendance pull',e);}
+ }
+ async function push(){
+  try{
+   let t=await tid();if(!t)return;
+   for(const m of (attendanceState.members||[]).filter(x=>x.supabaseId)){
+    let b={training_id:t,member_id:String(m.supabaseId),present:!!m.training&&!m.newMember,new_member:!!m.newMember,training_fee_paid:!!m.training&&!m.trainingAccount,debt_amount:Number(m.debt||0),debt_note:String(m.debtReason||'')||null};
+    await request('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(t)+'&member_id=eq.'+encodeURIComponent(String(m.supabaseId)),{
+     method:'POST',headers:headers({'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'}),body:JSON.stringify(b)
+    });
+   }
+  }catch(e){console.warn('canonical attendance push',e);}
+ }
+ window.__gtCanonicalAttendancePullV903=pull;
+ window.__gtCanonicalAttendancePushV903=push;
+ setInterval(()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();},2000);
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
+})();
 
 // v767 – keep billing screens in sync across devices. Unlike attendance,
 // billing is already saved/locked data, so a fresh server pull is safe.
@@ -9111,6 +9378,25 @@ async function saveTrainingBilling(){
         savedAt:Date.now()
       };
       await window.gtSaveBillingRecordSupabase(sharedRecord);
+
+      // Bidirectional canonical update: if another device has the same
+      // training under another record_key, update that record's payload too.
+      // record_key identifies a billing row; trainingId identifies the actual
+      // training and is the cross-device identity.
+      try{
+        let tid=String(sharedRecord.trainingId||sharedRecord.trainingSupabaseId||'').trim();
+        if(tid){
+          let existing=await request('/rest/v1/billing_records?select=record_key,payload&limit=1000');
+          for(let er of (existing||[])){
+            let ep=er&&er.payload||{};
+            if(String(ep.trainingId||ep.trainingSupabaseId||'').trim()!==tid) continue;
+            if(String(er.record_key||'')===String(sharedRecord.record_key||'')) continue;
+            let mirror={...sharedRecord,record_key:String(er.record_key)};
+            await window.gtSaveBillingRecordSupabase(mirror);
+          }
+        }
+      }catch(_mirrorErr){ console.warn('Cross-device billing mirror failed:',_mirrorErr); }
+
       Object.assign(record,sharedRecord);
       // saveTrainingBilling is outside the Supabase sync IIFE, so it cannot
       // call that IIFE's private recordKey(). Use the actual object reference
@@ -10975,15 +11261,42 @@ async function openAttendanceFromBillingRow(dateLabel, groupCode, groupName, sav
       // billing record from Supabase and replace the local copy with it.
       // This makes the clicked row the same attendance checkpoint on both
       // devices, instead of trusting whichever local cache happens to be old.
-      if(exactKey && typeof fetchJson==='function'){
+      if(typeof fetchJson==='function'){
         try{
-          let remoteRows=await fetchJson('/rest/v1/billing_records?record_key=eq.'+
-            encodeURIComponent(exactKey)+
-            '&select=record_key,payload,updated_at,trainer&limit=1');
-          let remotePayload=remoteRows&&remoteRows[0]&&remoteRows[0].payload;
+          let remoteRows=[];
+          // On device 2 the clicked row can have an old/different record_key.
+          // The actual training identity is trainingId. Prefer that; for older
+          // records without it, fall back to exact date + group + trainer.
+          let tid=String(savedTrainingId||'').trim();
+          if(tid){
+            remoteRows=await fetchJson('/rest/v1/billing_records?select=record_key,payload,updated_at,trainer&limit=1000');
+            remoteRows=(remoteRows||[]).filter(x=>{
+              let p=x&&x.payload||{};
+              return String(p.trainingId||p.trainingSupabaseId||'').trim()===tid;
+            });
+          }else{
+            remoteRows=await fetchJson('/rest/v1/billing_records?select=record_key,payload,updated_at,trainer&limit=1000');
+            remoteRows=(remoteRows||[]).filter(x=>{
+              let p=x&&x.payload||{}, d=parsePaymentDate(p.date);
+              return d && d.year===parsed.year && d.month===parsed.month && d.day===parsed.day &&
+                String(p.group||'').trim().toUpperCase()===code &&
+                (!trainer || String(p.trainer||'').trim().toUpperCase()===trainer.toUpperCase());
+            });
+          }
+
+          // The newest saved record for this exact training is authoritative.
+          remoteRows.sort((a,b)=>{
+            let aa=Number((a.payload||{}).savedAt||0), bb=Number((b.payload||{}).savedAt||0);
+            return bb-aa;
+          });
+          let rr=remoteRows[0];
+          let remotePayload=rr&&rr.payload;
           if(remotePayload && Array.isArray(remotePayload.paymentSnapshot)){
-            br=Object.assign({},remotePayload,{record_key:String(remoteRows[0].record_key||exactKey)});
-            let li=allRecords.findIndex(r=>String(r.record_key||r.key||'').trim()===exactKey);
+            br=Object.assign({},remotePayload,{record_key:String(rr.record_key||exactKey||'')});
+            let li=allRecords.findIndex(r=>{
+              let rk=String(r.record_key||r.key||'').trim();
+              return rk===String(rr.record_key||'').trim();
+            });
             if(li>=0) allRecords[li]=br;
             else allRecords.push(br);
             monthlyBillingRecords=allRecords;

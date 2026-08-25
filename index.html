@@ -6090,7 +6090,11 @@ function selectScheduleColor(c){
     return text?JSON.parse(text):[];
   }
   async function pull(){
-    if(inFlight) return false;
+    if(inFlight){
+      if(window.__gtExplicitAttendanceRefresh && window.__gtAttendancePullPromise)
+        return await window.__gtAttendancePullPromise;
+      return false;
+    }
     let h=headers(); if(!h||!url()) return false;
     inFlight=true;
     try{
@@ -6264,7 +6268,7 @@ try{
   function headers(extra){return Object.assign({'apikey':key(),'Authorization':'Bearer '+tok(),'Accept':'application/json'},extra||{})}
   async function fetchJson(path,opts){
     if(!url()||!key()||!tok()) throw new Error('Nie ste prihlásený na server.');
-    let r=await window.gtSupabaseFetch(url()+path,Object.assign({headers:headers()},opts||{}));
+    let r=await window.gtSupabaseFetch(url()+path,Object.assign({cache:'no-store',headers:headers()},opts||{}));
     if(!r.ok){let t=await r.text();throw new Error('Supabase attendance '+r.status+': '+t.slice(0,180));}
     let t=await r.text(); return t?JSON.parse(t):[];
   }
@@ -7253,21 +7257,38 @@ async function refreshAttendanceAppV918(){
   if(btn && btn.dataset.refreshing==='1') return false;
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
   try{
-    // ↻ means: download the authoritative attendance from Supabase and make
-    // that downloaded state the new local baseline on THIS device.
+    // ↻ = authoritative server download. Explicit refresh bypasses the
+    // normal in-flight/dirty guards and performs a fresh Supabase read.
+    window.__gtExplicitAttendanceRefresh=true;
     clearAttendanceDirty();
+
+    // A trainingSupabaseId can be an old in-memory ID from the previous
+    // session/device. For an explicit server refresh, resolve the training
+    // again from the selected date + group + time before reading attendance.
+    attendanceState.trainingSupabaseId='';
+    attendanceState.trainingIdentityKey='';
+
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-    if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase();
-    else if(window.gtStartAttendanceSupabaseSync) await window.gtStartAttendanceSupabaseSync();
-    if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-    // The pull itself renders the fresh state. This final totals refresh keeps
-    // the summary boxes in lock-step with that downloaded local baseline.
+
+    // Call the actual attendance pull directly. It is the same Supabase
+    // function used by the app, but this explicit path must never be skipped.
+    if(window.gtSyncAttendanceSupabase){
+      await window.gtSyncAttendanceSupabase();
+    }else{
+      throw new Error('Attendance server sync function is unavailable');
+    }
+
+    // Make the downloaded server state the local baseline on this device.
+    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function'){
+      saveCurrentTrainingAttendanceLocalOnly(false);
+    }
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
   }catch(e){
     console.error('Guard Trainer attendance refresh:',e);
     if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
   }finally{
+    window.__gtExplicitAttendanceRefresh=false;
     if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
   }
   return false;
@@ -8734,11 +8755,11 @@ document.addEventListener('visibilitychange',()=>{
    // 2-second server poll or a card switch replace it before ULOŽIŤ.
    if(isAttendanceDirtyForCurrentTraining()) return;
    let t=await tid(); if(!t)return;
-   let a=await request('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(t)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note&_gt_refresh='+Date.now());
+   let a=await request('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(t)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
    if(!Array.isArray(a))return;
    let ids=[...new Set(a.map(x=>String(x.member_id||'').trim()).filter(Boolean))];
    if(!ids.length)return;
-   let ms=await request('/rest/v1/members?id=in.('+ids.map(encodeURIComponent).join(',')+')&select=id,legacy_id,first_name,last_name&_gt_refresh='+Date.now());
+   let ms=await request('/rest/v1/members?id=in.('+ids.map(encodeURIComponent).join(',')+')&select=id,legacy_id,first_name,last_name');
    for(const r of a){
     const sm=(ms||[]).find(x=>String(x.id)===String(r.member_id)); if(!sm)continue;
     const k=String(sm.last_name||'').trim().toUpperCase()+'|'+String(sm.first_name||'').trim().toUpperCase();

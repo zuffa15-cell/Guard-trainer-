@@ -7846,7 +7846,7 @@ function enterMembershipAccount(i){
   document.body.appendChild(modal);
   setTimeout(()=>{let inp=document.getElementById('membershipAccountAmountInput');if(inp){inp.focus();inp.select();}},50);
 }
-function confirmMembershipAccount(i){
+async function confirmMembershipAccount(i){
  if(!attendanceEditGuard() || !billingEditGuard()) return;
   let input=document.getElementById('membershipAccountAmountInput');
   if(!input)return;
@@ -7861,6 +7861,8 @@ function confirmMembershipAccount(i){
   }
   let key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
   if(attendanceState.membershipDrafts) delete attendanceState.membershipDrafts[key];
+  let oldMembership={membership:m.membership, amount:m.membershipAmount, date:m.membershipDate, group:m.membershipPaidGroup};
+  let oldAcc={amount:m.membershipAccountAmount, date:m.membershipAccountDate};
   m.membership=false; m.membershipAmount=0; m.membershipDate=''; m.membershipPaidGroup='';
   a.membershipAmount=0; a.membershipDate=''; a.membershipPaidGroup='';
   m.membershipAccountAmount=n; m.membershipAccountDate=attendanceDateKey();
@@ -7870,7 +7872,23 @@ function confirmMembershipAccount(i){
   persistMembersData();
   let modal=document.getElementById('membershipAccountPrompt'); if(modal)modal.remove();
   refreshAttendance();
-  toast('Členské na účet klubu – nezapočítava sa do platieb');
+  // FIX v954: musí sa uložiť aj na server, inak po prepnutí karty sa vráti späť
+  try{
+    if(typeof window.gtSaveMemberSupabase==='function'){
+      await window.gtSaveMemberSupabase(m.id);
+      toast('ÚČET 30€ uložené na server ✓');
+    } else {
+      toast('Členské na účet klubu – nezapočítava sa do platieb');
+    }
+  }catch(e){
+    // rollback pri chybe servera
+    m.membership=oldMembership.membership; m.membershipAmount=oldMembership.amount; m.membershipDate=oldMembership.date; m.membershipPaidGroup=oldMembership.group;
+    m.membershipAccountAmount=oldAcc.amount; m.membershipAccountDate=oldAcc.date;
+    a.membershipAccountAmount=oldAcc.amount; a.membershipAccountDate=oldAcc.date;
+    removeMemberAccountHistory(m,'membership',attendanceDateKey());
+    persistMembersData(); persistPaymentHistory(); refreshAttendance();
+    toast('Supabase zápis účtu zlyhal: '+e.message);
+  }
 }
 async function enterRegistrationAccount(i){
  if(!attendanceEditGuard() || !billingEditGuard() || !attendancePaymentEditGuard()) return;

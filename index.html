@@ -6878,6 +6878,14 @@ function saveCurrentTrainingAttendanceLocalOnly(markDirty=true){
       debt:Number(a.debt||0),debtReason:String(a.debtReason||''),application:!!a.application,applicationDate:String(a.applicationDate||'')}});
   persistTrainingAttendanceHistory();
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
+  // v957 FIX: push to server immediately so second mobile can see it
+  if(navigator.onLine){
+    try{
+      if(typeof window.gtSaveAttendanceAllSupabase==='function'){
+        setTimeout(()=>{ window.gtSaveAttendanceAllSupabase().catch(e=>console.warn('attendance push failed', e)); }, 300);
+      }
+    }catch(e){ console.warn('auto push failed', e); }
+  }
 }
 
 function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
@@ -10907,8 +10915,8 @@ window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }
     window.saveCurrentTrainingAttendanceLocalOnly = function(markDirty){
       const res = origSaveLocal.apply(this, arguments);
       // Also try to push to server immediately if online
-      if(navigator.onLine && window.gtPushAttendanceSupabase){
-        setTimeout(()=>{ try{ window.gtPushAttendanceSupabase(); }catch(e){} }, 500);
+      if(navigator.onLine && window.gtSaveAttendanceAllSupabase){
+        setTimeout(()=>{ try{ window.gtSaveAttendanceAllSupabase(); }catch(e){} }, 500);
       }
       return res;
     };

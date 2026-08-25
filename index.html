@@ -12675,10 +12675,10 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
       sessionStorage.removeItem('gt-v918-refresh-attendance-context');
       location.hash='#attendance';
 
-      // First render the requested training, then wait for the SAME server pull
-      // used by the app. The important part is the second render after the
-      // server response: this is what normally happens when the user leaves
-      // the card and comes back.
+      // Render the selected training once. The local values are only the
+      // temporary screen state. The existing v903 server pull below will
+      // update attendanceState and renderAttendance() when the fresh server
+      // response arrives.
       attendance();
 
       if(window.gtSyncMembersSupabase){
@@ -12690,8 +12690,11 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
         try{ await window.gtStartAttendanceSupabaseSync(); }catch(_e){}
       }
 
-      // Re-render AFTER the server values have been applied.
-      attendance();
+      // IMPORTANT: do NOT call attendance() again here. That function calls
+      // loadAttendanceFromMembers(), which rebuilds the list from the old
+      // local cache and would overwrite the freshly downloaded server state.
+      // The server pull already calls renderAttendance() with the new values.
+      if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
       return true;
     }catch(e){
       console.warn('V920 attendance refresh restore',e);

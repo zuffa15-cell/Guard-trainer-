@@ -6642,7 +6642,9 @@ try{
           m.applicationDate=a?String(a.applicationDate||''):'';
         }
       });
-      saveCurrentTrainingAttendanceLocalOnly();
+      // A server download becomes the new local baseline.
+      saveCurrentTrainingAttendanceLocalOnly(false);
+      clearAttendanceDirty();
       refreshAttendance();
       return true;
     }catch(e){console.warn('Guard Trainer Supabase attendance pull:',e);return false;}
@@ -6769,11 +6771,9 @@ try{
     });
   };
   window.__gtAttendanceSyncTimer=null;
-  document.addEventListener('visibilitychange',function(){
-    if(document.visibilityState==='visible' && document.querySelector('.attendance-page')){
-      try{ window.gtStartAttendanceSupabaseSync(); }catch(_e){}
-    }
-  });
+  // No automatic visibility/background pull. Attendance is local while editing;
+  // the user explicitly requests a server download with ↻.
+
 })();
 
 // v797: committed training snapshots use the same ISO date key as openGroup().
@@ -6839,8 +6839,8 @@ function clearAttendanceDirty(){
   }catch(_e){}
 }
 
-function saveCurrentTrainingAttendanceLocalOnly(){
-  markAttendanceDirty();
+function saveCurrentTrainingAttendanceLocalOnly(markDirty=true){
+  if(markDirty) markAttendanceDirty();
   let key=trainingAttendanceKey();
   trainingAttendanceByGroup[key]=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{trainingAttendanceByGroup[key][a.surname+'|'+a.name]={training:!!a.training,trainingAccount:!!a.trainingAccount,newMember:!!a.newMember,
@@ -7248,25 +7248,26 @@ function applyBillingSnapshotToAttendance(){
 }
 
 
-function refreshAttendanceAppV918(){
+async function refreshAttendanceAppV918(){
+  const btn=document.querySelector('.attendance-page .calendar-head button');
+  if(btn && btn.dataset.refreshing==='1') return false;
+  if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
   try{
-    // Save the exact training context before the real browser refresh.
-    sessionStorage.setItem('gt-v918-refresh-attendance-context',JSON.stringify({
-      date:String(attendanceState.date||''),
-      group:String(attendanceState.group||''),
-      name:String(attendanceState.name||''),
-      trainingTime:String(attendanceState.trainingTime||''),
-      trainingSupabaseId:String(attendanceState.trainingSupabaseId||''),
-      trainingIdentityKey:String(attendanceState.trainingIdentityKey||'')
-    }));
-    sessionStorage.setItem('gt-v918-refresh-attendance','1');
-  }catch(_e){}
-  // This is intentionally the same full-page refresh that the user currently
-  // performs with pull-to-refresh. No attendance data is rewritten locally.
-  try{ window.location.reload(); }catch(_e){ location.reload(); }
+    // ↻ means: download the authoritative attendance from Supabase and make
+    // that downloaded state the new local baseline on THIS device.
+    clearAttendanceDirty();
+    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
+    if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase();
+    else if(window.gtStartAttendanceSupabaseSync) await window.gtStartAttendanceSupabaseSync();
+    if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+  }catch(e){
+    console.error('Guard Trainer attendance refresh:',e);
+    if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
+  }finally{
+    if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
+  }
   return false;
 }
-
 function attendance(){
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -7351,13 +7352,10 @@ function attendance(){
     </nav>
     <div id="toast" class="toast"></div>`;
   updateAttendanceTotals();
-  if(window.gtStartAttendanceSupabaseSync){
-    window.gtStartAttendanceSupabaseSync();
-    // A second request is intentional: if the first pull was already running
-    // when this card opened, V917 queues it and performs a fresh server pull
-    // immediately after the first one completes.
-    setTimeout(()=>{try{window.gtStartAttendanceSupabaseSync()}catch(_e){}},300);
-  }
+  // Opening/returning to Dochádzka is LOCAL ONLY. The explicit ↻ button is the
+  // only operation that downloads the server state and replaces this local
+  // baseline. This keeps unfinished local clicks intact while moving between
+  // cards.
 }
 function groupClass(g){ return g==='A'?'a':g==='B'?'b':g==='C'?'c':g==='D'?'d':'dp'; }
 function openAttendanceMemberProfile(index){

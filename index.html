@@ -6753,11 +6753,11 @@ try{
       // Keep the row protected until a later pull has definitely had a chance
       // to read the just-written value. This also makes switching attendance
       // OFF reliable; a stale in-flight pull can no longer turn it back ON.
-      if(mutationSeq[pk]===mySeq) protectedUntil[pk]=Date.now()+1800;
+      if(mutationSeq[pk]===mySeq) protectedUntil[pk]=Date.now()+300; // v958 fast sync
       return true;
     }catch(e){
       console.error('Guard Trainer Supabase attendance push:',e);
-      protectedUntil[pk]=Date.now()+1200;
+      protectedUntil[pk]=Date.now()+300; // v958 fast sync
       toast('Chyba zápisu dochádzky: '+e.message);
       return false;
     }finally{ delete pending[pk]; }
@@ -6882,7 +6882,7 @@ function saveCurrentTrainingAttendanceLocalOnly(markDirty=true){
   if(navigator.onLine){
     try{
       if(typeof window.gtSaveAttendanceAllSupabase==='function'){
-        setTimeout(()=>{ window.gtSaveAttendanceAllSupabase().catch(e=>console.warn('attendance push failed', e)); }, 300);
+        window.gtSaveAttendanceAllSupabase().catch(e=>console.warn('attendance push failed', e)); // v958 immediate push
       }
     }catch(e){ console.warn('auto push failed', e); }
   }
@@ -10960,7 +10960,7 @@ window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }
         }
       }
     }catch(e){}
-  }, 5000);
+  }, 2000); // v958 faster polling
   
   // 4. Mark local edits
   const origRefresh = window.refreshAttendance;
@@ -11006,6 +11006,18 @@ window.__safeJsonParse = function(str, fallback){ try{ return JSON.parse(str); }
   
   console.log('✅ v956 auto-refresh installed - druhý mobil už nepotrebuje refresh tlačítko');
 })();
+
+
+// v958: force pull when returning to app (fixes tab switching sync)
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible'){
+    if(location.hash.includes('attendance')){
+      console.log('[v958] tab visible -> force pull');
+      if(window.__attendancePull) window.__attendancePull().then(()=>{ if(typeof refreshAttendance==='function') refreshAttendance(); }).catch(()=>{});
+      if(window.gtSyncBillingSupabase) window.gtSyncBillingSupabase().then(()=>{ if(typeof refreshAttendance==='function') refreshAttendance(); }).catch(()=>{});
+    }
+  }
+});
 
 /* v952 OFFLINE FIX + queue for 3 trainers */
 (function(){

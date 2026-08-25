@@ -6642,9 +6642,7 @@ try{
           m.applicationDate=a?String(a.applicationDate||''):'';
         }
       });
-      // Server pull becomes the clean local baseline.
-      saveCurrentTrainingAttendanceLocalOnly(false);
-      clearAttendanceDirty();
+      saveCurrentTrainingAttendanceLocalOnly();
       refreshAttendance();
       return true;
     }catch(e){console.warn('Guard Trainer Supabase attendance pull:',e);return false;}
@@ -6826,31 +6824,23 @@ function attendanceDirtyKey(){
 }
 function markAttendanceDirty(){
   try{
-    const k=attendanceDirtyKey();
-    window.__gtUnsavedAttendanceKey=k;
-    // Persist only the fact that this training has an unsaved local edit.
-    // The actual local attendance is already stored by saveCurrentTrainingAttendance().
-    sessionStorage.setItem('gt-unsaved-attendance-key-v924',k);
+    window.__gtUnsavedAttendanceKey=attendanceDirtyKey();
   }catch(_e){}
 }
 function isAttendanceDirtyForCurrentTraining(){
   try{
-    const k=attendanceDirtyKey();
-    return String(window.__gtUnsavedAttendanceKey||sessionStorage.getItem('gt-unsaved-attendance-key-v924')||'')===k;
+    return String(window.__gtUnsavedAttendanceKey||'')===attendanceDirtyKey();
   }catch(_e){ return false; }
 }
 function clearAttendanceDirty(){
   try{
-    const k=attendanceDirtyKey();
-    if(String(window.__gtUnsavedAttendanceKey||sessionStorage.getItem('gt-unsaved-attendance-key-v924')||'')===k){
+    if(String(window.__gtUnsavedAttendanceKey||'')===attendanceDirtyKey())
       window.__gtUnsavedAttendanceKey='';
-      sessionStorage.removeItem('gt-unsaved-attendance-key-v924');
-    }
   }catch(_e){}
 }
 
-function saveCurrentTrainingAttendanceLocalOnly(markDirty=true){
-  if(markDirty) markAttendanceDirty();
+function saveCurrentTrainingAttendanceLocalOnly(){
+  markAttendanceDirty();
   let key=trainingAttendanceKey();
   trainingAttendanceByGroup[key]=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{trainingAttendanceByGroup[key][a.surname+'|'+a.name]={training:!!a.training,trainingAccount:!!a.trainingAccount,newMember:!!a.newMember,
@@ -7258,26 +7248,25 @@ function applyBillingSnapshotToAttendance(){
 }
 
 
-async function refreshAttendanceAppV918(){
-  const btn=document.querySelector('.attendance-page .calendar-head button');
-  if(btn && btn.dataset.refreshing==='1') return false;
-  if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
+function refreshAttendanceAppV918(){
   try{
-    // Explicit refresh = discard local edits and pull the authoritative
-    // server state. The successful pull stores it as the new local baseline.
-    clearAttendanceDirty();
-    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-    if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase();
-    else if(window.gtStartAttendanceSupabaseSync) await window.gtStartAttendanceSupabaseSync();
-    if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-  }catch(e){
-    console.error('Guard Trainer attendance refresh:',e);
-    toast('Dochádzku sa nepodarilo načítať zo servera');
-  }finally{
-    if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
-  }
+    // Save the exact training context before the real browser refresh.
+    sessionStorage.setItem('gt-v918-refresh-attendance-context',JSON.stringify({
+      date:String(attendanceState.date||''),
+      group:String(attendanceState.group||''),
+      name:String(attendanceState.name||''),
+      trainingTime:String(attendanceState.trainingTime||''),
+      trainingSupabaseId:String(attendanceState.trainingSupabaseId||''),
+      trainingIdentityKey:String(attendanceState.trainingIdentityKey||'')
+    }));
+    sessionStorage.setItem('gt-v918-refresh-attendance','1');
+  }catch(_e){}
+  // This is intentionally the same full-page refresh that the user currently
+  // performs with pull-to-refresh. No attendance data is rewritten locally.
+  try{ window.location.reload(); }catch(_e){ location.reload(); }
   return false;
 }
+
 function attendance(){
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -7362,22 +7351,12 @@ function attendance(){
     </nav>
     <div id="toast" class="toast"></div>`;
   updateAttendanceTotals();
-  // Opening Dochádzka: if this training has an unsaved local edit, restore
-  // that local edit and DO NOT pull the server over it. Otherwise this is a
-  // fresh session, so pull the server state and use it as the local baseline.
-  if(isAttendanceDirtyForCurrentTraining()){
-    try{
-      loadAttendanceFromMembers();
-      refreshAttendance();
-    }catch(e){ console.warn('Attendance local restore:',e); }
-  }else{
-    (async()=>{
-      try{
-        if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-        if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase();
-        else if(window.gtStartAttendanceSupabaseSync) await window.gtStartAttendanceSupabaseSync();
-      }catch(e){ console.warn('Attendance open sync:',e); }
-    })();
+  if(window.gtStartAttendanceSupabaseSync){
+    window.gtStartAttendanceSupabaseSync();
+    // A second request is intentional: if the first pull was already running
+    // when this card opened, V917 queues it and performs a fresh server pull
+    // immediately after the first one completes.
+    setTimeout(()=>{try{window.gtStartAttendanceSupabaseSync()}catch(_e){}},300);
   }
 }
 function groupClass(g){ return g==='A'?'a':g==='B'?'b':g==='C'?'c':g==='D'?'d':'dp'; }
@@ -8000,7 +7979,11 @@ function cycleTrainingDoubleClick(i){
  else setAttendanceClickState(m,'account');
  saveCurrentTrainingAttendance();
  refreshAttendance();
- // Local edit only. It is sent to Supabase by ULOŽIŤ VYÚČTOVANIE.
+ // Double-click state changes must also be committed immediately; otherwise
+ // the periodic server pull restores the previous attendance state.
+ Promise.resolve(window.gtSaveAttendanceMemberSupabase
+   ? window.gtSaveAttendanceMemberSupabase(i)
+   : false).then(()=>{ try{ refreshAttendance(); }catch(_e){} });
 }
 function handleTrainingDoubleClick(event,i){
  if(event){event.preventDefault();event.stopPropagation();}
@@ -8424,9 +8407,12 @@ async function addNewMember(){
  refreshAttendance();
  let ni0=attendanceState.members.findIndex(x=>x.surname===surname&&x.name===name);
  if(ni0>=0) attendanceState.members[ni0].id=member.id;
- // The member record may sync now, but attendance remains local until save.
+ // Persist NOVÝ to Supabase before the member sync can remove the local draft.
+ // Then persist the attendance row for this exact date/group so mobile 2 gets it.
  try{
    if(typeof window.gtSaveMemberSupabase==='function') await window.gtSaveMemberSupabase(member.id);
+   let ni=attendanceState.members.findIndex(x=>x.surname===surname&&x.name===name);
+   if(ni>=0 && typeof window.gtSaveAttendanceMemberSupabase==='function') await window.gtSaveAttendanceMemberSupabase(ni);
  }catch(e){
    console.warn('Guard Trainer NOVÝ sync:',e);
    toast('Nový člen sa nepodarilo synchronizovať: '+e.message);

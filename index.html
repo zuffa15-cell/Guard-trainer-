@@ -7260,6 +7260,10 @@ async function refreshAttendanceAppV918(){
     if(window.gtSyncAttendanceSupabase) await window.gtSyncAttendanceSupabase();
     else if(window.gtStartAttendanceSupabaseSync) await window.gtStartAttendanceSupabaseSync();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+    // The pull itself renders the fresh state. This final totals refresh keeps
+    // the summary boxes in lock-step with that downloaded local baseline.
+    if(typeof renderAttendance==='function') renderAttendance();
+    if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
   }catch(e){
     console.error('Guard Trainer attendance refresh:',e);
     if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
@@ -8730,11 +8734,11 @@ document.addEventListener('visibilitychange',()=>{
    // 2-second server poll or a card switch replace it before ULOŽIŤ.
    if(isAttendanceDirtyForCurrentTraining()) return;
    let t=await tid(); if(!t)return;
-   let a=await request('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(t)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
+   let a=await request('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(t)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note&_gt_refresh='+Date.now());
    if(!Array.isArray(a))return;
    let ids=[...new Set(a.map(x=>String(x.member_id||'').trim()).filter(Boolean))];
    if(!ids.length)return;
-   let ms=await request('/rest/v1/members?id=in.('+ids.map(encodeURIComponent).join(',')+')&select=id,legacy_id,first_name,last_name');
+   let ms=await request('/rest/v1/members?id=in.('+ids.map(encodeURIComponent).join(',')+')&select=id,legacy_id,first_name,last_name&_gt_refresh='+Date.now());
    for(const r of a){
     const sm=(ms||[]).find(x=>String(x.id)===String(r.member_id)); if(!sm)continue;
     const k=String(sm.last_name||'').trim().toUpperCase()+'|'+String(sm.first_name||'').trim().toUpperCase();

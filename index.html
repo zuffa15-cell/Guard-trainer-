@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
-<title>Guard Trainer v879 – Guard Trainer v725</title>
+<title>Guard Trainer v932 – Guard Trainer v879 – Guard Trainer v725</title>
 <style>
 :root{
   --bg:#030303; --panel:#080808; --line:#383838; --gold:#f3b51b; --gold2:#ffc928;
@@ -7414,7 +7414,6 @@ function handleNewMemberClick(i){
 }
 
 function attendanceClickState(m){
-  if(m.newMember && m.training) return 'new-training';
   if(m.newMember) return 'new';
   if(m.trainingAccount) return 'account';
   if(m.training) return 'training';
@@ -7426,32 +7425,19 @@ function setAttendanceClickState(m,state){
   }else if(state==='account'){
     m.training=true; m.trainingAccount=true; m.newMember=false;
   }else if(state==='new'){
-    // NOVÝ is an independent flag: it does not cancel a training payment.
-    m.newMember=true; m.training=false; m.trainingAccount=false;
-  }else if(state==='new-training'){
-    // New member + paid training. New is NOT a present member.
-    m.newMember=true; m.training=true; m.trainingAccount=false;
+    m.training=false; m.trainingAccount=false; m.newMember=true;
   }else{
-    m.training=false; m.trainingAccount=false;
-    // When cancelling a training payment of a new member, keep NOVÝ.
-    // This is the important distinction that was missing before.
+    m.training=false; m.trainingAccount=false; m.newMember=false;
   }
 }
 
 function renderAttendanceRows(){
  let locked=isAttendanceFullyLocked()&&!isAdmin();
  return attendanceState.members.map((m,i)=>{
-   // ONE button, four states:
-   // 1 click  = TRÉNING 5 € (green)
-   // 2nd click = OFF
-   // 1 double-click from OFF = ÚČET 5 € (red)
-   // next double-click = NOVÝ (blue)
-   // next double-click = OFF
    let label='TRÉNING', cls='';
    let clickState=attendanceClickState(m);
-   if(clickState==='new-training'){ label='NOVÝ'; cls='new-blue training-on'; }
-   else if(clickState==='new'){ label='NOVÝ'; cls='new-blue'; }
-   else if(clickState==='account'){ label='ÚČET'; cls='account-on'; }
+   if(clickState==='new'){ label='NOVÝ'; cls='new-blue'; }
+   else if(clickState==='account'){ label='ÚČET<br><strong>5 €</strong>'; cls='account-on'; }
    else if(clickState==='training'){ label='TRÉNING'; cls='training-on'; }
    let showTrainingAmount=!!m.training && !m.trainingAccount;
    return `
@@ -7460,12 +7446,28 @@ function renderAttendanceRows(){
    <button ${locked?'disabled':''} class="pay-btn ${cls}" onclick="attendanceEditGuard()&&handleTrainingClick(${i})">${label}${showTrainingAmount?'<strong>'+trainingFee()+' €</strong>':''}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
-   <button ${locked?'disabled':''} aria-label="Dlžné" title="Dlžné" class="pay-btn ${m.debt>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${m.debt>0?'<strong>'+m.debt+' €</strong>':''}</button>
+   <button ${locked?'disabled':''} aria-label="Dlžné" title="Dlžné" class="pay-btn ${Number(m.debt||0)>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${Number(m.debt||0)>0?'<strong>'+Number(m.debt||0)+' €</strong>':''}</button>
    <button ${locked?'disabled':''} aria-label="Prihláška" title="Prihláška" class="pay-btn application-btn ${m.application?'application-on':''}" onclick="attendanceEditGuard()&&toggleApplication(${i})">▤</button>
    <div class="row-total">SPOLU <b>${rowTotal(m)} €</b></div>
  </div>`;
  }).join('');
 }
+function handleTrainingClick(i){
+ if(!attendanceEditGuard()) return;
+ let m=attendanceState.members[i]; if(!m)return;
+ let state=attendanceClickState(m);
+ let next=state==='off'?'training':state==='training'?'account':state==='account'?'new':'off';
+ setAttendanceClickState(m,next);
+ saveCurrentTrainingAttendance();
+ refreshAttendance();
+}
+function cycleTrainingDoubleClick(i){ return handleTrainingClick(i); }
+function handleTrainingDoubleClick(event,i){
+ if(event){event.preventDefault();event.stopPropagation();}
+ return handleTrainingClick(i);
+}
+function toggleTraining(i){ return handleTrainingClick(i); }
+
 function toggleApplication(i){
  if(!attendanceEditGuard()) return;
  let a=attendanceState.members[i];
@@ -7578,34 +7580,34 @@ function membershipPaidHereToday(m){
   let draft=getMembershipDraft(m.id,attendanceDateKey(),attendanceState.group);
   if(draft?.action==='add') return Number(draft.amount||30);
   if(draft?.action==='remove') return 0;
-  let rec=membershipPayments.find(p =>
-    p.memberId===attendanceMemberId(m) &&
-    Number(p.period)===currentMembershipPeriod() &&
-    p.paidGroup===attendanceState.group &&
-    p.date===attendanceDateKey()
-  );
+  let period=currentMembershipPeriod();
+  if(Number(period)===1 && !!m.membershipFirstHalf &&
+     m.membershipFirstHalfDate===attendanceDateKey() &&
+     (!m.membershipFirstHalfGroup || m.membershipFirstHalfGroup===attendanceState.group))
+    return Number(m.membershipFirstHalfAmount||30);
+  if(Number(period)===2 && !!m.membershipSecondHalf &&
+     m.membershipSecondHalfDate===attendanceDateKey() &&
+     (!m.membershipSecondHalfGroup || m.membershipSecondHalfGroup===attendanceState.group))
+    return Number(m.membershipSecondHalfAmount||30);
+  let rec=membershipPayments.find(p=>p.memberId===attendanceMemberId(m) &&
+    Number(p.period)===period && p.paidGroup===attendanceState.group &&
+    p.date===attendanceDateKey());
   if(rec) return Number(rec.amount||30);
   let row=attendanceState.members.find(a=>a.surname===m.surname&&a.name===m.name);
-  if(row &&
-     Number(row.membershipAmount||0)>0 &&
+  if(row && Number(row.membershipAmount||0)>0 &&
      row.membershipDate===attendanceDateKey() &&
-     row.membershipPaidGroup===attendanceState.group){
+     row.membershipPaidGroup===attendanceState.group)
     return Number(row.membershipAmount);
-  }
-  if(m.membership &&
-     m.membershipDate===attendanceDateKey() &&
-     m.membershipPaidGroup===attendanceState.group){
+  if(m.membership && m.membershipDate===attendanceDateKey() &&
+     m.membershipPaidGroup===attendanceState.group)
     return Number(m.membershipAmount||30);
-  }
-  // Fallback for a previously saved billing row opened from "Moje vyúčtovanie".
-  // Use it only when live payment history has no matching payment; the saved
-  // billing row must still reproduce its own financial totals.
   if(!isAdmin() && attendanceState.billingPaymentSnapshot){
     let snap=attendanceState.billingPaymentSnapshot[m.surname+'|'+m.name];
     if(snap && Number(snap.membership||0)>0) return Number(snap.membership||0);
   }
   return 0;
 }
+
 function memberHasRegistration(m){
   if(!m)return false;
   // The synchronized member record is authoritative. If registration is
@@ -7921,8 +7923,18 @@ function updateAttendanceTotals(){
  let newCount=attendanceState.members.filter(m=>m.newMember).length;
  let pe=document.getElementById('presentCount'); if(pe)pe.textContent=presentCount;
  let ne=document.getElementById('newCount'); if(ne)ne.textContent=newCount;
- let membershipCount=attendanceState.members.filter(m=>Number(membershipPaidHere(m)||0)>0).length;
- let registrationCount=attendanceState.members.filter(m=>registrationPaidHere(m)).length;
+ // Count the same paid state that is actually shown in each member row.
+ // The old counters used the legacy date-only history functions, so a payment
+ // downloaded from the server could be visible as 30 € while the header said
+ // 0 platieb.
+ let membershipCount=attendanceState.members.filter(m=>{
+   let here=Number(membershipPaidHereToday(m)||0)>0;
+   let elsewhere=membershipPayments.some(p=>Number(p.memberId)===Number(attendanceMemberId(m)));
+   return here || elsewhere || memberHasMembership(m);
+ }).length;
+ let registrationCount=attendanceState.members.filter(m=>{
+   return registrationPaidHereToday(m) || memberHasRegistration(m);
+ }).length;
  let debtCount=attendanceState.members.filter(m=>Number(m.debt||0)>0).length;
  let plus=Number(attendanceState.otherPlus||0);
  let minus=Number(attendanceState.otherMinus||0);

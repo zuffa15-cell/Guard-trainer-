@@ -8668,6 +8668,11 @@ function normalizeMonthlyBillingRecords(){
   let map=new Map();
   let norm=s=>String(s||'').trim().toUpperCase();
   (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
+    // v965 FIX: ignore REAL sync records - they are not billing
+    let rk = String(r.record_key||'').toUpperCase();
+    if(rk.startsWith('REAL|') || rk.startsWith('SIMPLE|')) return;
+    if(r.isSimpleAttendance) return;
+    if(r.payload && r.payload.isSimpleAttendance) return;
     let d=parsePaymentDate(r.date);
     if(!d) return;
     let trainer=String(r.trainer||CURRENT_TRAINER_NAME||'').trim();
@@ -8761,7 +8766,12 @@ function getBillingRecords(){
     try{
       let rows=await request('/rest/v1/billing_records?select=record_key,payload&order=updated_at.asc');
       let serverMap=new Map();
-      (rows||[]).forEach(x=>{ if(x&&x.payload&&x.record_key) serverMap.set(String(x.record_key),x.payload); });
+      (rows||[]).forEach(x=>{ 
+        if(!x||!x.payload||!x.record_key) return;
+        let rk=String(x.record_key).toUpperCase();
+        if(rk.startsWith('REAL|') || rk.startsWith('SIMPLE|')) return;
+        serverMap.set(String(x.record_key),x.payload); 
+      });
       let localMap=new Map();
       (monthlyBillingRecords||[]).forEach(r=>localMap.set(recordKey(r),r));
       // After ULOŽIŤ VYÚČTOVANIE the server is authoritative.
@@ -8770,6 +8780,8 @@ function getBillingRecords(){
       // timestamp is newer. Local changes are sent explicitly by the Save
       // button above, so a normal pull must always take the server copy.
       for(let [rk,sr] of serverMap){
+        let up=rk.toUpperCase();
+        if(up.startsWith('REAL|') || up.startsWith('SIMPLE|')) continue;
         localMap.set(rk,sr);
       }
       monthlyBillingRecords=Array.from(localMap.values());

@@ -7290,18 +7290,16 @@ async function refreshAttendanceAppV918(){
   const btn=document.querySelector('.attendance-page .calendar-head button');
   if(btn){ btn.disabled=true; btn.textContent='…'; }
   try{
-    if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase().catch(function(){});
-    if(window.__gtSimple && window.__gtSimple.load){
-      let ok = await window.__gtSimple.load();
+    if(window.__gtReal && window.__gtReal.load){
+      let ok = await window.__gtReal.load();
       if(ok){
         if(typeof renderAttendance==='function') renderAttendance();
         if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-        if(typeof toast==='function') toast('Aktualizované ✓ '+attendanceState.members.length+' členov');
+        if(typeof toast==='function') toast('Dochádzka aktualizovaná ✓');
         return false;
-      } else {
-        if(typeof toast==='function') toast('Na serveri nie je: '+attendanceState.date+' '+attendanceState.group);
       }
     }
+    if(typeof toast==='function') toast('Na serveri nie je uložená dochádzka');
   }catch(e){
     if(typeof toast==='function') toast('Chyba: '+e.message);
   }finally{
@@ -7330,29 +7328,41 @@ window.__gtAutoPullAttendance = async function(source){
 };
 
 
-// v967 ROBUST SYNC
-window.__gtSimple = {
+// v968 - VYPNI VSETKO STARE, NECHAJ LEN REAL
+window.__gtAttendancePull = async function(){ return false; };
+window.gtSyncAttendanceSupabase = async function(){ return false; };
+window.gtStartAttendanceSupabaseSync = function(){ return Promise.resolve(false); };
+window.__gtAutoPullAttendance = async function(){ return false; };
+if(window.__gtAttendanceSyncTimer){ clearInterval(window.__gtAttendanceSyncTimer); window.__gtAttendanceSyncTimer=null; }
+
+// Vypni stary member sync na dochadzke
+let _origInstall = window.installSupabaseMembersSync || null;
+
+
+// v968 - JEDNA DOCHADZKA, ZIADNE BLIKANIE
+window.__gtReal = {
   save: async function(){
     if(!attendanceState || !attendanceState.date || !attendanceState.group) return;
-    let isoDate = String(attendanceState.date);
-    let normDate = isoDate;
-    if(isoDate.indexOf('.')>-1){
-      let p = isoDate.replace(/ /g,'').split('.');
-      if(p.length>=3) normDate = p[2]+'-'+String(p[1]).padStart(2,'0')+'-'+String(p[0]).padStart(2,'0');
+    let d = String(attendanceState.date);
+    let norm = d;
+    if(d.indexOf('.')>-1){
+      let p=d.replace(/ /g,'').split('.');
+      if(p.length>=3) norm=p[2]+'-'+p[1].padStart(2,'0')+'-'+p[0].padStart(2,'0');
     }
-    let key = normDate + '|' + attendanceState.group;
-    let data = {
-      date: normDate,
+    let key = norm+'|'+attendanceState.group;
+    let payload = {
+      date: norm,
       group: attendanceState.group,
       members: JSON.parse(JSON.stringify(attendanceState.members||[])),
       savedAt: Date.now()
     };
-    try{ localStorage.setItem('gt-real|'+key, JSON.stringify(data)); }catch(e){}
+    try{ localStorage.setItem('gt-one|'+key, JSON.stringify(payload)); }catch(e){}
+    // prepíš lokálnu históriu aby neblikala
     try{
-      let tKey = typeof trainingAttendanceKey==='function' ? trainingAttendanceKey() : (attendanceState.group + '|' + attendanceState.date);
+      let tKey = typeof trainingAttendanceKey==='function' ? trainingAttendanceKey() : key;
       if(typeof trainingAttendanceByGroup!=='undefined'){
         trainingAttendanceByGroup[tKey] = {};
-        data.members.forEach(function(m){
+        payload.members.forEach(function(m){
           trainingAttendanceByGroup[tKey][m.surname+'|'+m.name] = {
             training: !!m.training,
             trainingAccount: !!m.trainingAccount,
@@ -7364,89 +7374,65 @@ window.__gtSimple = {
           };
         });
         if(typeof persistTrainingAttendanceHistory==='function') persistTrainingAttendanceHistory();
-        if(typeof markAttendanceSavedNow==='function') markAttendanceSavedNow(attendanceState.date, attendanceState.group);
       }
     }catch(e){}
     try{
       let token=''; try{token=localStorage.getItem('gt-supabase-access-token')||''}catch(e){}
-      let apikey = String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
-      let url = String(window.GT_SUPABASE_URL).trim();
+      let apikey=String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
+      let url=String(window.GT_SUPABASE_URL).trim();
       if(token && apikey){
         await window.gtSupabaseFetch(url+'/rest/v1/billing_records?on_conflict=record_key',{
           method:'POST',
           headers:{'apikey':apikey,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
           body: JSON.stringify({
-            record_key: 'REAL|'+key,
+            record_key: 'ONE|'+key,
             trainer: 'shared',
-            training_date: normDate,
+            training_date: norm,
             group_code: attendanceState.group,
-            payload: data,
+            payload: payload,
             updated_at: new Date().toISOString()
           })
         });
-        if(typeof toast==='function') toast('Uložené na server ✓ '+data.members.length+' členov');
+        console.log('ONE saved', key);
       }
-    }catch(e){ if(typeof toast==='function') toast('Chyba ukladania: '+e.message); }
+    }catch(e){ console.warn(e); }
   },
   load: async function(){
     if(!attendanceState || !attendanceState.date || !attendanceState.group) return false;
-    let isoDate = String(attendanceState.date);
-    let normDate = isoDate;
-    if(isoDate.indexOf('.')>-1){
-      let p = isoDate.replace(/ /g,'').split('.');
-      if(p.length>=3) normDate = p[2]+'-'+String(p[1]).padStart(2,'0')+'-'+String(p[0]).padStart(2,'0');
+    let d = String(attendanceState.date);
+    let norm = d;
+    if(d.indexOf('.')>-1){
+      let p=d.replace(/ /g,'').split('.');
+      if(p.length>=3) norm=p[2]+'-'+p[1].padStart(2,'0')+'-'+p[0].padStart(2,'0');
     }
-    let key = normDate + '|' + attendanceState.group;
-    let found = null;
+    let key = norm+'|'+attendanceState.group;
+    let found=null;
     try{
       let token=''; try{token=localStorage.getItem('gt-supabase-access-token')||''}catch(e){}
-      let apikey = String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
-      let url = String(window.GT_SUPABASE_URL).trim();
+      let apikey=String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim();
+      let url=String(window.GT_SUPABASE_URL).trim();
       if(token && apikey){
-        let r = await window.gtSupabaseFetch(url+'/rest/v1/billing_records?group_code=eq.'+encodeURIComponent(attendanceState.group)+'&select=payload,record_key,updated_at&order=updated_at.desc&limit=50',{
+        let r = await window.gtSupabaseFetch(url+'/rest/v1/billing_records?record_key=eq.'+encodeURIComponent('ONE|'+key)+'&select=payload&limit=1',{
           headers:{'apikey':apikey,'Authorization':'Bearer '+token}
         });
         if(r.ok){
-          let rows = await r.json();
-          for(let i=0;i<rows.length;i++){
-            let row=rows[i];
-            let rk=String(row.record_key||'');
-            if(rk.indexOf('REAL|')!==0) continue;
-            let p=row.payload;
-            if(!p || !p.members) continue;
-            if(String(p.date||'')===normDate || rk===('REAL|'+key)){
-              found=p; break;
-            }
-          }
-          if(!found){
-            for(let i=0;i<rows.length;i++){
-              let row=rows[i];
-              let rk=String(row.record_key||'');
-              if(rk.indexOf('REAL|')===0 && row.payload && row.payload.members && String(row.payload.group||'')===attendanceState.group){
-                found=row.payload; break;
-              }
-            }
-          }
+          let rows=await r.json();
+          if(rows && rows[0] && rows[0].payload && rows[0].payload.members) found=rows[0].payload;
         }
       }
-    }catch(e){ console.warn(e); }
+    }catch(e){}
     if(!found){
-      try{ let raw=localStorage.getItem('gt-real|'+key); if(raw) found=JSON.parse(raw); }catch(e){}
+      try{ let raw=localStorage.getItem('gt-one|'+key); if(raw) found=JSON.parse(raw); }catch(e){}
     }
     if(!found || !found.members) return false;
-    let oldMap = new Map((attendanceState.members||[]).map(function(m){ return [m.surname+'|'+m.name, m]; }));
-    let newList = [];
-    found.members.forEach(function(rm){
-      let old = oldMap.get(rm.surname+'|'+rm.name);
-      if(old) newList.push(Object.assign({}, old, rm));
-      else newList.push(rm);
-    });
-    attendanceState.members = newList;
+    // FULL REPLACE - žiadny merge, žiadne blikanie
+    attendanceState.members = found.members.map(function(m){ return Object.assign({}, m); });
+    // prepíš históriu
     try{
-      let tKey = typeof trainingAttendanceKey==='function' ? trainingAttendanceKey() : (attendanceState.group + '|' + attendanceState.date);
+      let tKey = typeof trainingAttendanceKey==='function' ? trainingAttendanceKey() : key;
       if(typeof trainingAttendanceByGroup!=='undefined'){
         trainingAttendanceByGroup[tKey] = {};
-        newList.forEach(function(m){
+        attendanceState.members.forEach(function(m){
           trainingAttendanceByGroup[tKey][m.surname+'|'+m.name] = {
             training: !!m.training,
             trainingAccount: !!m.trainingAccount,
@@ -7459,39 +7445,13 @@ window.__gtSimple = {
         });
         if(typeof persistTrainingAttendanceHistory==='function') persistTrainingAttendanceHistory();
         if(typeof clearAttendanceDirty==='function') clearAttendanceDirty();
-        if(typeof markAttendanceSavedNow==='function') markAttendanceSavedNow(attendanceState.date, attendanceState.group);
       }
     }catch(e){}
     return true;
   }
 };
-setTimeout(function(){
-  document.addEventListener('click', function(e){
-    let t=e.target;
-    if(t && t.textContent && t.textContent.indexOf('ULOŽIŤ VYÚČTOVANIE')>-1){
-      setTimeout(function(){ window.__gtSimple.save().catch(function(){}); }, 700);
-    }
-  });
-}, 2000);
-
 
 function attendance(){
-  setTimeout(async function(){
-    try{
-      if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase().catch(function(){});
-      if(window.__gtSimple && window.__gtSimple.load){
-        let ok = await window.__gtSimple.load();
-        if(ok){
-          if(typeof renderAttendance==='function') renderAttendance();
-          if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-          if(typeof toast==='function') toast('Dochádzka zo servera ✓');
-        } else {
-          if(typeof toast==='function') toast('Žiadna dochádzka na serveri');
-        }
-      }
-    }catch(e){}
-  }, 1500);
-
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
   if(window.__attendanceOpenSource==='home' || window.__attendanceHomeDate){
@@ -7520,6 +7480,13 @@ function attendance(){
     attendanceState.billingAttendanceSnapshot=null;
   }
   loadAttendanceFromMembers();
+  // v968 - skús ONE sync hneď, synchronne z localStorage
+  try{
+    let d=String(attendanceState.date); let norm=d; if(d.indexOf(".")>-1){ let p=d.replace(/ /g,"").split("."); if(p.length>=3) norm=p[2]+"-"+p[1].padStart(2,"0")+"-"+p[0].padStart(2,"0"); }
+    let key=norm+"|"+attendanceState.group;
+    let raw=localStorage.getItem("gt-one|"+key);
+    if(raw){ let found=JSON.parse(raw); if(found && found.members){ attendanceState.members = found.members.map(function(m){ return Object.assign({}, m); }); } }
+  }catch(e){}
   if(committedBeforeMembers){
     attendanceState.billingRecordSnapshot=committedBeforeMembers;
     applyBillingSnapshotToAttendance();
@@ -8699,7 +8666,7 @@ function normalizeMonthlyBillingRecords(){
   let norm=s=>String(s||'').trim().toUpperCase();
   (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
     let rk = String(r.record_key||'').toUpperCase();
-    if(rk.indexOf('REAL|')===0 || rk.indexOf('SIMPLE|')===0) return;
+    if(rk.indexOf('ONE|')===0 || rk.indexOf('REAL|')===0 || rk.indexOf('SIMPLE|')===0) return;
     let d=parsePaymentDate(r.date);
     if(!d) return;
     let trainer=String(r.trainer||CURRENT_TRAINER_NAME||'').trim();
@@ -9427,6 +9394,7 @@ async function saveTrainingBilling(){
   try{ syncAllRegistrationBillingFromMembers(); }catch(e){ console.warn('registration billing sync:',e); }
   // Persist the exact edited attendance state before leaving the screen.
   saveCurrentTrainingAttendanceLocalOnly();
+  try{ if(window.__gtReal && window.__gtReal.save) window.__gtReal.save().catch(function(){}); }catch(e){}
   let fee=trainingFee();
   let paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
   let trainingPaid=attendanceState.members.filter(m=>m.training&&!m.trainingAccount).length;

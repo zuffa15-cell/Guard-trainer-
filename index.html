@@ -6819,7 +6819,28 @@ function loadCommittedTrainingSnapshot(){
   }catch(e){ console.warn('billing snapshot cache load failed',e); return null; }
 }
 
+function attendanceDirtyKey(){
+  return `${String(attendanceState.date||'')}|${String(attendanceState.group||'').trim().toUpperCase()}|${String(attendanceState.trainingTime||'')}`;
+}
+function markAttendanceDirty(){
+  try{
+    window.__gtUnsavedAttendanceKey=attendanceDirtyKey();
+  }catch(_e){}
+}
+function isAttendanceDirtyForCurrentTraining(){
+  try{
+    return String(window.__gtUnsavedAttendanceKey||'')===attendanceDirtyKey();
+  }catch(_e){ return false; }
+}
+function clearAttendanceDirty(){
+  try{
+    if(String(window.__gtUnsavedAttendanceKey||'')===attendanceDirtyKey())
+      window.__gtUnsavedAttendanceKey='';
+  }catch(_e){}
+}
+
 function saveCurrentTrainingAttendanceLocalOnly(){
+  markAttendanceDirty();
   let key=trainingAttendanceKey();
   trainingAttendanceByGroup[key]=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{trainingAttendanceByGroup[key][a.surname+'|'+a.name]={training:!!a.training,trainingAccount:!!a.trainingAccount,newMember:!!a.newMember,
@@ -7942,13 +7963,7 @@ function handleTrainingClick(i){
    else setAttendanceClickState(m,state==='off'?'training':'off');
    saveCurrentTrainingAttendance();
    refreshAttendance();
-   // IMPORTANT: a tap changes the shared attendance immediately. Previously
-   // this only wrote localStorage, while the 700 ms Supabase pull below
-   // reloaded the old server value after about 2 seconds and reverted the UI.
-   // Push the exact member state now so the next pull sees the new value.
-   Promise.resolve(window.gtSaveAttendanceMemberSupabase
-     ? window.gtSaveAttendanceMemberSupabase(i)
-     : false).then(()=>{ try{ refreshAttendance(); }catch(_e){} });
+   // Attendance remains local until the explicit ULOŽIŤ VYÚČTOVANIE.
  },500);
  trainingClickTimers[key]={time:now,timer};
 }
@@ -8713,6 +8728,9 @@ document.addEventListener('visibilitychange',()=>{
  }
  async function pull(){
   try{
+   // Unsaved local attendance is authoritative on this device. Do not let the
+   // 2-second server poll or a card switch replace it before ULOŽIŤ.
+   if(isAttendanceDirtyForCurrentTraining()) return;
    let t=await tid(); if(!t)return;
    let a=await request('/rest/v1/attendance?training_id=eq.'+encodeURIComponent(t)+'&select=member_id,present,new_member,training_fee_paid,debt_amount,debt_note');
    if(!Array.isArray(a))return;
@@ -9370,6 +9388,10 @@ async function saveTrainingBilling(){
     resetSaveButton();
     return false;
   }
+  // The complete attendance has now reached Supabase successfully.
+  // It is safe to allow future server pulls to replace the local edit.
+  clearAttendanceDirty();
+
   // Re-save the final server-confirmed snapshot. This is the exact state used
   // when the user returns to Dochádzka and also survives a WebView refresh.
   persistCommittedTrainingSnapshot(record);

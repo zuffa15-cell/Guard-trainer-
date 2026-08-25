@@ -12649,7 +12649,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   if(window.__gtV918RefreshRestoreInstalled) return;
   window.__gtV918RefreshRestoreInstalled=true;
 
-  function restoreAfterRefresh(){
+  async function restoreAfterRefresh(){
     let raw=null,flag=null;
     try{
       flag=sessionStorage.getItem('gt-v918-refresh-attendance');
@@ -12657,10 +12657,10 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     }catch(_e){}
     if(flag!=='1'||!raw) return false;
     if(typeof attendance!=='function'||typeof attendanceState==='undefined') return false;
+
     let c;
     try{c=JSON.parse(raw)}catch(_e){return false;}
 
-    // Wait until the normal app boot/auth has completed.
     if(!document.querySelector('.app')) return false;
 
     try{
@@ -12670,174 +12670,45 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
       attendanceState.trainingTime=String(c.trainingTime||attendanceState.trainingTime||'');
       attendanceState.trainingSupabaseId=String(c.trainingSupabaseId||attendanceState.trainingSupabaseId||'');
       attendanceState.trainingIdentityKey=String(c.trainingIdentityKey||attendanceState.trainingIdentityKey||'');
+
       sessionStorage.removeItem('gt-v918-refresh-attendance');
       sessionStorage.removeItem('gt-v918-refresh-attendance-context');
       location.hash='#attendance';
+
+      // First render the requested training, then wait for the SAME server pull
+      // used by the app. The important part is the second render after the
+      // server response: this is what normally happens when the user leaves
+      // the card and comes back.
+      attendance();
+
+      if(window.gtSyncMembersSupabase){
+        try{ await window.gtSyncMembersSupabase(); }catch(_e){}
+      }
+      if(window.gtSyncAttendanceSupabase){
+        try{ await window.gtSyncAttendanceSupabase(); }catch(_e){}
+      }else if(window.gtStartAttendanceSupabaseSync){
+        try{ await window.gtStartAttendanceSupabaseSync(); }catch(_e){}
+      }
+
+      // Re-render AFTER the server values have been applied.
       attendance();
       return true;
     }catch(e){
-      console.warn('V918 attendance refresh restore',e);
+      console.warn('V920 attendance refresh restore',e);
       return false;
     }
   }
 
   let n=0;
   function wait(){
-    if(restoreAfterRefresh()) return;
-    if(++n<100) setTimeout(wait,100);
-  }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(wait,100));
-  else setTimeout(wait,100);
-})();</script>
-
-
-</body>
-
-<style id="v650-statistika-fit-final">
-/* v650: statistics tile stays fully inside its profile slot; no transform clipping */
-.member-profile-training-count{
-  width:150px!important;
-  height:155px!important;
-  min-width:150px!important;
-  min-height:155px!important;
-  max-width:150px!important;
-  max-height:155px!important;
-  overflow:hidden!important;
-  box-sizing:border-box!important;
-}
-.member-profile-training-count .member-stats-btn{
-  width:100%!important;
-  height:100%!important;
-  min-height:0!important;
-  max-height:none!important;
-  transform:none!important;
-  overflow:hidden!important;
-  box-sizing:border-box!important;
-  padding:7px 5px!important;
-  gap:2px!important;
-}
-.member-profile-training-count .member-stats-btn .member-stats-label{
-  font-size:15px!important;
-  line-height:1.05!important;
-  white-space:nowrap!important;
-}
-.member-profile-training-count .member-stats-btn strong{
-  font-size:38px!important;
-  line-height:1!important;
-}
-.member-profile-training-count .member-stats-btn .member-stats-title{
-  font-size:13px!important;
-  line-height:1.05!important;
-  padding-top:6px!important;
-  width:88%!important;
-  white-space:nowrap!important;
-}
-</style>
-
-<style id="v651-statistika-name-row">
-/* v651: statistics tile stays only in the same top row as the member name. */
-.member-profile-training-count{
-  position:static!important;
-  width:150px!important;
-  height:120px!important;
-  min-width:150px!important;
-  min-height:120px!important;
-  max-width:150px!important;
-  max-height:120px!important;
-  transform:none!important;
-  overflow:hidden!important;
-  box-sizing:border-box!important;
-  margin:0!important;
-}
-.member-profile-training-count .member-stats-btn{
-  width:100%!important; height:100%!important;
-  transform:none!important;
-  padding:6px 5px!important; gap:2px!important;
-  box-sizing:border-box!important;
-}
-.member-profile-training-count .member-stats-btn .member-stats-label{font-size:15px!important;line-height:1.05!important;white-space:nowrap!important;}
-.member-profile-training-count .member-stats-btn strong{font-size:38px!important;line-height:1!important;}
-.member-profile-training-count .member-stats-btn .member-stats-title{font-size:13px!important;line-height:1.05!important;padding-top:6px!important;width:88%!important;white-space:nowrap!important;}
-@media(max-width:700px){
-  .member-hero{grid-template-columns:60px minmax(0,1fr) 112px!important;gap:6px!important;align-items:start!important;}
-  .member-profile-training-count{grid-column:3!important;grid-row:1!important;width:112px!important;height:92px!important;min-width:112px!important;min-height:92px!important;max-width:112px!important;max-height:92px!important;}
-  .member-profile-training-count .member-stats-btn{padding:5px 3px!important;}
-  .member-profile-training-count .member-stats-btn .member-stats-label{font-size:11px!important;}
-  .member-profile-training-count .member-stats-btn strong{font-size:29px!important;}
-  .member-profile-training-count .member-stats-btn .member-stats-title{font-size:10px!important;padding-top:5px!important;}
-  .member-meta{grid-column:1/-1!important;}
-}
-@media(max-width:420px){
-  .member-hero{grid-template-columns:60px minmax(0,1fr) 112px!important;gap:6px!important;}
-  .member-profile-training-count{grid-column:3!important;grid-row:1!important;width:112px!important;height:92px!important;}
-}
-</style>
-
-<style id="v653-statistika-fluid-row">
-/* v653: statistika sa automaticky prispôsobí výške riadku mena/skupín.
-   Nie je pevne nastavená a nikdy nepresahuje profilovú kartu. */
-.member-profile-training-count{
-  width:auto!important;
-  height:auto!important;
-  min-width:0!important;
-  min-height:0!important;
-  max-width:100%!important;
-  max-height:100%!important;
-  margin-top:0!important;
-  overflow:hidden!important;
-  box-sizing:border-box!important;
-  align-self:start!important;
-}
-.member-profile-training-count .member-stats-btn{
-  width:100%!important;
-  height:100%!important;
-  min-height:0!important;
-  max-height:none!important;
-  transform:none!important;
-  box-sizing:border-box!important;
-}
-@media(max-width:700px){
-  .member-hero{
-    grid-template-columns:60px minmax(0,1fr) minmax(76px,105px)!important;
-    gap:6px!important;
-    align-items:start!important;
-  }
-  .member-profile-training-count{
-    grid-column:3!important;
-    grid-row:1!important;
-    width:100%!important;
-    max-width:105px!important;
-  }
-}
-@media(max-width:420px){
-  .member-hero{grid-template-columns:60px minmax(0,1fr) minmax(72px,96px)!important;gap:5px!important;}
-  .member-profile-training-count{max-width:96px!important;}
-}
-</style>
-<script>
-(function(){
-  function fitMemberStats(){
-    document.querySelectorAll('.member-hero').forEach(function(hero){
-      var tile=hero.querySelector('.member-profile-training-count');
-      if(!tile) return;
-      var nameBlock=hero.children[1];
-      if(!nameBlock) return;
-      var heroRect=hero.getBoundingClientRect();
-      var nameRect=nameBlock.getBoundingClientRect();
-      var availableWidth=heroRect.right - tile.getBoundingClientRect().left;
-      var rowHeight=Math.max(0,nameRect.height);
-      var size=Math.min(105, availableWidth, rowHeight || 105);
-      if(window.innerWidth<=420) size=Math.min(size,96);
-      size=Math.max(72,size);
-      tile.style.width=Math.floor(size)+'px';
-      tile.style.height=Math.floor(size)+'px';
-      tile.style.maxWidth='calc(100% - 1px)';
-      tile.style.maxHeight='calc(100% - 1px)';
+    restoreAfterRefresh().then(ok=>{
+      if(!ok && ++n<100) setTimeout(wait,100);
     });
   }
-  document.addEventListener('DOMContentLoaded',function(){fitMemberStats();setTimeout(fitMemberStats,100);setTimeout(fitMemberStats,400);});
-  window.addEventListener('resize',fitMemberStats);
-  new MutationObserver(function(){requestAnimationFrame(fitMemberStats);}).observe(document.documentElement,{subtree:true,childList:true});
+
+  if(document.readyState==='loading')
+    document.addEventListener('DOMContentLoaded',()=>setTimeout(wait,100));
+  else setTimeout(wait,100);
 })();
 </script>
 

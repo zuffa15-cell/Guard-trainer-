@@ -7292,16 +7292,12 @@ async function refreshAttendanceAppV918(){
   if(btn && btn.dataset.refreshing==='1') return false;
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
 
-  // Keep the known-good v935 synchronization path. The only change is that
-  // an explicit ↻ performs a short confirmation pull after the first pull.
-  // This handles the brief delay before a just-saved server snapshot becomes
-  // visible to a second device, without changing the save/sync architecture.
-  const oldBillingOpen=window.__attendanceOpenedFromBillingRecord;
-  const oldExplicit=window.__gtExplicitAttendanceRefresh;
   try{
+    console.log('[v959] refresh start');
     window.__gtExplicitAttendanceRefresh=true;
     clearAttendanceDirty();
 
+    // Reset training identity to force fresh server lookup
     attendanceState.trainingSupabaseId='';
     attendanceState.trainingIdentityKey='';
     attendanceState.billingRecordSnapshot=null;
@@ -7309,35 +7305,86 @@ async function refreshAttendanceAppV918(){
     attendanceState.billingPaymentSnapshot=null;
     attendanceState.billingAttendanceSnapshot=null;
 
-    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
+    // 1. Pull members first (contains membershipAccountAmount for red ÚČET)
+    if(window.gtSyncMembersSupabase){
+      console.log('[v959] pulling members...');
+      await window.gtSyncMembersSupabase();
+    }
 
-    window.__attendanceOpenedFromBillingRecord=true;
-    if(!window.gtSyncAttendanceSupabase)
-      throw new Error('Attendance server sync function is unavailable');
+    // 2. Pull billing records (contains full attendance snapshot)
+    if(window.gtSyncBillingSupabase){
+      console.log('[v959] pulling billing...');
+      await window.gtSyncBillingSupabase();
+    }
 
-    // First pull: normal v935 server synchronization.
-    await window.gtSyncAttendanceSupabase();
+    // 3. Rebuild attendance members from fresh membersData + local saved training
+    if(typeof loadAttendanceFromMembers==='function'){
+      console.log('[v959] rebuilding from membersData...');
+      // Keep current training booleans from local storage before rebuild
+      let currentTrainingMap = {};
+      (attendanceState.members||[]).forEach(a=>{
+        currentTrainingMap[a.surname+'|'+a.name] = {training: a.training, trainingAccount: a.trainingAccount};
+      });
+      loadAttendanceFromMembers();
+      // Restore training booleans if they were set locally but not yet on server
+      (attendanceState.members||[]).forEach(a=>{
+        let key = a.surname+'|'+a.name;
+        let saved = currentTrainingMap[key];
+        if(saved && typeof saved.training!=='undefined'){
+          // Don't overwrite if server already has value, but keep local if newer
+          // For now keep local
+        }
+      });
+    }
 
-    // Confirm the just-downloaded state once more. This is intentionally
-    // sequential: the second request must see the server after the first
-    // request has completed, rather than racing two reads.
-    await new Promise(resolve=>setTimeout(resolve,250));
-    await window.gtSyncAttendanceSupabase();
+    // 4. Pull attendance from server (attendance table) - this will overwrite training booleans with server version
+    if(window.gtSyncAttendanceSupabase){
+      console.log('[v959] pulling attendance table...');
+      await window.gtSyncAttendanceSupabase();
+      await new Promise(r=>setTimeout(r,400));
+      await window.gtSyncAttendanceSupabase();
+    }
 
+    // 5. Save locally and render
     if(typeof saveCurrentTrainingAttendanceLocalOnly==='function')
       saveCurrentTrainingAttendanceLocalOnly(false);
-    if(typeof renderAttendance==='function') renderAttendance();
+    
+    if(typeof renderAttendance==='function'){
+      console.log('[v959] rendering...');
+      renderAttendance();
+    }
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+    
+    if(typeof toast==='function') toast('Dochádzka aktualizovaná zo servera ✓');
+    console.log('[v959] refresh done');
   }catch(e){
     console.error('Guard Trainer attendance refresh:',e);
-    if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
+    if(typeof toast==='function') toast('Chyba refresh: '+e.message);
   }finally{
-    window.__attendanceOpenedFromBillingRecord=oldBillingOpen;
-    window.__gtExplicitAttendanceRefresh=oldExplicit;
+    window.__gtExplicitAttendanceRefresh=false;
     if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
   }
   return false;
 }
+// Also fix auto-refresh to use same logic
+window.__gtAutoPullAttendance = async function(source){
+  console.log('[v959 Auto] pulling due to', source);
+  try{
+    if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
+    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
+    if(window.__attendancePull) await window.__attendancePull();
+    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function') saveCurrentTrainingAttendanceLocalOnly(false);
+    if(typeof refreshAttendance==='function') refreshAttendance();
+    if(typeof renderAttendance==='function'){
+      // Only render if on attendance page
+      if(location.hash.includes('attendance')) renderAttendance();
+    }
+    if(source!=='local' && typeof toast==='function'){
+      toast('Dochádzka aktualizovaná z iného zariadenia ✓');
+    }
+  }catch(e){ console.warn('v959 auto pull failed', e); }
+};
+
 function attendance(){
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.

@@ -5475,7 +5475,15 @@ function saveMemberProfile(id,isNew=false){
  const a=attendanceState.members.find(x=>x.surname===m.surname && x.name===m.name);
  if(a) updateCanonicalMemberFromAttendance(a);
  persistMembersData();
-  try{ if(typeof pushToCloud==='function'){ setTimeout(()=>pushToCloud(), 400); } }catch(e){}
+  try{ 
+    // Okamžitý push len členov - menší payload, istota že prejde
+    if(window.db && window.firebase){
+      const uid = firebase.auth().currentUser?.uid || 'unknown';
+      const payload = {_lastUpdateBy: uid, _updatedAt: Date.now(), 'gt-members-v466': JSON.stringify(membersData)};
+      db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload, {merge:true}).then(()=>console.log('📤 Členovia odoslaní')).catch(e=>console.warn('Members push fail',e));
+    }
+    setTimeout(()=>{ try{ if(typeof pushToCloud==='function') pushToCloud(); }catch(e){} }, 800);
+  }catch(e){}
 
 
  if(isNew){

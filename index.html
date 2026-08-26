@@ -21,6 +21,10 @@ let db = null;
 let cloudEnabled = false;
 let syncEnabled = false;
 let isApplyingRemote = false;
+const originalSetItem = localStorage.setItem.bind(localStorage);
+localStorage.setItem = function(k,v){ originalSetItem(k,v); if(SYNC_KEYS.includes(k) && !isApplyingRemote) pushToCloud(); }
+
+
 let lastCloudUpdate = 0;
 
 try {
@@ -35,10 +39,9 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-members-v466','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance'];
+const SYNC_KEYS = ["gt-members","gt-members-v466","gt-training-attendance-history","gt-monthly-billing-v221","gt-attendance","gt-schedule","gt-finance","gt-billing","gt-training-attendance"];
 
 // Zachovaj originál pred prepisom
-const originalSetItem = localStorage.setItem.bind(localStorage);
 const originalGetItem = localStorage.getItem.bind(localStorage);
 
 function initCloudSync(){
@@ -206,28 +209,23 @@ function initCloudSync(){
   syncEnabled = true;
 }
 
-function pushToCloud(force = false){
-  if(!db || !cloudEnabled) return;
-  if(isApplyingRemote) return; // neposielaj keď práve aplikujem vzdialené zmeny
-  const uid = firebase.auth().currentUser?.uid;
-  if(!uid && !force) return;
-  
-  const payload = {_lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
-  lastCloudUpdate = payload._updatedAt;
-  
-  SYNC_KEYS.forEach(k=>{
-    const v = originalGetItem(k);
-    if(v) payload[k] = v;
-  });
-  Object.keys(localStorage).forEach(k=>{
-    if(k.startsWith('gt-') && !payload[k]) {
-      const v = originalGetItem(k);
-      if(v) payload[k] = v;
-    }
-  });
+function pushToCloud(){
+  if(typeof isApplyingRemote !== 'undefined' && isApplyingRemote) return;
+  try{
+    const dataToSync = {};
+    SYNC_KEYS.forEach(key => {
+      try{
+        const v = localStorage.getItem(key);
+        if(v !== null) dataToSync[key] = v;
+      }catch(e){}
+    });
+    // zachovaná pôvodná Firebase logika
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload, {merge:true})
-    .then(()=>console.log("📤 Odoslané do cloudu")).catch(e=>console.warn("Push fail", e));
+  }catch(err){
+    console.warn('pushToCloud error', err);
+  }
 }
+
 
 // 3. Intercept localStorage.setItem aby sa auto-syncovalo - s ochranou proti slučke
 localStorage.setItem = function(key, value){
@@ -8934,6 +8932,91 @@ html,body{color-scheme:dark!important;}
 }
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
+
+
+<style id="gt-banner-style">
+#gt-refresh-banner{position:sticky;top:0;z-index:9999;background:#f59e0b;color:#111;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:system-ui,sans-serif;font-weight:600;box-shadow:0 2px 12px rgba(0,0,0,0.4);border-bottom:2px solid #000;}
+#gt-refresh-banner button{background:#111;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer;font-weight:800;letter-spacing:0.2px;}
+#gt-refresh-banner button:hover{background:#000;transform:translateY(-1px);}
+</style>
+<script>
+(function(){
+  if(window.__gtBannerInjected) return;
+  window.__gtBannerInjected = true;
+  function getCurrentCardLabel(){
+    try{
+      const sels = ['.nav-item.active','[data-nav].active','.sidebar .active','nav .active','[class*="active"][class*="nav"]','button.active'];
+      for(const sel of sels){
+        const el = document.querySelector(sel);
+        if(el && el.textContent && el.textContent.trim().length>0 && el.textContent.trim().length<40) return el.textContent.trim();
+      }
+      const h = document.querySelector('h1,h2')?.textContent?.trim();
+      if(h) return h;
+    }catch(e){}
+    return 'aktuálnu kartu';
+  }
+  window.getCurrentCardLabel = getCurrentCardLabel;
+  window.showRefreshBanner = function(type){
+    let label = type || getCurrentCardLabel();
+    const lower = (label||'').toLowerCase();
+    if(lower.includes('trening') || type==='training' || lower.includes('dochadz')) label = 'Dochádzka';
+    let existing = document.getElementById('gt-refresh-banner');
+    if(existing) existing.remove();
+    const banner = document.createElement('div');
+    banner.id = 'gt-refresh-banner';
+    const safe = String(label||'aktuálnu kartu').replace(/</g,'&lt;').slice(0,80);
+    banner.innerHTML = '<span>🔄 Nové dáta pre: <strong>'+safe+'</strong></span><button id="gt-refresh-btn">Obnoviť kartu</button>';
+    document.body.prepend(banner);
+    const btn = document.getElementById('gt-refresh-btn');
+    if(btn){
+      btn.addEventListener('click', function(){
+        try{
+          if(typeof window.renderCurrentCard === 'function'){ window.renderCurrentCard(); }
+          else if(typeof window.renderMembers === 'function' && safe.toLowerCase().includes('clen')){ window.renderMembers(); }
+          else if(typeof window.renderTraining === 'function' && safe.toLowerCase().includes('doch')){ window.renderTraining(); }
+          else if(typeof window.renderBilling === 'function'){ window.renderBilling(); }
+          else if(typeof window.renderApp === 'function'){ window.renderApp(); }
+          else { location.reload(); }
+        }catch(e){ location.reload(); }
+        const b = document.getElementById('gt-refresh-banner');
+        if(b) b.remove();
+      });
+    }
+  };
+})();
+</script>
+<script>
+(function(){
+  const names = ['renderMembers','renderTraining','renderBilling','renderAttendance','renderSchedule','renderFinance','renderApp','render'];
+  const wrapped = {};
+  function wrap(){
+    names.forEach(name => {
+      const fn = window[name];
+      if(typeof fn === 'function' && !wrapped[name]){
+        wrapped[name]=true;
+        const orig = fn;
+        window[name] = function(){
+          try{
+            const inRemote = (typeof isApplyingRemote !== 'undefined' && isApplyingRemote) || (typeof window.isApplyingRemote !== 'undefined' && window.isApplyingRemote);
+            if(inRemote){
+              const type = name.toLowerCase().includes('train') || name.toLowerCase().includes('attend') ? 'training' : 'members';
+              if(typeof window.showRefreshBanner === 'function'){
+                window.showRefreshBanner(type);
+                return;
+              }
+            }
+          }catch(e){}
+          return orig.apply(this, arguments);
+        };
+      }
+    });
+  }
+  wrap();
+  document.addEventListener('DOMContentLoaded', wrap);
+  setTimeout(wrap, 1000);
+  setTimeout(wrap, 3000);
+})();
+</script>
 
 </body>
 <style id="v650-statistika-fit-final">

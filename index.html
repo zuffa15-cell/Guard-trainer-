@@ -21,10 +21,6 @@ let db = null;
 let cloudEnabled = false;
 let syncEnabled = false;
 let isApplyingRemote = false;
-const originalSetItem = localStorage.setItem.bind(localStorage);
-localStorage.setItem = function(k,v){ originalSetItem(k,v); if(SYNC_KEYS.includes(k) && !isApplyingRemote) pushToCloud(); }
-
-
 let lastCloudUpdate = 0;
 
 try {
@@ -39,9 +35,10 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ["gt-members","gt-members-v466","gt-training-attendance-history","gt-monthly-billing-v221","gt-attendance","gt-schedule","gt-finance","gt-billing","gt-training-attendance"];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-members-v466','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance'];
 
 // Zachovaj originál pred prepisom
+const originalSetItem = localStorage.setItem.bind(localStorage);
 const originalGetItem = localStorage.getItem.bind(localStorage);
 
 function initCloudSync(){
@@ -87,19 +84,26 @@ function initCloudSync(){
         if(changed) {
       window.dispatchEvent(new Event('cloud-sync-update'));
       try{
-        const active = document.querySelector('.bottom .nav.active');
-        const t = active ? active.textContent : 'DOMOV';
-        const isDoch = t.toLowerCase().includes('doch');
-        try{ const mm=localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
+        // reload all data from localStorage into memory
+        try{
+          const mm = localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members');
+          if(mm){
+            const p = JSON.parse(mm);
+            if(Array.isArray(p)){
+              if(typeof membersData !== 'undefined') membersData = p;
+              else window.membersData = p;
+            }
+          }
+        }catch(e){}
         try{
           const rawHist = localStorage.getItem('gt-training-attendance-history');
           if(rawHist){
             const parsed = JSON.parse(rawHist);
             if(parsed && typeof parsed==='object'){
-              Object.keys(trainingAttendanceByGroup).forEach(k=>{ delete trainingAttendanceByGroup[k]; });
-              Object.keys(parsed).forEach(k=>{
-                trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {};
-              });
+              if(typeof trainingAttendanceByGroup !== 'undefined'){
+                Object.keys(trainingAttendanceByGroup).forEach(k=>{ delete trainingAttendanceByGroup[k]; });
+                Object.keys(parsed).forEach(k=>{ trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {}; });
+              }
             }
           }
         }catch(e){}
@@ -108,58 +112,53 @@ function initCloudSync(){
           if(rawBill){
             const parsedBill = JSON.parse(rawBill);
             if(Array.isArray(parsedBill)){
-              monthlyBillingRecords = parsedBill;
-              try{ if(typeof normalizeMonthlyBillingRecords==='function') normalizeMonthlyBillingRecords(); }catch(e){}
+              if(typeof monthlyBillingRecords !== 'undefined'){
+                monthlyBillingRecords = parsedBill;
+                try{ if(typeof normalizeMonthlyBillingRecords==='function') normalizeMonthlyBillingRecords(); }catch(e){}
+              }
             }
           }
         }catch(e){}
         try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
-        const curActive = document.querySelector('.bottom .nav.active');
-        const curText = (curActive ? curActive.textContent : t).toLowerCase();
-        const onBilling = curText.includes('vyúčt') || curText.includes('vyuct');
-        const onHome = curText.includes('domov') || curText.includes('home');
-        const onMembers = curText.includes('člen') || curText.includes('clen') || curText.toLowerCase().includes('registr') || curText.toLowerCase().includes('dlž') || curText.toLowerCase().includes('dlz') || curText.toLowerCase().includes('prihl') || (location.hash||'').toLowerCase().includes('member');
-
         try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
-        // aktualizuj domov na pozadí vždy potichu
         try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
         try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
 
-        // vytvor funkciu na zobrazenie banneru
-        function showManualRefreshBanner(cardName, onClickRefresh){
-          let existing = document.getElementById('cloud-manual-refresh-banner');
-          if(existing) existing.remove();
+        const curActive = document.querySelector('.bottom .nav.active');
+        const curText = curActive ? curActive.textContent : '';
+        const t = curText.toLowerCase();
+        const isDoch = t.includes('doch');
+        const onBilling = t.includes('vyúčt') || t.includes('vyuct');
+        const onMembers = t.includes('člen') || t.includes('clen') || t.includes('registr') || t.includes('dlž') || t.includes('dlz') || t.includes('prihl');
+
+        function showBanner(name, doRefresh){
+          let old = document.getElementById('cloud-manual-refresh-banner');
+          if(old) old.remove();
           const banner = document.createElement('div');
           banner.id = 'cloud-manual-refresh-banner';
-          banner.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#ffd12b;color:#111;padding:10px 16px;border-radius:24px;font-size:13px;font-weight:800;z-index:9999999;display:flex;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,0,0,0.4);border:2px solid #111;';
-          const text = document.createElement('span');
-          text.textContent = '● Nové údaje v ' + cardName;
+          banner.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:#ffde33;color:#111;padding:10px 18px;border-radius:999px;font-size:13px;font-weight:900;z-index:2147483647;display:flex;align-items:center;gap:12px;box-shadow:0 6px 24px rgba(0,0,0,0.35);border:2px solid #111;';
+          const span = document.createElement('span');
+          span.textContent = '● Nové v ' + name;
           const btn = document.createElement('button');
-          btn.textContent = 'Obnoviť kartu ↻';
-          btn.style.cssText = 'background:#111;color:#ffd12b;border:none;padding:6px 12px;border-radius:16px;font-weight:800;font-size:12px;cursor:pointer;';
+          btn.textContent = 'Obnoviť ↻';
+          btn.style.cssText = 'background:#111;color:#ffde33;border:none;padding:6px 14px;border-radius:999px;font-weight:900;cursor:pointer;';
           btn.onclick = function(){
-            try{ onClickRefresh(); }catch(e){ console.error(e); }
+            try{ doRefresh(); }catch(e){ console.error(e); location.reload(); }
             banner.remove();
-            let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
-            toastEl=document.createElement('div'); toastEl.id='toast-sync';
-            toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
-            toastEl.textContent='● ' + cardName + ' obnovené';
-            document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 2500);
           };
-          const closeBtn = document.createElement('button');
-          closeBtn.textContent = '✕';
-          closeBtn.style.cssText = 'background:transparent;border:none;color:#111;font-weight:800;font-size:14px;cursor:pointer;padding:2px 6px;';
-          closeBtn.onclick = ()=>banner.remove();
-          banner.appendChild(text);
+          const x = document.createElement('button');
+          x.textContent = '✕';
+          x.style.cssText = 'background:transparent;border:none;font-weight:900;cursor:pointer;';
+          x.onclick = ()=>banner.remove();
+          banner.appendChild(span);
           banner.appendChild(btn);
-          banner.appendChild(closeBtn);
+          banner.appendChild(x);
           document.body.appendChild(banner);
-          // auto hide after 30s
           setTimeout(()=>{ if(banner.parentNode) banner.remove(); }, 30000);
         }
 
         if(isDoch){
-          showManualRefreshBanner('Dochádzke', function(){
+          showBanner('Dochádzke', ()=>{
             try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
             try{ if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers(); }catch(e){}
             try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
@@ -167,72 +166,39 @@ function initCloudSync(){
             try{ if(typeof updateAttendanceTotals==='function') updateAttendanceTotals(); }catch(e){}
           });
         } else if(onBilling){
-          showManualRefreshBanner('Vyúčtovaní', function(){
+          showBanner('Vyúčtovaní', ()=>{
             try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
           });
         } else if(onMembers){
-          // zisti presný názov karty
-          let cardName = 'Členoch';
-          if(curText.includes('členské') || curText.includes('clenske')) cardName = 'Členské';
-          else if(curText.includes('registr')) cardName = 'Registračné';
-          else if(curText.includes('dlž') || curText.includes('dlz')) cardName = 'Dlžné';
-          else if(curText.includes('prihl')) cardName = 'Prihláškach';
-          else if(curText.includes('člen') || curText.includes('clen')) cardName = 'Členoch';
-          
-          showManualRefreshBanner(cardName, function(){
-  try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
-  try{ if(typeof renderMembersList==='function') renderMembersList(); }catch(e){}
-  try{ if(typeof filterMembers==='function') filterMembers(); }catch(e){}
-  try{ if(typeof updateMemberFilters==='function') updateMemberFilters(); }catch(e){}
-  // pre reporty - skus zavolat vsetky mozne filtre podla ID elementov
-  try{
-    if(document.getElementById('membershipReportBody')){
-      if(typeof window.filterMembershipReport==='function') window.filterMembershipReport();
-      if(typeof window.renderMembershipReport==='function') window.renderMembershipReport();
-      if(typeof window.updateMembershipReport==='function') window.updateMembershipReport();
-      // skus aj vseobecny render
-      const el = document.getElementById('membershipReportBody');
-      if(el && el.innerHTML.trim()==='' && typeof window.renderMembership==='function') window.renderMembership();
-    }
-  }catch(e){}
-  try{
-    if(document.getElementById('registrationReportBody')){
-      if(typeof window.filterRegistrationReport==='function') window.filterRegistrationReport();
-      if(typeof window.renderRegistrationReport==='function') window.renderRegistrationReport();
-    }
-  }catch(e){}
-  try{
-    if(document.getElementById('debtorsReportBody')){
-      if(typeof window.filterDebtorsReport==='function') window.filterDebtorsReport();
-      if(typeof window.renderDebtorsReport==='function') window.renderDebtorsReport();
-    }
-  }catch(e){}
-  try{
-    if(document.getElementById('applicationsReportBody')){
-      if(typeof window.filterApplicationsReport==='function') window.filterApplicationsReport();
-      if(typeof window.renderApplicationsReport==='function') window.renderApplicationsReport();
-    }
-  }catch(e){}
-  // NEVOLAJ /* FIX removed: active.click() - otvaral zlu obrazovku */ - to otvara zlu obrazovku
-  // Namiesto toho skus zavolat funkciu ktora prekresli aktualny view podla viditelneho elementu
-  try{
-    const visible = document.querySelector('[id$="ReportBody"]');
-    if(visible){
-      // trigger change event na filtroch aby sa prekreslil
-      visible.closest('.membership-report, .report-container, .card')?.querySelectorAll('select, input').forEach(inp=>{
-        try{ inp.dispatchEvent(new Event('change', {bubbles:true})); }catch(e){}
-      });
-    }
-  }catch(e){}
-});
-        } else if(onHome){
-          // na domove nerob banner, len ticho aktualizuj
-          console.log('Domov aktualizovaný na pozadí');
-        } else {
-          // iná karta - všeobecný banner
-          showManualRefreshBanner('aplikácii', function(){ document.getElementById('cloud-manual-refresh-banner')?.remove() /* FIX: close len zatvori banner, nie reload */; });
+          let name = 'Členoch';
+          if(t.includes('členské')||t.includes('clenske')) name='Členské';
+          else if(t.includes('registr')) name='Registračné';
+          else if(t.includes('dlž')||t.includes('dlz')) name='Dlžné';
+          else if(t.includes('prihl')) name='Prihláškach';
+          showBanner(name, ()=>{
+            try{ if(typeof renderMembersList==='function') renderMembersList(); }catch(e){}
+            try{ if(typeof filterMembers==='function') filterMembers(); }catch(e){}
+            try{ if(typeof updateMemberFilters==='function') updateMemberFilters(); }catch(e){}
+            // trigger change on filters inside report bodies
+            try{
+              document.querySelectorAll('[id$="ReportBody"]').forEach(body=>{
+                const container = body.closest('.report, .card, .membership-report, div');
+                if(container){
+                  container.querySelectorAll('select, input').forEach(el=>{
+                    try{ el.dispatchEvent(new Event('change',{bubbles:true})); }catch(e){}
+                  });
+                }
+              });
+            }catch(e){}
+            // call all possible report filters
+            try{
+              ['filterMembershipReport','filterRegistrationReport','filterDebtorsReport','filterApplicationsReport','renderMembershipReport','renderRegistrationReport','renderDebtorsReport','renderApplicationsReport','filterMembership','filterRegistration'].forEach(fn=>{
+                try{ if(typeof window[fn]==='function') window[fn](); }catch(e){}
+              });
+            }catch(e){}
+          });
         }
-      }catch(err){ console.error('manual refresh banner error', err); }
+      }catch(err){ console.error('manual banner error', err); }
     }
   });
 
@@ -247,23 +213,28 @@ function initCloudSync(){
   syncEnabled = true;
 }
 
-function pushToCloud(){
-  if(typeof isApplyingRemote !== 'undefined' && isApplyingRemote) return;
-  try{
-    const dataToSync = {};
-    SYNC_KEYS.forEach(key => {
-      try{
-        const v = localStorage.getItem(key);
-        if(v !== null) dataToSync[key] = v;
-      }catch(e){}
-    });
-    // zachovaná pôvodná Firebase logika
+function pushToCloud(force = false){
+  if(!db || !cloudEnabled) return;
+  if(isApplyingRemote) return; // neposielaj keď práve aplikujem vzdialené zmeny
+  const uid = firebase.auth().currentUser?.uid;
+  if(!uid && !force) return;
+  
+  const payload = {_lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
+  lastCloudUpdate = payload._updatedAt;
+  
+  SYNC_KEYS.forEach(k=>{
+    const v = originalGetItem(k);
+    if(v) payload[k] = v;
+  });
+  Object.keys(localStorage).forEach(k=>{
+    if(k.startsWith('gt-') && !payload[k]) {
+      const v = originalGetItem(k);
+      if(v) payload[k] = v;
+    }
+  });
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload, {merge:true})
-  }catch(err){
-    console.warn('pushToCloud error', err);
-  }
+    .then(()=>console.log("📤 Odoslané do cloudu")).catch(e=>console.warn("Push fail", e));
 }
-
 
 // 3. Intercept localStorage.setItem aby sa auto-syncovalo - s ochranou proti slučke
 localStorage.setItem = function(key, value){
@@ -8970,91 +8941,6 @@ html,body{color-scheme:dark!important;}
 }
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
-
-
-<style id="gt-banner-style">
-#gt-refresh-banner{position:sticky;top:0;z-index:9999;background:#f59e0b;color:#111;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:system-ui,sans-serif;font-weight:600;box-shadow:0 2px 12px rgba(0,0,0,0.4);border-bottom:2px solid #000;}
-#gt-refresh-banner button{background:#111;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer;font-weight:800;letter-spacing:0.2px;}
-#gt-refresh-banner button:hover{background:#000;transform:translateY(-1px);}
-</style>
-<script>
-(function(){
-  if(window.__gtBannerInjected) return;
-  window.__gtBannerInjected = true;
-  function getCurrentCardLabel(){
-    try{
-      const sels = ['.nav-item.active','[data-nav].active','.sidebar .active','nav .active','[class*="active"][class*="nav"]','button.active'];
-      for(const sel of sels){
-        const el = document.querySelector(sel);
-        if(el && el.textContent && el.textContent.trim().length>0 && el.textContent.trim().length<40) return el.textContent.trim();
-      }
-      const h = document.querySelector('h1,h2')?.textContent?.trim();
-      if(h) return h;
-    }catch(e){}
-    return 'aktuálnu kartu';
-  }
-  window.getCurrentCardLabel = getCurrentCardLabel;
-  window.showRefreshBanner = function(type){
-    let label = type || getCurrentCardLabel();
-    const lower = (label||'').toLowerCase();
-    if(lower.includes('trening') || type==='training' || lower.includes('dochadz')) label = 'Dochádzka';
-    let existing = document.getElementById('gt-refresh-banner');
-    if(existing) existing.remove();
-    const banner = document.createElement('div');
-    banner.id = 'gt-refresh-banner';
-    const safe = String(label||'aktuálnu kartu').replace(/</g,'&lt;').slice(0,80);
-    banner.innerHTML = '<span>🔄 Nové dáta pre: <strong>'+safe+'</strong></span><button id="gt-refresh-btn">Obnoviť kartu</button>';
-    document.body.prepend(banner);
-    const btn = document.getElementById('gt-refresh-btn');
-    if(btn){
-      btn.addEventListener('click', function(){
-        try{
-          if(typeof window.renderCurrentCard === 'function'){ window.renderCurrentCard(); }
-          else if(typeof window.renderMembers === 'function' && safe.toLowerCase().includes('clen')){ window.renderMembers(); }
-          else if(typeof window.renderTraining === 'function' && safe.toLowerCase().includes('doch')){ window.renderTraining(); }
-          else if(typeof window.renderBilling === 'function'){ window.renderBilling(); }
-          else if(typeof window.renderApp === 'function'){ window.renderApp(); }
-          else { location.reload(); }
-        }catch(e){ location.reload(); }
-        const b = document.getElementById('gt-refresh-banner');
-        if(b) b.remove();
-      });
-    }
-  };
-})();
-</script>
-<script>
-(function(){
-  const names = ['renderMembers','renderTraining','renderBilling','renderAttendance','renderSchedule','renderFinance','renderApp','render'];
-  const wrapped = {};
-  function wrap(){
-    names.forEach(name => {
-      const fn = window[name];
-      if(typeof fn === 'function' && !wrapped[name]){
-        wrapped[name]=true;
-        const orig = fn;
-        window[name] = function(){
-          try{
-            const inRemote = (typeof isApplyingRemote !== 'undefined' && isApplyingRemote) || (typeof window.isApplyingRemote !== 'undefined' && window.isApplyingRemote);
-            if(inRemote){
-              const type = name.toLowerCase().includes('train') || name.toLowerCase().includes('attend') ? 'training' : 'members';
-              if(typeof window.showRefreshBanner === 'function'){
-                window.showRefreshBanner(type);
-                return;
-              }
-            }
-          }catch(e){}
-          return orig.apply(this, arguments);
-        };
-      }
-    });
-  }
-  wrap();
-  document.addEventListener('DOMContentLoaded', wrap);
-  setTimeout(wrap, 1000);
-  setTimeout(wrap, 3000);
-})();
-</script>
 
 </body>
 <style id="v650-statistika-fit-final">

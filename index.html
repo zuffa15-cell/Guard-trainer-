@@ -87,8 +87,21 @@ function initCloudSync(){
         const active = document.querySelector('.bottom .nav.active');
         const t = active ? active.textContent : 'DOMOV';
         const isDoch = t.toLowerCase().includes('doch');
-        // znovu načítaj members
+        // znovu načítaj members a training history do pamäte - toto je dôvod prečo malý refresh nefungoval
         try{ const mm=localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
+        try{
+          const rawHist = localStorage.getItem('gt-training-attendance-history');
+          if(rawHist){
+            const parsed = JSON.parse(rawHist);
+            if(parsed && typeof parsed==='object'){
+              // vyčisti staré a naplň nové - ako pri veľkom refreshe
+              Object.keys(trainingAttendanceByGroup).forEach(k=>{ delete trainingAttendanceByGroup[k]; });
+              Object.keys(parsed).forEach(k=>{
+                trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {};
+              });
+            }
+          }
+        }catch(e){}
         try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
         if(isDoch){
           try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}

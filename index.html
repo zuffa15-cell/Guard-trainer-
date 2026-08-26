@@ -81,11 +81,46 @@ function initCloudSync(){
       isApplyingRemote = false;
     }
 
-    if(changed) {
+        if(changed) {
+      window.dispatchEvent(new Event('cloud-sync-update'));
       try{
-        const mm = localStorage.getItem('gt-members');
-        if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; }
-      }catch(e){}
+        try{
+          const mm = localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members');
+          if(mm){
+            const p=JSON.parse(mm);
+            if(Array.isArray(p)){
+              if(typeof membersData!=='undefined') membersData=p;
+              else window.membersData=p;
+              try{if(typeof normalizeAllMembers==='function') normalizeAllMembers();}catch(e){}
+            }
+          }
+        }catch(e){}
+        try{
+          const rawHist=localStorage.getItem('gt-training-attendance-history');
+          if(rawHist){
+            const parsed=JSON.parse(rawHist);
+            if(parsed && typeof parsed==='object' && typeof trainingAttendanceByGroup!=='undefined'){
+              Object.keys(trainingAttendanceByGroup).forEach(k=>{delete trainingAttendanceByGroup[k];});
+              Object.keys(parsed).forEach(k=>{trainingAttendanceByGroup[k]=parsed[k]&&typeof parsed[k]==='object'?parsed[k]:{};});
+            }
+          }
+        }catch(e){}
+        try{
+          const rawBill=localStorage.getItem('gt-monthly-billing-v221');
+          if(rawBill){
+            const parsedBill=JSON.parse(rawBill);
+            if(Array.isArray(parsedBill) && typeof monthlyBillingRecords!=='undefined'){
+              monthlyBillingRecords=parsedBill;
+              try{if(typeof normalizeMonthlyBillingRecords==='function') normalizeMonthlyBillingRecords();}catch(e){}
+            }
+          }
+        }catch(e){}
+        try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
+        try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
+        try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
+        // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
+        console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
+      }catch(err){console.error('cloud sync background error',err);}
     }
   });
 
@@ -4490,9 +4525,7 @@ const membersData=[
         m.surname=m.surname+' '+g;
       }
       membersData.push(m);
-      
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); }catch(e){}
-counts[g]++;
+      counts[g]++;
     }
   }
   normalizeAllMembers();
@@ -4511,9 +4544,7 @@ function loadPersistedMembers(){
     const raw=JSON.parse(localStorage.getItem(MEMBERS_STORAGE_KEY)||'null');
     if(Array.isArray(raw) && raw.length){
       membersData.splice(0,membersData.length,...raw);
-      
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); }catch(e){}
-normalizeAllMembers();
+      normalizeAllMembers();
       return true;
     }
   }catch(e){ console.warn('Guard Trainer: saved members could not be loaded',e); }
@@ -4677,9 +4708,7 @@ function createMemberFromMembers(){
    newMember:true
  };
  membersData.push(m);
- 
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); }catch(e){}
-renderMemberEditForm(id,true);
+ renderMemberEditForm(id,true);
 }
 
 function showMemberGroupFilter(){
@@ -5361,9 +5390,7 @@ function saveMemberProfile(id,isNew=false){
    const duplicate=membersData.find(x=>x.id!==id && x.surname===m.surname && x.name===m.name);
    if(duplicate){
      membersData=membersData.filter(x=>x.id!==id);
-     
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); }catch(e){}
-toast('Člen už existuje');
+     toast('Člen už existuje');
      setTimeout(()=>renderMemberProfile(duplicate.id),500);
      return;
    }
@@ -7014,9 +7041,7 @@ function addNewMember(){
      membershipAmount:0,registration:false,debt:0,application:false
    };
    membersData.push(member);
- 
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); }catch(e){}
-}else if(!(member.groups||[]).includes(attendanceState.group)){
+ }else if(!(member.groups||[]).includes(attendanceState.group)){
    member.groups=[...(member.groups||[]),attendanceState.group];
  }
  persistMembersData();

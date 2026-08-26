@@ -50,10 +50,13 @@ function initCloudSync(){
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
     if(!data) return;
-    if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
-      // moje vlastné zmeny - ignoruj
-      return;
-    }
+    let myDeviceId = localStorage.getItem('gt-device-id');
+if(!myDeviceId){ myDeviceId = 'dev-'+Math.random().toString(36).slice(2,9)+'-'+Date.now(); localStorage.setItem('gt-device-id', myDeviceId); }
+const incomingDeviceId = data._deviceId;
+if(incomingDeviceId && incomingDeviceId===myDeviceId){
+  if(data._updatedAt) lastCloudUpdate = data._updatedAt;
+  return;
+}
     if(data._updatedAt && data._updatedAt <= lastCloudUpdate) {
       // stará zmena - ignoruj
       return;
@@ -196,7 +199,9 @@ function pushToCloud(force = false){
   const uid = firebase.auth().currentUser?.uid;
   if(!uid && !force) return;
   
-  const payload = {_lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
+  let devId = localStorage.getItem('gt-device-id');
+if(!devId){ devId = 'dev-'+Math.random().toString(36).slice(2,9)+'-'+Date.now(); localStorage.setItem('gt-device-id', devId); }
+const payload = {_lastUpdateBy: uid || 'unknown', _deviceId: devId, _updatedAt: Date.now()};
   lastCloudUpdate = payload._updatedAt;
   
   SYNC_KEYS.forEach(k=>{
@@ -5479,7 +5484,8 @@ function saveMemberProfile(id,isNew=false){
     // Okamžitý push len členov - menší payload, istota že prejde
     if(window.db && window.firebase){
       const uid = firebase.auth().currentUser?.uid || 'unknown';
-      const payload = {_lastUpdateBy: uid, _updatedAt: Date.now(), 'gt-members-v466': JSON.stringify(membersData)};
+      let dId = localStorage.getItem('gt-device-id') || 'dev-unknown';
+const payload = {_lastUpdateBy: uid, _deviceId: dId, _updatedAt: Date.now(), 'gt-members-v466': JSON.stringify(membersData)};: JSON.stringify(membersData)};
       db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload, {merge:true}).then(()=>console.log('📤 Členovia odoslaní')).catch(e=>console.warn('Members push fail',e));
     }
     setTimeout(()=>{ try{ if(typeof pushToCloud==='function') pushToCloud(); }catch(e){} }, 800);

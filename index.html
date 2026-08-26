@@ -84,12 +84,16 @@ function initCloudSync(){
     if(changed) {
       // NIKDY nerob location.reload() - len event a soft refresh
       window.dispatchEvent(new Event('cloud-sync-update'));
-      // Skús zavolať render funkcie
+      // Skús zavolať render funkcie - REALTIME bez refreshu
       try { if(window.render) window.render(); } catch(e){}
+      try { if(typeof renderHome==='function') renderHome(); } catch(e){}
+      try { if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); } catch(e){}
+      try { if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); } catch(e){}
+      try { if(typeof renderMembers==='function' && document.querySelector('.app')) { /* keep current view */ } } catch(e){}
       try { if(window.loadSchedules) window.loadSchedules(); } catch(e){}
       try { if(window.loadAll) window.loadAll(); } catch(e){}
       try { if(window.refreshUI) window.refreshUI(); } catch(e){}
-      console.log("✅ Lokálne dáta aktualizované bez reloadu");
+      console.log("✅ Lokálne dáta aktualizované bez reloadu - realtime");
     }
   });
 

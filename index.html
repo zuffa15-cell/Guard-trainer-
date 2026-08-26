@@ -35,7 +35,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-members-v466','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance'];
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -112,19 +112,14 @@ function initCloudSync(){
           }
         }catch(e){}
         try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
-        // Zisti kde som
+        // Zisti kde som - podľa active triedy, nie podľa hash
         const curActive = document.querySelector('.bottom .nav.active');
         const curText = (curActive ? curActive.textContent : t).toLowerCase();
         const onBilling = curText.includes('vyúčt') || curText.includes('vyuct');
         const onHome = curText.includes('domov') || curText.includes('home');
-        const onMembers = curText.includes('člen') || curText.includes('clen') || (location.hash||'').toLowerCase().includes('member');
-        
-        // VŽDY aktualizuj domov na pozadí
-        try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
-        try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
-        try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
         
         if(isDoch){
+          // Som na DOCHÁDZKA - prekresli len dochádzku, ostaň tu
           try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
           try{ if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers(); }catch(e){}
           try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
@@ -133,48 +128,29 @@ function initCloudSync(){
           let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
           toastEl=document.createElement('div'); toastEl.id='toast-sync';
           toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
-          toastEl.textContent='● Dochádzka aktualizovaná';
+          toastEl.textContent='● Dochádzka aktualizovaná - prepočítané';
           document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
         } else if(onBilling){
+          // Som na MOJE VYÚČTOVANIA - prekresli len vyúčtovanie, ostaň tu, neskáč na domov
           try{ if(typeof renderMonthlyBilling==='function'){ renderMonthlyBilling(); } }catch(e){}
           let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
           toastEl=document.createElement('div'); toastEl.id='toast-sync';
           toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
-          toastEl.textContent='● Vyúčtovanie aktualizované';
-          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
-        } else if(onMembers){
-          // Som na ČLENOVIA - prekresli zoznam aj profil ak je otvorený
-          try{ 
-            const hash = location.hash || '';
-            if(hash.includes('memberProfile') || hash.includes('memberEdit')){
-              const m = membersData.find(x=> String(x.id)===String(hash.split('-').pop()) ) || null;
-              // skús nájsť id z hash alebo z otvoreného profilu
-              const openId = document.querySelector('[data-member-id]')?.dataset?.memberId || window._openMemberId;
-              if(openId && typeof renderMemberProfile==='function'){
-                renderMemberProfile(Number(openId));
-              } else if(typeof renderMembers==='function'){
-                renderMembers();
-              }
-            } else {
-              if(typeof renderMembers==='function'){ renderMembers(); }
-            }
-          }catch(e){}
-          try{ if(typeof renderMembers==='function'){ renderMembers(); } }catch(e){}
-          let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
-          toastEl=document.createElement('div'); toastEl.id='toast-sync';
-          toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
-          toastEl.textContent='● Členovia aktualizovaní';
+          toastEl.textContent='● Vyúčtovanie aktualizované - platby prepočítané';
           document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
         } else {
-          // DOMOV alebo iná karta
+          // Som na DOMOV alebo iná karta - len rýchly prehľad, ostaň kde som
           try{ if(typeof renderHome==='function' && onHome) renderHome(); }catch(e){}
+          try{ if(typeof updateHomeQuickOverview==='function' && onHome) updateHomeQuickOverview(); }catch(e){}
+          try{ if(typeof updateHomeGroupCounts==='function' && onHome) updateHomeGroupCounts(); }catch(e){}
+          // ak nie som na domov, nerob nič iné - len toast že dáta prišli
           let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
           toastEl=document.createElement('div'); toastEl.id='toast-sync';
           toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;';
-          toastEl.textContent = onHome ? '● RÝCHLY PREHĽAD aktualizovaný' : '● Dáta aktualizované';
-          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 2200);
+          toastEl.textContent='● Dáta aktualizované';
+          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 2000);
         }
-            }catch(e){}
+      }catch(e){}
       console.log("✅ Aktualizované bez orla, ostávam v karte");
     }
   });
@@ -219,8 +195,7 @@ localStorage.setItem = function(key, value){
   if(isApplyingRemote) return; // ignoruj zmeny ktoré prišli z cloudu
   if(syncEnabled && cloudEnabled && key.startsWith('gt-')){
     clearTimeout(window._cloudPushTimeout);
-    const delay = (key==='gt-members-v466' || key==='gt-members') ? 400 : 1500;
-    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), delay);
+    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 1500); // dlhší debounce
   }
 };
 
@@ -5423,7 +5398,6 @@ function saveNewMemberFromForm(id){
 }
 
 function saveMemberProfile(id,isNew=false){
- try{ if(window._cloudPushTimeout) clearTimeout(window._cloudPushTimeout); }catch(e){}
  const m=membersData.find(x=>x.id===id); if(!m)return;
 
  m.surname=document.getElementById('mpSurname').value.trim().toUpperCase();
@@ -5475,8 +5449,6 @@ function saveMemberProfile(id,isNew=false){
  const a=attendanceState.members.find(x=>x.surname===m.surname && x.name===m.name);
  if(a) updateCanonicalMemberFromAttendance(a);
  persistMembersData();
-  try{ if(typeof pushToCloud==='function'){ setTimeout(()=>pushToCloud(), 400); } }catch(e){}
-
 
  if(isNew){
    setTimeout(()=>{ renderMembers(); },500);

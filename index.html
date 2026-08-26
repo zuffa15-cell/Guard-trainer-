@@ -35,7 +35,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-trainers','gt-attendance','gt-finance'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance'];
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -87,18 +87,27 @@ function initCloudSync(){
         const active = document.querySelector('.bottom .nav.active');
         const t = active ? active.textContent : 'DOMOV';
         const isDoch = t.toLowerCase().includes('doch');
-        // znovu načítaj members a training history do pamäte - toto je dôvod prečo malý refresh nefungoval
+        // znovu načítaj všetko z disku do pamäte - members, training history, billing - ako veľký refresh
         try{ const mm=localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
         try{
           const rawHist = localStorage.getItem('gt-training-attendance-history');
           if(rawHist){
             const parsed = JSON.parse(rawHist);
             if(parsed && typeof parsed==='object'){
-              // vyčisti staré a naplň nové - ako pri veľkom refreshe
               Object.keys(trainingAttendanceByGroup).forEach(k=>{ delete trainingAttendanceByGroup[k]; });
               Object.keys(parsed).forEach(k=>{
                 trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {};
               });
+            }
+          }
+        }catch(e){}
+        try{
+          const rawBill = localStorage.getItem('gt-monthly-billing-v221');
+          if(rawBill){
+            const parsedBill = JSON.parse(rawBill);
+            if(Array.isArray(parsedBill)){
+              monthlyBillingRecords = parsedBill;
+              try{ if(typeof normalizeMonthlyBillingRecords==='function') normalizeMonthlyBillingRecords(); }catch(e){}
             }
           }
         }catch(e){}
@@ -109,20 +118,29 @@ function initCloudSync(){
           try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
           try{ const list=document.getElementById('attendanceList'); if(list && typeof renderAttendanceRows==='function') list.innerHTML=renderAttendanceRows(); }catch(e){}
           try{ if(typeof updateAttendanceTotals==='function') updateAttendanceTotals(); }catch(e){}
+          // aj vyúčtovanie sa prepočíta - ak je otvorené moje vyúčtovania, prekresli ho
+          try{ if(typeof renderMonthlyBilling==='function'){ renderMonthlyBilling(); } }catch(e){}
           let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
           toastEl=document.createElement('div'); toastEl.id='toast-sync';
           toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
-          toastEl.textContent='● Dochádzka aktualizovaná - prepočítané';
+          toastEl.textContent='● Dochádzka a vyúčtovanie aktualizované';
           document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
         } else {
+          // VŽDY prekresli aj vyúčtovanie, aj keď si na inej karte - aby moje vyúčtovania mali hneď nové platby
+          try{ if(typeof renderMonthlyBilling==='function'){ 
+            const billingActive = document.querySelector('.bottom .nav.active');
+            const isBilling = billingActive && billingActive.textContent.toLowerCase().includes('vyúčt');
+            if(isBilling) renderMonthlyBilling();
+          } }catch(e){}
           try{ if(typeof renderHome==='function') renderHome(); }catch(e){}
           try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
           try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
           let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
           toastEl=document.createElement('div'); toastEl.id='toast-sync';
-          toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;';
-          toastEl.textContent='● RÝCHLY PREHĽAD aktualizovaný';
-          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 2200);
+          const isBillingTab = t.toLowerCase().includes('vyúčt');
+          toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid '+(isBillingTab?'#35b83a':'#f3b51b')+';color:'+(isBillingTab?'#35b83a':'#f3b51b')+';padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
+          toastEl.textContent = isBillingTab ? '● Vyúčtovanie aktualizované - platby prepočítané' : '● RÝCHLY PREHĽAD aktualizovaný';
+          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
         }
       }catch(e){}
       console.log("✅ Aktualizované bez orla, ostávam v karte");

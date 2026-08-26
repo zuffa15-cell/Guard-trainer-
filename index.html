@@ -85,7 +85,7 @@ function initCloudSync(){
         const t = active ? active.textContent : 'DOMOV';
         const isDoch = t.toLowerCase().includes('doch');
         // znovu načítaj všetko z disku do pamäte - members, training history, billing - ako veľký refresh
-        try{ const mm=localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
+        try{ const mm=localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
         try{
           const rawHist = localStorage.getItem('gt-training-attendance-history');
           if(rawHist){

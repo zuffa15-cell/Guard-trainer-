@@ -82,18 +82,54 @@ function initCloudSync(){
     }
 
     if(changed) {
-      console.log("📥 Zmena z druhého mobilu - auto reload");
+      console.log("📥 Prišla zmena z cloudu");
       window.dispatchEvent(new Event('cloud-sync-update'));
-      // Najspolahlivejšie: auto reload na druhom zariadení (bez slučky)
-      try { 
-        // Skús najprv soft render
-        if(typeof renderHome==='function') { 
-          try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
-          setTimeout(()=>{ try{ renderHome(); }catch(e){} try{ location.reload(); }catch(e){} }, 600);
-        } else {
-          setTimeout(()=>location.reload(), 800);
+      try {
+        if(typeof loadSchedules==='function') loadSchedules();
+        if(typeof loadMembers==='function') loadMembers();
+        if(typeof loadAttendance==='function') loadAttendance();
+        if(typeof loadFinance==='function') loadFinance();
+        
+        const activeEl = document.querySelector('.bottom-nav .active, .nav-item.active, [data-active="true"]');
+        const activeText = activeEl ? activeEl.textContent : '';
+        const bodyText = document.body.innerHTML.slice(0,5000);
+        const isDochadzkaTab = document.querySelector('#dochadzka-view, [data-view="dochadzka"], .attendance-view') || activeText.includes('DOCHÁDZKA') || window.location.hash.includes('dochadzka') || document.querySelector('button') && document.body.innerHTML.includes('Uložiť dochádzku') && activeText.includes('DOCHÁDZKA');
+        
+        // DOMOV -> len potichu prekresli čísla v RÝCHLY PREHĽAD
+        if(bodyText.includes('DNEŠNÉ TRÉNINGY') || activeText.includes('DOMOV') || !activeEl){
+          try{ if(typeof renderHome==='function') renderHome(); }catch(e){}
+          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
+          try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
+          console.log("✅ DOMOV - RÝCHLY PREHĽAD potichu aktualizovaný");
+        } 
+        // DOCHÁDZKA -> hneď refresh dochádzky na druhom mobile po Uložiť na prvom
+        else if(isDochadzkaTab){
+          console.log("🔄 DOCHÁDZKA - prišla zmena z druhého mobilu, hneď prekresľujem");
+          try{
+            if(typeof loadAttendance==='function') loadAttendance();
+            if(typeof renderAttendance==='function') renderAttendance();
+            if(typeof renderDochadzka==='function') renderDochadzka();
+            if(typeof updateAttendanceUI==='function') updateAttendanceUI();
+            // skús všetky možné render funkcie pre dochádzku
+            if(typeof render==='function') render();
+          }catch(e){ console.warn("dochadzka render fail", e); }
+          let t=document.getElementById('sync-toast');
+          if(!t){
+            t=document.createElement('div');
+            t.id='sync-toast';
+            t.style.cssText='position:fixed;bottom:85px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #35b83a;color:#35b83a;padding:10px 16px;border-radius:22px;font-size:12px;z-index:999999;box-shadow:0 4px 12px rgba(0,0,0,.6);';
+            document.body.appendChild(t);
+          }
+          t.textContent='● Dochádzka aktualizovaná z druhého mobilu';
+          setTimeout(()=>{ if(t) t.remove(); }, 3000);
+          window._pendingCloudAttendance = false;
         }
-      } catch(e){ location.reload(); }
+        // ČLENOVIA / KALENDÁR -> len potichu prekresli RÝCHLY PREHĽAD, ostávam kde som
+        else {
+          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
+          console.log("✅ ČLENOVIA/KALENDÁR - ostávam v karte, rýchly prehľad potichu");
+        }
+      } catch(e){ console.warn("Tichý sync fail", e); }
     }
   });
 
@@ -131,14 +167,21 @@ function pushToCloud(force = false){
     .then(()=>console.log("📤 Odoslané do cloudu")).catch(e=>console.warn("Push fail", e));
 }
 
-// 3. Intercept localStorage.setItem aby sa auto-syncovalo - s ochranou proti slučke
+// 3. Intercept localStorage.setItem - ŠPECIÁLNE PRAVIDLÁ PODĽA KARTY
 localStorage.setItem = function(key, value){
   originalSetItem(key, value);
-  if(isApplyingRemote) return; // ignoruj zmeny ktoré prišli z cloudu
-  if(syncEnabled && cloudEnabled && key.startsWith('gt-')){
-    clearTimeout(window._cloudPushTimeout);
-    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 400); // dlhší debounce
+  if(isApplyingRemote) return;
+  if(!syncEnabled || !cloudEnabled || !key.startsWith('gt-')) return;
+  
+  // DOCHÁDZKA - neposielaj vôbec kým nestlačíš ULOŽIŤ
+  if(key.includes('attendance')){
+    console.log("⏸️ Dochádzka vyplňovaná - čakám na Uložiť");
+    window._pendingAttendanceLocal = true;
+    return; // neposielaj do cloudu
   }
+  // Ostatné (členovia, kalendár, tréningy) - pošli potichu po 500ms
+  clearTimeout(window._cloudPushTimeout);
+  window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 500);
 };
 
 // UI indikátor
@@ -8833,6 +8876,41 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+
+<script id="ulozit-hooks-final">
+(function(){
+  function isSaveButton(el){
+    const t=(el.textContent||'').toLowerCase();
+    return (t.includes('uložiť') && (t.includes('dochádzku') || t.includes('vyúčtovanie') || t.includes('vyuctovanie') || t.includes('člensk') )) || t.includes('ulozit');
+  }
+  function attach(){
+    document.querySelectorAll('button').forEach(b=>{
+      if(b._finalHook) return;
+      if(isSaveButton(b)){
+        b._finalHook=true;
+        b.addEventListener('click', function(e){
+          console.log("💾 Uložiť klik - posielam do cloudu");
+          // Pred uložením stiahni najnovšie ak čaká
+          if(window._pendingCloudAttendance){
+            try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
+            window._pendingCloudAttendance=false;
+          }
+          // Vynúť push do cloudu
+          setTimeout(()=>{
+            try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
+            window._pendingAttendanceLocal=false;
+            console.log("📤 Dochádzka odoslaná - druhý mobil uvidí zmenu");
+          }, 300);
+        }, true);
+      }
+    });
+  }
+  setInterval(attach, 800);
+  // Po načítaní stránky skús hneď
+  setTimeout(attach, 500);
+})();
+</script>
+
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
@@ -10619,6 +10697,41 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   setTimeout(fixStats,300); setTimeout(fixStats,1000);
 })();
 </script>
+
+<script id="ulozit-hooks-final">
+(function(){
+  function isSaveButton(el){
+    const t=(el.textContent||'').toLowerCase();
+    return (t.includes('uložiť') && (t.includes('dochádzku') || t.includes('vyúčtovanie') || t.includes('vyuctovanie') || t.includes('člensk') )) || t.includes('ulozit');
+  }
+  function attach(){
+    document.querySelectorAll('button').forEach(b=>{
+      if(b._finalHook) return;
+      if(isSaveButton(b)){
+        b._finalHook=true;
+        b.addEventListener('click', function(e){
+          console.log("💾 Uložiť klik - posielam do cloudu");
+          // Pred uložením stiahni najnovšie ak čaká
+          if(window._pendingCloudAttendance){
+            try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
+            window._pendingCloudAttendance=false;
+          }
+          // Vynúť push do cloudu
+          setTimeout(()=>{
+            try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
+            window._pendingAttendanceLocal=false;
+            console.log("📤 Dochádzka odoslaná - druhý mobil uvidí zmenu");
+          }, 300);
+        }, true);
+      }
+    });
+  }
+  setInterval(attach, 800);
+  // Po načítaní stránky skús hneď
+  setTimeout(attach, 500);
+})();
+</script>
+
 </body>
 
 <style id="v650-statistika-fit-final">

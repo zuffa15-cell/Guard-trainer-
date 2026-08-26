@@ -84,121 +84,43 @@ function initCloudSync(){
         if(changed) {
       window.dispatchEvent(new Event('cloud-sync-update'));
       try{
-        // reload all data from localStorage into memory
         try{
           const mm = localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members');
           if(mm){
-            const p = JSON.parse(mm);
+            const p=JSON.parse(mm);
             if(Array.isArray(p)){
-              if(typeof membersData !== 'undefined') membersData = p;
-              else window.membersData = p;
+              if(typeof membersData!=='undefined') membersData=p;
+              else window.membersData=p;
+              try{if(typeof normalizeAllMembers==='function') normalizeAllMembers();}catch(e){}
             }
           }
         }catch(e){}
         try{
-          const rawHist = localStorage.getItem('gt-training-attendance-history');
+          const rawHist=localStorage.getItem('gt-training-attendance-history');
           if(rawHist){
-            const parsed = JSON.parse(rawHist);
-            if(parsed && typeof parsed==='object'){
-              if(typeof trainingAttendanceByGroup !== 'undefined'){
-                Object.keys(trainingAttendanceByGroup).forEach(k=>{ delete trainingAttendanceByGroup[k]; });
-                Object.keys(parsed).forEach(k=>{ trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {}; });
-              }
+            const parsed=JSON.parse(rawHist);
+            if(parsed && typeof parsed==='object' && typeof trainingAttendanceByGroup!=='undefined'){
+              Object.keys(trainingAttendanceByGroup).forEach(k=>{delete trainingAttendanceByGroup[k];});
+              Object.keys(parsed).forEach(k=>{trainingAttendanceByGroup[k]=parsed[k]&&typeof parsed[k]==='object'?parsed[k]:{};});
             }
           }
         }catch(e){}
         try{
-          const rawBill = localStorage.getItem('gt-monthly-billing-v221');
+          const rawBill=localStorage.getItem('gt-monthly-billing-v221');
           if(rawBill){
-            const parsedBill = JSON.parse(rawBill);
-            if(Array.isArray(parsedBill)){
-              if(typeof monthlyBillingRecords !== 'undefined'){
-                monthlyBillingRecords = parsedBill;
-                try{ if(typeof normalizeMonthlyBillingRecords==='function') normalizeMonthlyBillingRecords(); }catch(e){}
-              }
+            const parsedBill=JSON.parse(rawBill);
+            if(Array.isArray(parsedBill) && typeof monthlyBillingRecords!=='undefined'){
+              monthlyBillingRecords=parsedBill;
+              try{if(typeof normalizeMonthlyBillingRecords==='function') normalizeMonthlyBillingRecords();}catch(e){}
             }
           }
         }catch(e){}
-        try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
-        try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
-        try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
-        try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
-
-        const curActive = document.querySelector('.bottom .nav.active');
-        const curText = curActive ? curActive.textContent : '';
-        const t = curText.toLowerCase();
-        const isDoch = t.includes('doch');
-        const onBilling = t.includes('vyúčt') || t.includes('vyuct');
-        const onMembers = t.includes('člen') || t.includes('clen') || t.includes('registr') || t.includes('dlž') || t.includes('dlz') || t.includes('prihl');
-
-        function showBanner(name, doRefresh){
-          let old = document.getElementById('cloud-manual-refresh-banner');
-          if(old) old.remove();
-          const banner = document.createElement('div');
-          banner.id = 'cloud-manual-refresh-banner';
-          banner.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:#ffde33;color:#111;padding:10px 18px;border-radius:999px;font-size:13px;font-weight:900;z-index:2147483647;display:flex;align-items:center;gap:12px;box-shadow:0 6px 24px rgba(0,0,0,0.35);border:2px solid #111;';
-          const span = document.createElement('span');
-          span.textContent = '● Nové v ' + name;
-          const btn = document.createElement('button');
-          btn.textContent = 'Obnoviť ↻';
-          btn.style.cssText = 'background:#111;color:#ffde33;border:none;padding:6px 14px;border-radius:999px;font-weight:900;cursor:pointer;';
-          btn.onclick = function(){
-            try{ doRefresh(); }catch(e){ console.error(e); location.reload(); }
-            banner.remove();
-          };
-          const x = document.createElement('button');
-          x.textContent = '✕';
-          x.style.cssText = 'background:transparent;border:none;font-weight:900;cursor:pointer;';
-          x.onclick = ()=>banner.remove();
-          banner.appendChild(span);
-          banner.appendChild(btn);
-          banner.appendChild(x);
-          document.body.appendChild(banner);
-          setTimeout(()=>{ if(banner.parentNode) banner.remove(); }, 30000);
-        }
-
-        if(isDoch){
-          showBanner('Dochádzke', ()=>{
-            try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
-            try{ if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers(); }catch(e){}
-            try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
-            try{ const list=document.getElementById('attendanceList'); if(list && typeof renderAttendanceRows==='function') list.innerHTML=renderAttendanceRows(); }catch(e){}
-            try{ if(typeof updateAttendanceTotals==='function') updateAttendanceTotals(); }catch(e){}
-          });
-        } else if(onBilling){
-          showBanner('Vyúčtovaní', ()=>{
-            try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-          });
-        } else if(onMembers){
-          let name = 'Členoch';
-          if(t.includes('členské')||t.includes('clenske')) name='Členské';
-          else if(t.includes('registr')) name='Registračné';
-          else if(t.includes('dlž')||t.includes('dlz')) name='Dlžné';
-          else if(t.includes('prihl')) name='Prihláškach';
-          showBanner(name, ()=>{
-            try{ if(typeof renderMembersList==='function') renderMembersList(); }catch(e){}
-            try{ if(typeof filterMembers==='function') filterMembers(); }catch(e){}
-            try{ if(typeof updateMemberFilters==='function') updateMemberFilters(); }catch(e){}
-            // trigger change on filters inside report bodies
-            try{
-              document.querySelectorAll('[id$="ReportBody"]').forEach(body=>{
-                const container = body.closest('.report, .card, .membership-report, div');
-                if(container){
-                  container.querySelectorAll('select, input').forEach(el=>{
-                    try{ el.dispatchEvent(new Event('change',{bubbles:true})); }catch(e){}
-                  });
-                }
-              });
-            }catch(e){}
-            // call all possible report filters
-            try{
-              ['filterMembershipReport','filterRegistrationReport','filterDebtorsReport','filterApplicationsReport','renderMembershipReport','renderRegistrationReport','renderDebtorsReport','renderApplicationsReport','filterMembership','filterRegistration'].forEach(fn=>{
-                try{ if(typeof window[fn]==='function') window[fn](); }catch(e){}
-              });
-            }catch(e){}
-          });
-        }
-      }catch(err){ console.error('manual banner error', err); }
+        try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
+        try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
+        try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
+        // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
+        console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
+      }catch(err){console.error('cloud sync background error',err);}
     }
   });
 

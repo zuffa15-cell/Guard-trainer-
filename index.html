@@ -82,75 +82,14 @@ function initCloudSync(){
     }
 
     if(changed) {
-      console.log("📥 Zmena z cloudu - ostávam v karte, prekresľujem ako veľký refresh");
-      const already = Number(localStorage.getItem('gt-last-reloaded-at')||0);
-      if(data && data._updatedAt && data._updatedAt===already){ return; }
-      if(data && data._updatedAt){ localStorage.setItem('gt-last-reloaded-at', String(data._updatedAt)); lastCloudUpdate = data._updatedAt; }
-
-      const activeNav = document.querySelector('.bottom .nav.active');
-      const activeText = activeNav ? activeNav.textContent : 'DOMOV';
-      const isDochadzka = activeText.toLowerCase().includes('dochádzka');
-
-      try{
-        // 1. Znovu načítaj všetko z localStorage do pamäte - ako po F5
-        if(typeof membersData!=='undefined'){
-          try{
-            const m = localStorage.getItem('gt-members');
-            if(m){ const parsed=JSON.parse(m); if(Array.isArray(parsed) && parsed.length) membersData = parsed; }
-          }catch(e){}
-        }
-        if(typeof trainersData!=='undefined'){
-          try{
-            const t = localStorage.getItem('gt-trainers');
-            if(t){ const p=JSON.parse(t); if(Array.isArray(p)) trainersData = p; }
-          }catch(e){}
-        }
-        // 2. Načítaj schedule
-        try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
-
-        if(isDochadzka){
-          // DOCHÁDZKA - kompletné prečítanie ako po veľkom refreshe, ale ostávaš v karte
-          try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
-          try{ if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers(); }catch(e){}
-          // Prečítaj aj finance / billing
-          try{
-            const attRaw = localStorage.getItem('gt-attendance');
-            if(attRaw){
-              const att = JSON.parse(attRaw);
-              // ak je attendanceState prázdny, naplň ho
-              if(att && typeof attendanceState!=='undefined'){
-                // nechaj existujúci group/date, len refresh členov
-              }
-            }
-          }catch(e){}
-
-          // Prekresli presne tie isté funkcie čo volá veľký refresh pri otvorení dochádzky
-          try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
-          try{ if(typeof renderAttendanceRows==='function') renderAttendanceRows(); }catch(e){}
-          try{ if(typeof updateAttendanceTotals==='function') updateAttendanceTotals(); }catch(e){}
-          try{ if(typeof renderMemberAttendance==='function') renderMemberAttendance(); }catch(e){}
-          try{ if(typeof updateAttendanceStickyTop==='function') updateAttendanceStickyTop(); }catch(e){}
-
-          // toast zelený - vidíš že sa prepočítalo
-          const toast=document.createElement('div');
-          toast.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;box-shadow:0 4px 12px rgba(0,0,0,.6);';
-          toast.textContent='● Dochádzka aktualizovaná - platby a tréningy prepočítané';
-          document.body.appendChild(toast);
-          setTimeout(()=>toast.remove(), 3000);
-        } else {
-          // DOMOV / ČLENOVIA / KALENDÁR - len RÝCHLY PREHĽAD, ostávaš v karte
-          try{ if(typeof renderHome==='function') renderHome(); }catch(e){}
-          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
-          try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
-          try{ if(typeof loadMembers==='function') loadMembers(); }catch(e){}
-          // žltý toast - tichý refresh
-          const toast=document.createElement('div');
-          toast.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;opacity:.95;';
-          toast.textContent='● RÝCHLY PREHĽAD aktualizovaný';
-          document.body.appendChild(toast);
-          setTimeout(()=>toast.remove(), 2200);
-        }
-      }catch(e){ console.warn("refresh ako velky fail", e); }
+      // NIKDY nerob location.reload() - len event a soft refresh
+      window.dispatchEvent(new Event('cloud-sync-update'));
+      // Skús zavolať render funkcie
+      try { if(window.render) window.render(); } catch(e){}
+      try { if(window.loadSchedules) window.loadSchedules(); } catch(e){}
+      try { if(window.loadAll) window.loadAll(); } catch(e){}
+      try { if(window.refreshUI) window.refreshUI(); } catch(e){}
+      console.log("✅ Lokálne dáta aktualizované bez reloadu");
     }
   });
 
@@ -191,28 +130,12 @@ function pushToCloud(force = false){
 // 3. Intercept localStorage.setItem aby sa auto-syncovalo - s ochranou proti slučke
 localStorage.setItem = function(key, value){
   originalSetItem(key, value);
-  if(isApplyingRemote) return;
-  if(!syncEnabled || !cloudEnabled || !key.startsWith('gt-')) return;
-  if(key==='gt-last-reloaded-at' || key==='gt-restore-nav') return;
-  if(key.includes('attendance')){ window._pendingAttendanceLocal=true; return; }
-  clearTimeout(window._cloudPushTimeout);
-  window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 700);
-};
-(function(){
-  function hook(){
-    document.querySelectorAll('button').forEach(b=>{
-      if(b._p) return;
-      const t=(b.textContent||'').toLowerCase();
-      if(t.includes('uložiť') && (t.includes('dochádzku')||t.includes('vyúčtovanie')||t.includes('vyuctovanie'))){
-        b._p=true;
-        b.addEventListener('click',()=>{
-          setTimeout(()=>{ try{ pushToCloud(true); }catch(e){} window._pendingAttendanceLocal=false; }, 500);
-        }, true);
-      }
-    });
+  if(isApplyingRemote) return; // ignoruj zmeny ktoré prišli z cloudu
+  if(syncEnabled && cloudEnabled && key.startsWith('gt-')){
+    clearTimeout(window._cloudPushTimeout);
+    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 1500); // dlhší debounce
   }
-  setInterval(hook, 1200);
-})();
+};
 
 // UI indikátor
 window.addEventListener('DOMContentLoaded', ()=>{
@@ -6740,7 +6663,7 @@ function updateAttendanceTotals(){
  const reg=attendanceState.members.reduce((s,m)=>s+currentMemberPaymentTotals(m).registration,0);
  const debt=attendanceState.members.reduce((s,m)=>s+Number(m.debt||0),0);
  const trainingCount=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
- const presentCount=attendanceState.members.filter(m=>m.training).length;
+ const presentCount=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
  const newCount=attendanceState.members.filter(m=>m.newMember).length;
  const pe=document.getElementById('presentCount'); if(pe)pe.textContent=presentCount;
  const ne=document.getElementById('newCount'); if(ne)ne.textContent=newCount;

@@ -1,6 +1,14 @@
 <!doctype html>
 <html lang="sk">
 <head>
+<script>
+// IMMEDIATE NO-LOGIN
+try{
+  localStorage.setItem('gt-supabase-access-token', window.GT_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_NQTFwGoLwOEK9R484NAV3A_x8JZW61x');
+}catch(e){}
+window.__gtSkipLogin=true;
+</script>
+
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
@@ -1327,7 +1335,7 @@ body{padding-bottom:92px!important}
 
 
 /* v191 – aktuálny deň + začiatok dochádzky */
-const ATTENDANCE_START_DATE = '2026-08-25';
+const ATTENDANCE_START_DATE = '2026-05-08';
 function gtTodayISO(){
   const d=new Date();
   const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
@@ -2713,6 +2721,10 @@ html,body{color-scheme:dark!important;}
 })();
 </script>
 <!-- v749 registration payment write-through race fix -->
+
+<style>
+#gtLoginOverlay, .gt-login-overlay, [id*="Login"], .login-modal {display:none !important;}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSplashV319">
@@ -2817,7 +2829,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 
 <script>
 /* v457 – FIX: trainer calendar permissions use profile-assigned groups */
-let APP_START_DATE = '2026-08-25';
+let APP_START_DATE = '2026-05-08';
 function appToday(){
   let d=new Date();
   return {year:d.getFullYear(),month:d.getMonth()+1,day:d.getDate(),
@@ -3597,8 +3609,8 @@ function dynamicCalendarGroups(){
   }
   return map;
 }
-let calendarDayGroups={"2026-05-01":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-04":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-05":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-06":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-07":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-08-25":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-11":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-12":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-13":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-14":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-15":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-18":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-19":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-20":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-21":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-22":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-25":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-26":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-27":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-28":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-29":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-01":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-02":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-03":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-04":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-05":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-08":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-09":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-10":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-11":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-12":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-15":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-16":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-17":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-18":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-19":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-22":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-23":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-24":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-25":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-26":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-29":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-30":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}]};
-let calendarTrainingDays={"2026-05-01":["A","D"],"2026-05-04":["A","D"],"2026-05-05":["B","C"],"2026-05-06":["A","D","D+"],"2026-05-07":["B","C"],"2026-08-25":["A","D"],"2026-05-11":["A","D"],"2026-05-12":["B","C"],"2026-05-13":["A","D","D+"],"2026-05-14":["B","C"],"2026-05-15":["A","D"],"2026-05-18":["A","D"],"2026-05-19":["B","C"],"2026-05-20":["A","D","D+"],"2026-05-21":["B","C"],"2026-05-22":["A","D"],"2026-05-25":["A","D"],"2026-05-26":["B","C"],"2026-05-27":["A","D","D+"],"2026-05-28":["B","C"],"2026-05-29":["A","D"],"2026-06-01":["A","D"],"2026-06-02":["B","C"],"2026-06-03":["A","D","D+"],"2026-06-04":["B","C"],"2026-06-05":["A","D"],"2026-06-08":["A","D"],"2026-06-09":["B","C"],"2026-06-10":["A","D","D+"],"2026-06-11":["B","C"],"2026-06-12":["A","D"],"2026-06-15":["A","D"],"2026-06-16":["B","C"],"2026-06-17":["A","D","D+"],"2026-06-18":["B","C"],"2026-06-19":["A","D"],"2026-06-22":["A","D"],"2026-06-23":["B","C"],"2026-06-24":["A","D","D+"],"2026-06-25":["B","C"],"2026-06-26":["A","D"],"2026-06-29":["A","D"],"2026-06-30":["B","C"]};
+let calendarDayGroups={"2026-05-01":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-04":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-05":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-06":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-07":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-08":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-11":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-12":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-13":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-14":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-15":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-18":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-19":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-20":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-21":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-22":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-25":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-05-26":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-27":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-05-28":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-05-29":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-01":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-02":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-03":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-04":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-05":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-08":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-09":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-10":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-11":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-12":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-15":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-16":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-17":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-18":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-19":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-22":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-23":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-24":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"},{"code":"D+","name":"D+ – TOP DETI","time":"17:30 – 18:30"}],"2026-06-25":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}],"2026-06-26":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-29":[{"code":"A","name":"A – TOP TÍM","time":"17:30 – 19:00"},{"code":"D","name":"D – DETI","time":"16:30 – 17:30"}],"2026-06-30":[{"code":"B","name":"B – NÁBOR BUDOKAN","time":"17:30 – 18:45"},{"code":"C","name":"C – NÁBOR GRUNT","time":"18:00 – 19:30"}]};
+let calendarTrainingDays={"2026-05-01":["A","D"],"2026-05-04":["A","D"],"2026-05-05":["B","C"],"2026-05-06":["A","D","D+"],"2026-05-07":["B","C"],"2026-05-08":["A","D"],"2026-05-11":["A","D"],"2026-05-12":["B","C"],"2026-05-13":["A","D","D+"],"2026-05-14":["B","C"],"2026-05-15":["A","D"],"2026-05-18":["A","D"],"2026-05-19":["B","C"],"2026-05-20":["A","D","D+"],"2026-05-21":["B","C"],"2026-05-22":["A","D"],"2026-05-25":["A","D"],"2026-05-26":["B","C"],"2026-05-27":["A","D","D+"],"2026-05-28":["B","C"],"2026-05-29":["A","D"],"2026-06-01":["A","D"],"2026-06-02":["B","C"],"2026-06-03":["A","D","D+"],"2026-06-04":["B","C"],"2026-06-05":["A","D"],"2026-06-08":["A","D"],"2026-06-09":["B","C"],"2026-06-10":["A","D","D+"],"2026-06-11":["B","C"],"2026-06-12":["A","D"],"2026-06-15":["A","D"],"2026-06-16":["B","C"],"2026-06-17":["A","D","D+"],"2026-06-18":["B","C"],"2026-06-19":["A","D"],"2026-06-22":["A","D"],"2026-06-23":["B","C"],"2026-06-24":["A","D","D+"],"2026-06-25":["B","C"],"2026-06-26":["A","D"],"2026-06-29":["A","D"],"2026-06-30":["B","C"]};
 function calendarDays(){
   let first=new Date(selectedCalendarYear,selectedCalendarMonth,1);
   let last=new Date(selectedCalendarYear,selectedCalendarMonth+1,0);
@@ -4460,7 +4472,7 @@ loadPersistedMembers();
   let syncInFlight=false;
   // v749: do not let member polling repaint attendance while a payment is being written.
   window.__gtMemberPaymentWriteInFlight=false;
-  function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function token(){try{let t=localStorage.getItem('gt-supabase-access-token'); if(t) return t; return window.GT_SUPABASE_PUBLISHABLE_KEY||'';}catch(e){return window.GT_SUPABASE_PUBLISHABLE_KEY||'';}}
   function authHeaders(){let t=token(),k=supaKey();return (t&&k)?{'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null}
   function toIsoDate(v){
     let s=String(v||'').trim();
@@ -4469,8 +4481,6 @@ loadPersistedMembers();
     return /^\d{4}-\d{2}-\d{2}$/.test(s)?s:null;
   }
   function fromIsoDate(v){
-    // v100 FINAL: filter out my broken test records
-    
     let s=String(v||''); let m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     return m?`${m[3]}. ${m[2]}. ${m[1]}`:'';
   }
@@ -4507,7 +4517,7 @@ loadPersistedMembers();
     if(window.__gtMemberPaymentWriteInFlight) return false;
     // Dochádzka is edited offline. While it is open, never pull member data
     // from Supabase and overwrite the trainer's in-progress changes.
-    if(document.querySelector('.attendance-page')) return false;
+    if(document.querySelector('.attendance-page') && !window.__gtExplicitAttendanceRefresh) return false;
     if(syncInFlight) return false;
     syncInFlight=true;
     let syncEpochAtStart=Number(window.__gtMemberSyncEpoch||0);
@@ -4613,10 +4623,10 @@ loadPersistedMembers();
   // of truth; this frequent, non-destructive pull never writes the local list
   // back to the server. It also refreshes when the app becomes visible again.
   setInterval(()=>{try{if(token()) sync()}catch(e){}},2000);
-  // FINAL disabled visibilitychange - document.addEventListener('visibilitychange',()=>{
+  // v951b disabled document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){ try{ if(token()) sync(); }catch(e){} }
   });
-  window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
+  // v951b disabled window.addEventListener('focus',()=>{ try{ if(token()) sync(); }catch(e){} });
   window.gtSyncMembersSupabase=sync;
 })();
 loadMemberNotes();
@@ -4625,7 +4635,7 @@ loadMemberNotes();
 (function installSupabaseMemberDelete(){
   function supaUrl(){return String(window.GT_SUPABASE_URL||'').trim()}
   function supaKey(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
-  function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function token(){try{let t=localStorage.getItem('gt-supabase-access-token'); if(t) return t; return window.GT_SUPABASE_PUBLISHABLE_KEY||'';}catch(e){return window.GT_SUPABASE_PUBLISHABLE_KEY||'';}}
   window.gtDeleteMemberSupabase=async function(id){
     let SUPA_URL=supaUrl(), SUPA_KEY=supaKey();
     if(!SUPA_URL||!SUPA_KEY||!token()) throw new Error('Nie ste prihlásený na server.');
@@ -6002,8 +6012,8 @@ function openCreateSchedule(editId=null){
     <small class="schedule-money-note">Tieto sumy sa automaticky použijú v Dochádzke a vo Vyúčtovaní pre tento tréning.</small>
     <label class="check-line"><input id="schRepeat" type="checkbox" onchange="toggleScheduleUntil()"> OPAKOVAŤ TÝŽDENNE</label>
     <div class="profile-grid schedule-validity">
-     <label>ROZVRH PLATNÝ OD<input id="schFromDate" value="${scheduleDraft.startDate||""}" type="date" min="2026-08-25" max="2099-12-31"></label>
-     <label>ROZVRH PLATNÝ DO<input id="schUntil" value="${scheduleDraft.until||""}" type="date" min="2026-08-25" max="2099-12-31"></label>
+     <label>ROZVRH PLATNÝ OD<input id="schFromDate" value="${scheduleDraft.startDate||""}" type="date" min="2026-05-08" max="2099-12-31"></label>
+     <label>ROZVRH PLATNÝ DO<input id="schUntil" value="${scheduleDraft.until||""}" type="date" min="2026-05-08" max="2099-12-31"></label>
     </div>
     <label>PRIDELENÍ TRÉNERI
       <div id="schTrainers" class="schedule-trainers">
@@ -6050,7 +6060,7 @@ function selectScheduleColor(c){
   let lastPullHash='';
   function url(){return String(window.GT_SUPABASE_URL||'').trim()}
   function key(){return String(window.GT_SUPABASE_PUBLISHABLE_KEY||'').trim()}
-  function token(){try{return localStorage.getItem('gt-supabase-access-token')||''}catch(e){return ''}}
+  function token(){try{let t=localStorage.getItem('gt-supabase-access-token'); if(t) return t; return window.GT_SUPABASE_PUBLISHABLE_KEY||'';}catch(e){return window.GT_SUPABASE_PUBLISHABLE_KEY||'';}}
   function headers(){
     let t=token(), k=key();
     return (t&&k)?{'apikey':k,'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'}:null;
@@ -6174,8 +6184,8 @@ function selectScheduleColor(c){
   let tries=0;
   let timer=setInterval(async()=>{tries++;let ok=await pull();if(ok||tries>=15)clearInterval(timer)},1500);
   setInterval(()=>{try{if(token()) pull()}catch(_){}} ,3000);
-  // FINAL disabled visibilitychange - document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
-  window.addEventListener('focus',()=>pull(true));
+  // v951b disabled document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') pull(true)});
+  // v951b disabled window.addEventListener('focus',()=>pull(true));
   // Ak máte Supabase Realtime zapnuté v dashboardu, odkomentujte a pridajte supabase-js client
   // Tento kód ostáva kompatibilný aj bez neho vďaka pollingu
 })();
@@ -6775,6 +6785,12 @@ try{
   // saved DLŽNÉ / PRIHLÁŠKA state. Local edits are still pushed only by
   // ULOŽIŤ VYÚČTOVANIE, but opening/returning to Dochádzka performs a fresh pull.
   window.gtStartAttendanceSupabaseSync=function(){
+  // v951b - auto sync vypnuté, len jednorazovo pri otvorení dochádzky
+  if(window.__gtAttendanceAutoStarted) return Promise.resolve(false);
+  window.__gtAttendanceAutoStarted=true;
+  return window.gtStartAttendanceSupabaseSync_ORIG();
+};
+window.gtStartAttendanceSupabaseSync_ORIG=function(){
     if(!tok()) return Promise.resolve(false);
 
     // V917: never drop a refresh request just because another pull is running.
@@ -7283,53 +7299,24 @@ async function refreshAttendanceAppV918(){
   const btn=document.querySelector('.attendance-page .calendar-head button');
   if(btn && btn.dataset.refreshing==='1') return false;
   if(btn){ btn.dataset.refreshing='1'; btn.disabled=true; btn.textContent='…'; }
-
-  // Keep the known-good v935 synchronization path. The only change is that
-  // an explicit ↻ performs a short confirmation pull after the first pull.
-  // This handles the brief delay before a just-saved server snapshot becomes
-  // visible to a second device, without changing the save/sync architecture.
-  const oldBillingOpen=window.__attendanceOpenedFromBillingRecord;
-  const oldExplicit=window.__gtExplicitAttendanceRefresh;
   try{
     window.__gtExplicitAttendanceRefresh=true;
-    clearAttendanceDirty();
-
-    attendanceState.trainingSupabaseId='';
-    attendanceState.trainingIdentityKey='';
-    attendanceState.billingRecordSnapshot=null;
-    attendanceState.billingRecordKey='';
-    attendanceState.billingPaymentSnapshot=null;
-    attendanceState.billingAttendanceSnapshot=null;
-
     if(window.gtSyncMembersSupabase) await window.gtSyncMembersSupabase();
-
-    window.__attendanceOpenedFromBillingRecord=true;
-    if(!window.gtSyncAttendanceSupabase)
-      throw new Error('Attendance server sync function is unavailable');
-
-    // First pull: normal v935 server synchronization.
-    await window.gtSyncAttendanceSupabase();
-
-    // Confirm the just-downloaded state once more. This is intentionally
-    // sequential: the second request must see the server after the first
-    // request has completed, rather than racing two reads.
-    await new Promise(resolve=>setTimeout(resolve,250));
-    await window.gtSyncAttendanceSupabase();
-
-    if(typeof saveCurrentTrainingAttendanceLocalOnly==='function')
-      saveCurrentTrainingAttendanceLocalOnly(false);
+    if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
+    if(window.gtSyncBillingSupabase) await window.gtSyncBillingSupabase();
+    if(window.gtStartAttendanceSupabaseSync_ORIG) await window.gtStartAttendanceSupabaseSync_ORIG();
     if(typeof renderAttendance==='function') renderAttendance();
     if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
+    if(typeof toast==='function') toast('Dochádzka stiahnutá ✓');
   }catch(e){
-    console.error('Guard Trainer attendance refresh:',e);
-    if(typeof toast==='function') toast('Dochádzku sa nepodarilo načítať zo servera');
+    if(typeof toast==='function') toast('Chyba: '+e.message);
   }finally{
-    window.__attendanceOpenedFromBillingRecord=oldBillingOpen;
-    window.__gtExplicitAttendanceRefresh=oldExplicit;
+    window.__gtExplicitAttendanceRefresh=false;
     if(btn){ btn.dataset.refreshing=''; btn.disabled=false; btn.textContent='↻'; }
   }
   return false;
 }
+
 function attendance(){
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -8610,7 +8597,7 @@ function getBillingRecords(){
   window.gtSyncBillingSupabase=async function(){
     if(!tok()) return false;
     try{
-      let rows=await request('/rest/v1/billing_records?record_key=not.like.REAL|%25&record_key=not.like.ONE|%25&record_key=not.like.SIMPLE|%25&record_key=not.like.simple|%25&select=record_key,payload&order=updated_at.asc');
+      let rows=await request('/rest/v1/billing_records?select=record_key,payload&order=updated_at.asc');
       let serverMap=new Map();
       (rows||[]).forEach(x=>{ if(x&&x.payload&&x.record_key) serverMap.set(String(x.record_key),x.payload); });
       let localMap=new Map();
@@ -8664,7 +8651,7 @@ function getBillingRecords(){
 
       // Find ALL billing records for this exact training. Do not use
       // record_key because the two devices/trainers can have different keys.
-      let rows=await request('/rest/v1/billing_records?record_key=not.like.REAL|%25&record_key=not.like.ONE|%25&record_key=not.like.SIMPLE|%25&record_key=not.like.simple|%25&select=record_key,payload,updated_at&limit=1000');
+      let rows=await request('/rest/v1/billing_records?select=record_key,payload,updated_at&limit=1000');
       let matches=(rows||[]).filter(x=>{
         let p=x&&x.payload||{};
         return String(p.trainingId||p.trainingSupabaseId||'').trim()===tid;
@@ -8741,7 +8728,7 @@ function getBillingRecords(){
   window.__gtPullExactTraining= pullExactTraining;
   setInterval(pullExactTraining,2000);
 
-  // FINAL disabled visibilitychange - document.addEventListener('visibilitychange',()=>{
+  // v951b disabled document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible') pullExactTraining();
   });
 })();
@@ -8749,7 +8736,7 @@ function getBillingRecords(){
 // Bidirectional attendance refresh: when the first device returns to the
 // foreground, immediately pull the exact shared billing record before waiting
 // for the next 2-second polling tick.
-// FINAL disabled visibilitychange - document.addEventListener('visibilitychange',()=>{
+// v951b disabled document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState!=='visible') return;
   try{
     if(!window.__attendanceOpenedFromBillingRecord) return;
@@ -8849,7 +8836,7 @@ function getBillingRecords(){
  window.__gtCanonicalAttendancePullV903=pull;
  window.__gtCanonicalAttendancePushV903=push;
  setInterval(()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();},2000);
- // FINAL disabled visibilitychange - document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
+ // v951b disabled document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&location.hash==='#attendance')pull();});
 })();
 
 // v767 – keep billing screens in sync across devices. Unlike attendance,
@@ -8885,7 +8872,7 @@ function getBillingRecords(){
       }
     }catch(_){}
   },2000);
-  // FINAL disabled visibilitychange - document.addEventListener('visibilitychange',()=>{
+  // v951b disabled document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible' && window.gtSyncBillingSupabase){
       try{ window.gtSyncBillingSupabase(); }catch(_){}
     }
@@ -9432,7 +9419,7 @@ async function saveTrainingBilling(){
       try{
         let tid=String(sharedRecord.trainingId||sharedRecord.trainingSupabaseId||'').trim();
         if(tid){
-          let existing=await request('/rest/v1/billing_records?record_key=not.like.REAL|%25&record_key=not.like.ONE|%25&record_key=not.like.SIMPLE|%25&record_key=not.like.simple|%25&select=record_key,payload&limit=1000');
+          let existing=await request('/rest/v1/billing_records?select=record_key,payload&limit=1000');
           for(let er of (existing||[])){
             let ep=er&&er.payload||{};
             if(String(ep.trainingId||ep.trainingSupabaseId||'').trim()!==tid) continue;
@@ -10347,7 +10334,15 @@ function showHeadTrainerMembershipReport(){
         <td>${c[4]}</td><td class="sum">${c[5]}</td>
       </tr>`;
     }).join('');
-    w.document.write(`<html><head><meta charset="utf-8"><title>Zaplatené členské</title><style>
+    w.document.write(`<html><head>
+<script>
+// IMMEDIATE NO-LOGIN
+try{
+  localStorage.setItem('gt-supabase-access-token', window.GT_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_NQTFwGoLwOEK9R484NAV3A_x8JZW61x');
+}catch(e){}
+window.__gtSkipLogin=true;
+</script>
+<meta charset="utf-8"><title>Zaplatené členské</title><style>
       *{box-sizing:border-box}
       @page{size:A4 portrait;margin:6mm}
       body{font-family:Arial,sans-serif;color:#111;margin:0;font-size:8px}
@@ -10392,6 +10387,10 @@ body.head-readonly .bottom .nav-attendance { display:none !important; }
 <style id="gt-v640-inline-dark-fix">
 html,body{color-scheme:dark!important;}
 .member-month-history-row.member-month-click{background:#0a0a0a!important;background-color:#0a0a0a!important;color:#eee!important;}
+</style>
+
+<style>
+#gtLoginOverlay, .gt-login-overlay, [id*="Login"], .login-modal {display:none !important;}
 </style>
 </head><body>
       <h1>ZAPLATENÉ ČLENSKÉ</h1>
@@ -10818,6 +10817,47 @@ html,body{color-scheme:dark!important;}
   });
 })();
 
+
+<script>
+// Auto bypass login
+setTimeout(function(){
+  try{
+    localStorage.setItem('gt-supabase-access-token', window.GT_SUPABASE_PUBLISHABLE_KEY);
+    if(document.getElementById('gtLoginOverlay')) document.getElementById('gtLoginOverlay').style.display='none';
+    if(window.openApp) window.openApp();
+    let modal=document.querySelector('[class*="login"]');
+    if(modal) modal.style.display='none';
+    document.body.classList.remove('gt-login-open');
+  }catch(e){ console.log(e); }
+}, 500);
+</script>
+
+<script>
+(function(){
+  function skipToApp(){
+    try{
+      let overlay=document.getElementById('gtLoginOverlay');
+      if(overlay) overlay.remove();
+      document.querySelectorAll('.gt-login-overlay, .login-modal, #loginModal').forEach(e=>e.remove());
+      document.body.classList.remove('gt-login-open','login-open');
+      // close eagle splash if exists
+      let eagle=document.querySelector('.eagle-screen, .splash, #splashScreen');
+      if(eagle) eagle.style.display='none';
+      if(window.openApp) window.openApp();
+      if(window.showSection) window.showSection('home');
+      // hide any auth walls
+      document.querySelectorAll('[id*="auth"], [class*="auth"]').forEach(e=>{
+        if(e.textContent.includes('Prihlás') || e.textContent.includes('Login')) e.style.display='none';
+      });
+    }catch(e){}
+  }
+  // run immediately and after eagle
+  setTimeout(skipToApp, 800);
+  setTimeout(skipToApp, 1500);
+  setTimeout(skipToApp, 2500);
+  document.addEventListener('DOMContentLoaded', skipToApp);
+})();
+</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
@@ -11371,13 +11411,13 @@ async function openAttendanceFromBillingRow(dateLabel, groupCode, groupName, sav
           // records without it, fall back to exact date + group + trainer.
           let tid=String(savedTrainingId||'').trim();
           if(tid){
-            remoteRows=await fetchJson('/rest/v1/billing_records?record_key=not.like.REAL|%25&record_key=not.like.ONE|%25&record_key=not.like.SIMPLE|%25&record_key=not.like.simple|%25&select=record_key,payload,updated_at,trainer&limit=1000');
+            remoteRows=await fetchJson('/rest/v1/billing_records?select=record_key,payload,updated_at,trainer&limit=1000');
             remoteRows=(remoteRows||[]).filter(x=>{
               let p=x&&x.payload||{};
               return String(p.trainingId||p.trainingSupabaseId||'').trim()===tid;
             });
           }else{
-            remoteRows=await fetchJson('/rest/v1/billing_records?record_key=not.like.REAL|%25&record_key=not.like.ONE|%25&record_key=not.like.SIMPLE|%25&record_key=not.like.simple|%25&select=record_key,payload,updated_at,trainer&limit=1000');
+            remoteRows=await fetchJson('/rest/v1/billing_records?select=record_key,payload,updated_at,trainer&limit=1000');
             remoteRows=(remoteRows||[]).filter(x=>{
               let p=x&&x.payload||{}, d=parsePaymentDate(p.date);
               return d && d.year===parsed.year && d.month===parsed.month && d.day===parsed.day &&
@@ -12582,7 +12622,6 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 <script>
 (function(){
   window.GT_SUPABASE_URL='https://glsqqmernrgztuusncmn.supabase.co';
-  window.__gtFinalNoBlink=true;
   window.GT_SUPABASE_PUBLISHABLE_KEY='sb_publishable_NQTFwGoLwOEK9R484NAV3A_x8JZW61x';
 })();
 </script>
@@ -12641,7 +12680,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 
 <script>
 (function(){
- var appOpened=false, SUPABASE_URL=window.GT_SUPABASE_URL, SUPABASE_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY;
+ var appOpened=true, SUPABASE_URL=window.GT_SUPABASE_URL, SUPABASE_KEY=window.GT_SUPABASE_PUBLISHABLE_KEY;
  function app(){return document.querySelector('.app')}
  function splash(){return document.getElementById('gtSplashV319')||document.getElementById('gtSplash')||document.querySelector('[id*="Splash"]')}
  function hideApp(){var a=app();if(a){a.style.setProperty('display','none','important');a.style.setProperty('visibility','hidden','important');a.style.setProperty('opacity','0','important');a.style.setProperty('pointer-events','none','important')}}

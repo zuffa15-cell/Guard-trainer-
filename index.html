@@ -138,27 +138,38 @@ function initCloudSync(){
         } else if(onBilling){
           try{ if(typeof renderMonthlyBilling==='function'){ renderMonthlyBilling(); } }catch(e){}
           try{ let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove(); toastEl=document.createElement('div'); toastEl.id='toast-sync'; toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;'; toastEl.textContent='● Vyúčtovanie aktualizované'; document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000); }catch(e){}
-        } else if(onMembers){
+                } else if(onMembers){
           try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
-          try{ if(typeof renderMembers==='function') renderMembers(); }catch(e){}
           try{ if(typeof renderMembersList==='function') renderMembersList(); }catch(e){}
           try{ if(typeof filterMembers==='function') filterMembers(); }catch(e){}
           try{ if(typeof updateMemberFilters==='function') updateMemberFilters(); }catch(e){}
-          // prekresli aj členské obrazovky
-          try{ if(typeof renderMembership==='function') renderMembership(); }catch(e){}
-          try{ if(typeof renderRegistration==='function') renderRegistration(); }catch(e){}
-          try{ if(typeof renderDebtors==='function') renderDebtors(); }catch(e){}
-          try{ if(typeof renderApplications==='function') renderApplications(); }catch(e){}
-          // skús všetky možné názvy funkcií pre členské sekcie
-          try{ if(typeof loadMembers==='function') loadMembers(); }catch(e){}
-          try{ if(typeof showMembers==='function') showMembers(); }catch(e){}
-          // fallback - ak je otvorený detail člena, znovu načítaj
-          try{ const activeMemberDetail = document.querySelector('.member-detail, .member-card, #memberDetail'); if(activeMemberDetail) { if(typeof openMember==='function' && window.currentMemberId) openMember(window.currentMemberId); } }catch(e){}
+          // Univerzálny re-render: znovu klikni na aktívnu záložku v spodnej lište - aplikácia si sama prekreslí aktuálnu obrazovku (členské, registračné, dlžné, prihláška)
+          try{
+            const curActive = document.querySelector('.bottom .nav.active');
+            if(curActive){
+              setTimeout(()=>{
+                try{
+                  // skús zavolať priamo handler ak existuje
+                  const t = curActive.textContent.toLowerCase();
+                  // pre členské obrazovky skús nájsť ich render filtre
+                  if(t.includes('člen') || t.includes('clen') || t.includes('registr') || t.includes('dlž') || t.includes('dlz') || t.includes('prihl') || t.includes('členské')){
+                    // najdi všetky existujúce filter funkcie a spusti ich
+                    ['filterMembershipReport','filterRegistrationReport','filterDebtorsReport','filterApplicationsReport','renderMembershipReport','renderRegistrationReport','renderDebtorsReport','renderApplicationsReport','updateMembershipReport','updateRegistrationReport'].forEach(fn=>{
+                      try{ if(typeof window[fn]==='function') window[fn](); }catch(e){}
+                    });
+                  }
+                  // fallback - preklik
+                  curActive.click();
+                }catch(e){}
+              }, 150);
+            }
+          }catch(e){}
           try{ let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove(); toastEl=document.createElement('div'); toastEl.id='toast-sync'; toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #ffcc00;color:#111;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;font-weight:800;'; toastEl.textContent='● Členovia aktualizovaní'; document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000); }catch(e){}
-          // Ak nie sme na žiadnej špeciálnej obrazovke, aj tak skús prekresliť členov na pozadí
         } else {
-          try{ if(typeof renderMembers==='function') { const membersSection = document.getElementById('membersList') || document.querySelector('[data-view="members"]'); if(membersSection) renderMembers(); } }catch(e){}
-          try{ if(typeof renderMembership==='function') { const el = document.getElementById('membershipList') || document.querySelector('.membership-list'); if(el) renderMembership(); } }catch(e){}
+          // aj keď nie sme priamo na členskej obrazovke, aktualizuj domov na pozadí
+          try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
+          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
+          try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
         }
             }catch(e){}
       console.log("✅ Aktualizované bez orla, ostávam v karte");

@@ -117,7 +117,7 @@ function initCloudSync(){
         const curText = (curActive ? curActive.textContent : t).toLowerCase();
         const onBilling = curText.includes('vyúčt') || curText.includes('vyuct');
         const onHome = curText.includes('domov') || curText.includes('home');
-        const onMembers = curText.includes('člen') || curText.includes('clen');
+        const onMembers = curText.includes('člen') || curText.includes('clen') || (location.hash||'').toLowerCase().includes('member');
         
         // VŽDY aktualizuj domov na pozadí
         try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
@@ -219,7 +219,8 @@ localStorage.setItem = function(key, value){
   if(isApplyingRemote) return; // ignoruj zmeny ktoré prišli z cloudu
   if(syncEnabled && cloudEnabled && key.startsWith('gt-')){
     clearTimeout(window._cloudPushTimeout);
-    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 1500); // dlhší debounce
+    const delay = (key==='gt-members-v466' || key==='gt-members') ? 400 : 1500;
+    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), delay);
   }
 };
 
@@ -5422,6 +5423,7 @@ function saveNewMemberFromForm(id){
 }
 
 function saveMemberProfile(id,isNew=false){
+ try{ if(window._cloudPushTimeout) clearTimeout(window._cloudPushTimeout); }catch(e){}
  const m=membersData.find(x=>x.id===id); if(!m)return;
 
  m.surname=document.getElementById('mpSurname').value.trim().toUpperCase();
@@ -5473,6 +5475,8 @@ function saveMemberProfile(id,isNew=false){
  const a=attendanceState.members.find(x=>x.surname===m.surname && x.name===m.name);
  if(a) updateCanonicalMemberFromAttendance(a);
  persistMembersData();
+  try{ if(typeof pushToCloud==='function'){ setTimeout(()=>pushToCloud(), 400); } }catch(e){}
+
 
  if(isNew){
    setTimeout(()=>{ renderMembers(); },500);

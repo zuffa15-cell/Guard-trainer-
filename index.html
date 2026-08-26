@@ -50,14 +50,12 @@ function initCloudSync(){
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
     if(!data) return;
-    const alreadyReloadedFor = Number(localStorage.getItem('gt-last-reloaded-at')||0);
-    if(data._updatedAt && data._updatedAt === alreadyReloadedFor){
-      return; // už sme pre toto _updatedAt reloadli
-    }
     if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
+      // moje vlastné zmeny - ignoruj
       return;
     }
     if(data._updatedAt && data._updatedAt <= lastCloudUpdate) {
+      // stará zmena - ignoruj
       return;
     }
     
@@ -84,51 +82,76 @@ function initCloudSync(){
     }
 
     if(changed) {
-      console.log("📥 Zmena z cloudu - veľký refresh ale len raz");
+      console.log("📥 Zmena z cloudu - ostávam v karte, prekresľujem ako veľký refresh");
+      const already = Number(localStorage.getItem('gt-last-reloaded-at')||0);
+      if(data && data._updatedAt && data._updatedAt===already){ return; }
+      if(data && data._updatedAt){ localStorage.setItem('gt-last-reloaded-at', String(data._updatedAt)); lastCloudUpdate = data._updatedAt; }
+
+      const activeNav = document.querySelector('.bottom .nav.active');
+      const activeText = activeNav ? activeNav.textContent : 'DOMOV';
+      const isDochadzka = activeText.toLowerCase().includes('dochádzka');
+
       try{
-        // Zabráň slučke - ulož že pre tento timestamp už reloadujeme
-        if(data && data._updatedAt){
-          localStorage.setItem('gt-last-reloaded-at', String(data._updatedAt));
-          lastCloudUpdate = data._updatedAt;
+        // 1. Znovu načítaj všetko z localStorage do pamäte - ako po F5
+        if(typeof membersData!=='undefined'){
+          try{
+            const m = localStorage.getItem('gt-members');
+            if(m){ const parsed=JSON.parse(m); if(Array.isArray(parsed) && parsed.length) membersData = parsed; }
+          }catch(e){}
         }
-        const active = document.querySelector('.bottom .nav.active');
-        const tab = active ? active.textContent : 'DOMOV';
-        let grp=null;
-        try{ if(typeof attendanceState!=='undefined' && attendanceState.group) grp=attendanceState.group; }catch(e){}
-        originalSetItem('gt-restore-nav', JSON.stringify({tab:tab,group:grp,time:Date.now()}));
-      }catch(e){}
-      // len jeden reload, nie každé 2 sekundy
-      if(!window._reloading){
-        window._reloading = true;
-        setTimeout(()=>location.reload(), 500);
-      }
-    }
-    // restore po reload
-    (function(){
-      try{
-        const s=originalGetItem('gt-restore-nav');
-        if(!s) return;
-        const d=JSON.parse(s);
-        if(Date.now()-d.time>15000){ localStorage.removeItem('gt-restore-nav'); return; }
-        window.addEventListener('DOMContentLoaded',()=>{
-          setTimeout(()=>{
-            try{
-              const t=(d.tab||'').toLowerCase();
-              if(t.includes('dochádzka')){ if(typeof nav==='function') nav('attendance'); }
-              else if(t.includes('kalendár')||t.includes('kalendar')){ if(typeof nav==='function') nav('calendar'); }
-              else if(t.includes('členovia')||t.includes('clenovia')){ if(typeof nav==='function') nav('members'); }
-              else if(t.includes('tréneri')){ if(typeof nav==='function') nav('trainers'); }
-              else if(t.includes('financie')){ if(typeof nav==='function') nav('finance'); }
-              if(d.group){
-                setTimeout(()=>{ try{ if(typeof openAttendanceGroup==='function') openAttendanceGroup(d.group); }catch(e){} if(typeof refreshAttendance==='function'){ try{ refreshAttendance(); }catch(e){} } }, 1000);
+        if(typeof trainersData!=='undefined'){
+          try{
+            const t = localStorage.getItem('gt-trainers');
+            if(t){ const p=JSON.parse(t); if(Array.isArray(p)) trainersData = p; }
+          }catch(e){}
+        }
+        // 2. Načítaj schedule
+        try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
+
+        if(isDochadzka){
+          // DOCHÁDZKA - kompletné prečítanie ako po veľkom refreshe, ale ostávaš v karte
+          try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
+          try{ if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers(); }catch(e){}
+          // Prečítaj aj finance / billing
+          try{
+            const attRaw = localStorage.getItem('gt-attendance');
+            if(attRaw){
+              const att = JSON.parse(attRaw);
+              // ak je attendanceState prázdny, naplň ho
+              if(att && typeof attendanceState!=='undefined'){
+                // nechaj existujúci group/date, len refresh členov
               }
-              localStorage.removeItem('gt-restore-nav');
-              window._reloading=false;
-            }catch(e){}
-          }, 900);
-        });
-      }catch(e){}
-    })();
+            }
+          }catch(e){}
+
+          // Prekresli presne tie isté funkcie čo volá veľký refresh pri otvorení dochádzky
+          try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
+          try{ if(typeof renderAttendanceRows==='function') renderAttendanceRows(); }catch(e){}
+          try{ if(typeof updateAttendanceTotals==='function') updateAttendanceTotals(); }catch(e){}
+          try{ if(typeof renderMemberAttendance==='function') renderMemberAttendance(); }catch(e){}
+          try{ if(typeof updateAttendanceStickyTop==='function') updateAttendanceStickyTop(); }catch(e){}
+
+          // toast zelený - vidíš že sa prepočítalo
+          const toast=document.createElement('div');
+          toast.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;box-shadow:0 4px 12px rgba(0,0,0,.6);';
+          toast.textContent='● Dochádzka aktualizovaná - platby a tréningy prepočítané';
+          document.body.appendChild(toast);
+          setTimeout(()=>toast.remove(), 3000);
+        } else {
+          // DOMOV / ČLENOVIA / KALENDÁR - len RÝCHLY PREHĽAD, ostávaš v karte
+          try{ if(typeof renderHome==='function') renderHome(); }catch(e){}
+          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
+          try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
+          try{ if(typeof loadMembers==='function') loadMembers(); }catch(e){}
+          // žltý toast - tichý refresh
+          const toast=document.createElement('div');
+          toast.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;opacity:.95;';
+          toast.textContent='● RÝCHLY PREHĽAD aktualizovaný';
+          document.body.appendChild(toast);
+          setTimeout(()=>toast.remove(), 2200);
+        }
+      }catch(e){ console.warn("refresh ako velky fail", e); }
+    }
   });
 
   // 2. Ak je cloud prázdny, nahraj lokálne dáta (len raz)
@@ -173,7 +196,7 @@ localStorage.setItem = function(key, value){
   if(key==='gt-last-reloaded-at' || key==='gt-restore-nav') return;
   if(key.includes('attendance')){ window._pendingAttendanceLocal=true; return; }
   clearTimeout(window._cloudPushTimeout);
-  window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 800);
+  window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 700);
 };
 (function(){
   function hook(){
@@ -181,11 +204,14 @@ localStorage.setItem = function(key, value){
       if(b._p) return;
       const t=(b.textContent||'').toLowerCase();
       if(t.includes('uložiť') && (t.includes('dochádzku')||t.includes('vyúčtovanie')||t.includes('vyuctovanie'))){
-        b._p=true; b.addEventListener('click',()=>{ setTimeout(()=>{ try{ pushToCloud(true);}catch(e){} }, 500); }, true);
+        b._p=true;
+        b.addEventListener('click',()=>{
+          setTimeout(()=>{ try{ pushToCloud(true); }catch(e){} window._pendingAttendanceLocal=false; }, 500);
+        }, true);
       }
     });
   }
-  setInterval(hook, 1500);
+  setInterval(hook, 1200);
 })();
 
 // UI indikátor

@@ -48,12 +48,9 @@ function initCloudSync(){
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).onSnapshot(doc=>{
     if(!doc.exists) return;
     const data = doc.data();
-    const myUid = firebase.auth().currentUser?.uid;
     if(!data) return;
-    if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
-      // moje vlastné zmeny - ignoruj
-      return;
-    }
+    const devId = (function(){ try{ let id=localStorage.getItem('gt-device-id'); if(!id){ id='dev_'+Math.random().toString(36).slice(2,10)+Date.now().toString(36); localStorage.setItem('gt-device-id', id);} return id; }catch(e){ return 'dev_unknown'; } })();
+    if(data._deviceId && data._deviceId === devId) { return; }
     if(data._updatedAt && data._updatedAt <= lastCloudUpdate) {
       // stará zmena - ignoruj
       return;
@@ -88,7 +85,7 @@ function initCloudSync(){
         const t = active ? active.textContent : 'DOMOV';
         const isDoch = t.toLowerCase().includes('doch');
         // znovu načítaj všetko z disku do pamäte - members, training history, billing - ako veľký refresh
-        try{ const mm=localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
+        try{ const mm=localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
         try{
           const rawHist = localStorage.getItem('gt-training-attendance-history');
           if(rawHist){
@@ -191,12 +188,14 @@ function initCloudSync(){
 }
 
 function pushToCloud(force = false){
+    const devId = (function(){ try{ let id=localStorage.getItem('gt-device-id'); if(!id){ id='dev_'+Math.random().toString(36).slice(2,10)+Date.now().toString(36); localStorage.setItem('gt-device-id', id);} return id; }catch(e){ return 'dev_unknown'; } })();
+
   if(!db || !cloudEnabled) return;
   if(isApplyingRemote) return; // neposielaj keď práve aplikujem vzdialené zmeny
   const uid = firebase.auth().currentUser?.uid;
   if(!uid && !force) return;
   
-  const payload = {_lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
+  const payload = {_deviceId: devId, _lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
   lastCloudUpdate = payload._updatedAt;
   
   SYNC_KEYS.forEach(k=>{

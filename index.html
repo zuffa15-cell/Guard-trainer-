@@ -82,18 +82,18 @@ function initCloudSync(){
     }
 
     if(changed) {
-      // NIKDY nerob location.reload() - len event a soft refresh
+      console.log("📥 Zmena z druhého mobilu - auto reload");
       window.dispatchEvent(new Event('cloud-sync-update'));
-      // Skús zavolať render funkcie - REALTIME bez refreshu
-      try { if(window.render) window.render(); } catch(e){}
-      try { if(typeof renderHome==='function') renderHome(); } catch(e){}
-      try { if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); } catch(e){}
-      try { if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); } catch(e){}
-      try { if(typeof renderMembers==='function' && document.querySelector('.app')) { /* keep current view */ } } catch(e){}
-      try { if(window.loadSchedules) window.loadSchedules(); } catch(e){}
-      try { if(window.loadAll) window.loadAll(); } catch(e){}
-      try { if(window.refreshUI) window.refreshUI(); } catch(e){}
-      console.log("✅ Lokálne dáta aktualizované bez reloadu - realtime");
+      // Najspolahlivejšie: auto reload na druhom zariadení (bez slučky)
+      try { 
+        // Skús najprv soft render
+        if(typeof renderHome==='function') { 
+          try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
+          setTimeout(()=>{ try{ renderHome(); }catch(e){} try{ location.reload(); }catch(e){} }, 600);
+        } else {
+          setTimeout(()=>location.reload(), 800);
+        }
+      } catch(e){ location.reload(); }
     }
   });
 
@@ -137,7 +137,7 @@ localStorage.setItem = function(key, value){
   if(isApplyingRemote) return; // ignoruj zmeny ktoré prišli z cloudu
   if(syncEnabled && cloudEnabled && key.startsWith('gt-')){
     clearTimeout(window._cloudPushTimeout);
-    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 1500); // dlhší debounce
+    window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 400); // dlhší debounce
   }
 };
 

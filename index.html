@@ -180,19 +180,57 @@ function initCloudSync(){
           else if(curText.includes('člen') || curText.includes('clen')) cardName = 'Členoch';
           
           showManualRefreshBanner(cardName, function(){
-            try{ if(typeof renderMembersList==='function') renderMembersList(); }catch(e){}
-            try{ if(typeof filterMembers==='function') filterMembers(); }catch(e){}
-            try{ if(typeof updateMemberFilters==='function') updateMemberFilters(); }catch(e){}
-            try{ ['filterMembershipReport','filterRegistrationReport','filterDebtorsReport','filterApplicationsReport','renderMembershipReport','renderRegistrationReport','renderDebtorsReport','renderApplicationsReport'].forEach(fn=>{ if(typeof window[fn]==='function') window[fn](); }); }catch(e){}
-            // fallback - preklik aktívnej karty
-            try{ const a = document.querySelector('.bottom .nav.active'); if(a) { /* najdi jej click handler */ a.click(); setTimeout(()=>a.click(), 50); } }catch(e){}
-          });
+  try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
+  try{ if(typeof renderMembersList==='function') renderMembersList(); }catch(e){}
+  try{ if(typeof filterMembers==='function') filterMembers(); }catch(e){}
+  try{ if(typeof updateMemberFilters==='function') updateMemberFilters(); }catch(e){}
+  // pre reporty - skus zavolat vsetky mozne filtre podla ID elementov
+  try{
+    if(document.getElementById('membershipReportBody')){
+      if(typeof window.filterMembershipReport==='function') window.filterMembershipReport();
+      if(typeof window.renderMembershipReport==='function') window.renderMembershipReport();
+      if(typeof window.updateMembershipReport==='function') window.updateMembershipReport();
+      // skus aj vseobecny render
+      const el = document.getElementById('membershipReportBody');
+      if(el && el.innerHTML.trim()==='' && typeof window.renderMembership==='function') window.renderMembership();
+    }
+  }catch(e){}
+  try{
+    if(document.getElementById('registrationReportBody')){
+      if(typeof window.filterRegistrationReport==='function') window.filterRegistrationReport();
+      if(typeof window.renderRegistrationReport==='function') window.renderRegistrationReport();
+    }
+  }catch(e){}
+  try{
+    if(document.getElementById('debtorsReportBody')){
+      if(typeof window.filterDebtorsReport==='function') window.filterDebtorsReport();
+      if(typeof window.renderDebtorsReport==='function') window.renderDebtorsReport();
+    }
+  }catch(e){}
+  try{
+    if(document.getElementById('applicationsReportBody')){
+      if(typeof window.filterApplicationsReport==='function') window.filterApplicationsReport();
+      if(typeof window.renderApplicationsReport==='function') window.renderApplicationsReport();
+    }
+  }catch(e){}
+  // NEVOLAJ /* FIX removed: active.click() - otvaral zlu obrazovku */ - to otvara zlu obrazovku
+  // Namiesto toho skus zavolat funkciu ktora prekresli aktualny view podla viditelneho elementu
+  try{
+    const visible = document.querySelector('[id$="ReportBody"]');
+    if(visible){
+      // trigger change event na filtroch aby sa prekreslil
+      visible.closest('.membership-report, .report-container, .card')?.querySelectorAll('select, input').forEach(inp=>{
+        try{ inp.dispatchEvent(new Event('change', {bubbles:true})); }catch(e){}
+      });
+    }
+  }catch(e){}
+});
         } else if(onHome){
           // na domove nerob banner, len ticho aktualizuj
           console.log('Domov aktualizovaný na pozadí');
         } else {
           // iná karta - všeobecný banner
-          showManualRefreshBanner('aplikácii', function(){ location.reload(); });
+          showManualRefreshBanner('aplikácii', function(){ document.getElementById('cloud-manual-refresh-banner')?.remove() /* FIX: close len zatvori banner, nie reload */; });
         }
       }catch(err){ console.error('manual refresh banner error', err); }
     }

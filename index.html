@@ -81,20 +81,9 @@ function initCloudSync(){
       isApplyingRemote = false;
     }
 
-        if(changed) {
+            if(changed) {
       window.dispatchEvent(new Event('cloud-sync-update'));
       try{
-        try{
-          const mm = localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members');
-          if(mm){
-            const p=JSON.parse(mm);
-            if(Array.isArray(p)){
-              if(typeof membersData!=='undefined') membersData=p;
-              else window.membersData=p;
-              try{if(typeof normalizeAllMembers==='function') normalizeAllMembers();}catch(e){}
-            }
-          }
-        }catch(e){}
         try{
           const rawHist=localStorage.getItem('gt-training-attendance-history');
           if(rawHist){
@@ -118,9 +107,7 @@ function initCloudSync(){
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
-        // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
-        console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
-      }catch(err){console.error('cloud sync background error',err);}
+      }catch(err){}
     }
   });
 
@@ -4497,7 +4484,7 @@ const membersData=[
  {id:8,surname:'LUKÁČ',name:'Martin',dob:'30. 10. 2009',group:'B',groups:['B'],phone:'0915 888 999',membership:false,registration:false,newMember:false,debt:0,last:'05. 08. 2026'},
  {id:9,surname:'NOVÁK',name:'Filip',dob:'15. 08. 2014',group:'D',groups:['D'],phone:'0908 999 111',membership:false,registration:false,newMember:true,debt:0,last:'15. 08. 2026'},
  {id:10,surname:'VARGA',name:'Lukáš',dob:'14. 12. 2006',group:'C',groups:['C'],phone:'0917 123 789',membership:false,registration:false,newMember:false,debt:2,last:'11. 08. 2026'}
-];
+];try{ const _j=JSON.stringify(membersData); localStorage.setItem('gt-members',_j); localStorage.setItem('gt-members-v466',_j); }catch(e){};
 
 (function ensureTenTestMembersPerGroup(){
   const counts={A:0,B:0,C:0,D:0,'D+':0};
@@ -4524,7 +4511,7 @@ const membersData=[
       if(membersData.some(x=>x.surname===m.surname&&x.name===m.name)){
         m.surname=m.surname+' '+g;
       }
-      membersData.push(m);
+      membersData.push(m);;try{ const _j=JSON.stringify(membersData); localStorage.setItem('gt-members',_j); localStorage.setItem('gt-members-v466',_j); }catch(e){}
       counts[g]++;
     }
   }
@@ -4543,7 +4530,7 @@ function loadPersistedMembers(){
   try{
     const raw=JSON.parse(localStorage.getItem(MEMBERS_STORAGE_KEY)||'null');
     if(Array.isArray(raw) && raw.length){
-      membersData.splice(0,membersData.length,...raw);
+      membersData.splice(0,membersData.length,...raw);;try{ const _j=JSON.stringify(membersData); localStorage.setItem('gt-members',_j); localStorage.setItem('gt-members-v466',_j); }catch(e){}
       normalizeAllMembers();
       return true;
     }
@@ -4707,7 +4694,7 @@ function createMemberFromMembers(){
    memberSince:todayText,
    newMember:true
  };
- membersData.push(m);
+ membersData.push(m);;try{ const _j=JSON.stringify(membersData); localStorage.setItem('gt-members',_j); localStorage.setItem('gt-members-v466',_j); }catch(e){}
  renderMemberEditForm(id,true);
 }
 
@@ -5389,7 +5376,7 @@ function saveMemberProfile(id,isNew=false){
  if(isNew){
    const duplicate=membersData.find(x=>x.id!==id && x.surname===m.surname && x.name===m.name);
    if(duplicate){
-     membersData=membersData.filter(x=>x.id!==id);
+     membersData=membersData.filter(x=>x.id!==id);try{ const _j=JSON.stringify(membersData); localStorage.setItem('gt-members',_j); localStorage.setItem('gt-members-v466',_j); }catch(e){};
      toast('Člen už existuje');
      setTimeout(()=>renderMemberProfile(duplicate.id),500);
      return;
@@ -7040,7 +7027,7 @@ function addNewMember(){
      training:false,newMember:false,newMemberDate:attendanceState.date,
      membershipAmount:0,registration:false,debt:0,application:false
    };
-   membersData.push(member);
+   membersData.push(member);;try{ const _j=JSON.stringify(membersData); localStorage.setItem('gt-members',_j); localStorage.setItem('gt-members-v466',_j); }catch(e){}
  }else if(!(member.groups||[]).includes(attendanceState.group)){
    member.groups=[...(member.groups||[]),attendanceState.group];
  }
@@ -8864,6 +8851,42 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+<script>
+// Auto-save
+(function(){
+  try{
+    const save = (arr)=>{
+      try{
+        const j = JSON.stringify(arr);
+        localStorage.setItem('gt-members', j);
+        localStorage.setItem('gt-members-v466', j);
+      }catch(e){}
+    };
+    if(window.membersData && typeof Proxy !== 'undefined'){
+      window.membersData = new Proxy(window.membersData, {
+        set(target, prop, value){
+          target[prop]=value;
+          if(!isNaN(prop) || prop==='length'){
+            clearTimeout(window._gtSaveT);
+            window._gtSaveT = setTimeout(()=>save(target), 100);
+          }
+          return true;
+        }
+      });
+      ['push','unshift','splice'].forEach(m=>{
+        const orig = window.membersData[m];
+        if(typeof orig==='function'){
+          window.membersData[m] = function(...args){
+            const res = orig.apply(this, args);
+            save(this);
+            return res;
+          };
+        }
+      });
+    }
+  }catch(e){}
+})();
+</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

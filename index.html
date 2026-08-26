@@ -36,8 +36,6 @@ try {
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
 const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-members-v466','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance'];
-const devId = localStorage.getItem('gt-device-id') || (()=>{ const id=Math.random().toString(36).slice(2)+Date.now().toString(36); localStorage.setItem('gt-device-id', id); return id; })();
-
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -48,10 +46,6 @@ function initCloudSync(){
   
   // 1. Počúvaj zmeny z cloudu
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).onSnapshot(doc=>{
-      // FIX v2: ignoruj vlastné zmeny
-      try{ const _sd = (typeof snap!=='undefined' && snap && snap.data) ? snap.data() : null; if(_sd && _sd._deviceId && _sd._deviceId===devId) return; }catch(e){}
-      try{ const _dd = typeof data!=='undefined' ? data : null; if(_dd && _dd._deviceId && _dd._deviceId===devId) return; }catch(e){}
-
     if(!doc.exists) return;
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
@@ -87,13 +81,13 @@ function initCloudSync(){
       isApplyingRemote = false;
     }
 
-        if(changed) {
+    if(changed) {
       window.dispatchEvent(new Event('cloud-sync-update'));
       try{
         const active = document.querySelector('.bottom .nav.active');
         const t = active ? active.textContent : 'DOMOV';
         const isDoch = t.toLowerCase().includes('doch');
-        // znovu načítaj všetko z disku do pamäte
+        // znovu načítaj všetko z disku do pamäte - members, training history, billing - ako veľký refresh
         try{ const mm=localStorage.getItem('gt-members-v466') || localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
         try{
           const rawHist = localStorage.getItem('gt-training-attendance-history');
@@ -118,12 +112,14 @@ function initCloudSync(){
           }
         }catch(e){}
         try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
+        // Zisti kde som
         const curActive = document.querySelector('.bottom .nav.active');
         const curText = (curActive ? curActive.textContent : t).toLowerCase();
         const onBilling = curText.includes('vyúčt') || curText.includes('vyuct');
         const onHome = curText.includes('domov') || curText.includes('home');
-        const onMembers = curText.includes('člen') || curText.includes('clen') || (location.hash||'').toLowerCase().includes('member') || curText.includes('registr') || curText.includes('dlž') || curText.includes('dlz') || curText.includes('prihl') || curText.includes('členské') || curText.includes('clenske');
+        const onMembers = curText.includes('člen') || curText.includes('clen') || (location.hash||'').toLowerCase().includes('member');
         
+        // VŽDY aktualizuj domov na pozadí
         try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
         try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
         try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
@@ -141,45 +137,31 @@ function initCloudSync(){
           document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
         } else if(onBilling){
           try{ if(typeof renderMonthlyBilling==='function'){ renderMonthlyBilling(); } }catch(e){}
+          try{ let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove(); toastEl=document.createElement('div'); toastEl.id='toast-sync'; toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;'; toastEl.textContent='● Vyúčtovanie aktualizované'; document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000); }catch(e){}
         } else if(onMembers){
-          // UNIVERZÁLNY FIX: prekresli všetko čo existuje
+          try{ if(typeof normalizeAllMembers==='function') normalizeAllMembers(); }catch(e){}
+          try{ if(typeof renderMembers==='function') renderMembers(); }catch(e){}
           try{ if(typeof renderMembersList==='function') renderMembersList(); }catch(e){}
           try{ if(typeof filterMembers==='function') filterMembers(); }catch(e){}
           try{ if(typeof updateMemberFilters==='function') updateMemberFilters(); }catch(e){}
-          // skús všetky reporty - ak funkcia neexistuje, try/catch ju ignoruje
-          try{ const mrb = document.getElementById('membershipReportBody'); if(mrb && typeof renderMembershipReport==='function') renderMembershipReport(); }catch(e){}
-          try{ const rrb = document.getElementById('registrationReportBody'); if(rrb && typeof renderRegistrationReport==='function') renderRegistrationReport(); }catch(e){}
-          try{ const drb = document.getElementById('debtorsReportBody'); if(drb && typeof renderDebtorsReport==='function') renderDebtorsReport(); }catch(e){}
-          try{ const arb = document.getElementById('applicationsReportBody'); if(arb && typeof renderApplicationsReport==='function') renderApplicationsReport(); }catch(e){}
-          // fallback: ak je otvorený akýkoľvek report, znovu spusti jeho filter/render
-          try{
-            // najdi všetky tlačidlá filtra a spusti ich onchange
-            document.querySelectorAll('.membership-report-filters select, .membership-report-filters input, #membershipReportFilters select, #membershipReportFilters input').forEach(el=>{
-              if((el as any).onchange) (el as any).onchange();
-            });
-          }catch(e){}
-          try{
-            // najuniverzálnejšie - ak existuje funkcia showView alebo podobná, prekresli aktuálny view
-            // namiesto hádania - skús znovu zavolať posledný render podľa toho čo je viditeľné
-            const visibleReport = document.querySelector('[id$="ReportBody"]:not([style*="display: none"])');
-            if(visibleReport){
-              const id = visibleReport.id;
-              if(id.includes('membership') && typeof (window as any).renderMembershipReport==='function') (window as any).renderMembershipReport();
-              if(id.includes('registration') && typeof (window as any).renderRegistrationReport==='function') (window as any).renderRegistrationReport();
-              if(id.includes('debtor') && typeof (window as any).renderDebtorsReport==='function') (window as any).renderDebtorsReport();
-              if(id.includes('application') && typeof (window as any).renderApplicationsReport==='function') (window as any).renderApplicationsReport();
-            }
-          }catch(e){}
-          // POSLEDNÝ POKUS: prekresli celú sekciu členov tak že zavoláš filter znova
-          try{
-            if(typeof (window as any).filterMembershipReport==='function') (window as any).filterMembershipReport();
-            if(typeof (window as any).filterRegistrationReport==='function') (window as any).filterRegistrationReport();
-            if(typeof (window as any).filterDebtorsReport==='function') (window as any).filterDebtorsReport();
-            if(typeof (window as any).filterApplicationsReport==='function') (window as any).filterApplicationsReport();
-          }catch(e){}
+          // prekresli aj členské obrazovky
+          try{ if(typeof renderMembership==='function') renderMembership(); }catch(e){}
+          try{ if(typeof renderRegistration==='function') renderRegistration(); }catch(e){}
+          try{ if(typeof renderDebtors==='function') renderDebtors(); }catch(e){}
+          try{ if(typeof renderApplications==='function') renderApplications(); }catch(e){}
+          // skús všetky možné názvy funkcií pre členské sekcie
+          try{ if(typeof loadMembers==='function') loadMembers(); }catch(e){}
+          try{ if(typeof showMembers==='function') showMembers(); }catch(e){}
+          // fallback - ak je otvorený detail člena, znovu načítaj
+          try{ const activeMemberDetail = document.querySelector('.member-detail, .member-card, #memberDetail'); if(activeMemberDetail) { if(typeof openMember==='function' && window.currentMemberId) openMember(window.currentMemberId); } }catch(e){}
           try{ let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove(); toastEl=document.createElement('div'); toastEl.id='toast-sync'; toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #ffcc00;color:#111;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;font-weight:800;'; toastEl.textContent='● Členovia aktualizovaní'; document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000); }catch(e){}
+          // Ak nie sme na žiadnej špeciálnej obrazovke, aj tak skús prekresliť členov na pozadí
+        } else {
+          try{ if(typeof renderMembers==='function') { const membersSection = document.getElementById('membersList') || document.querySelector('[data-view="members"]'); if(membersSection) renderMembers(); } }catch(e){}
+          try{ if(typeof renderMembership==='function') { const el = document.getElementById('membershipList') || document.querySelector('.membership-list'); if(el) renderMembership(); } }catch(e){}
         }
-      }catch(err){ console.error('cloud sync render error', err); }
+            }catch(e){}
+      console.log("✅ Aktualizované bez orla, ostávam v karte");
     }
   });
 
@@ -204,11 +186,6 @@ function pushToCloud(force = false){
   lastCloudUpdate = payload._updatedAt;
   
   SYNC_KEYS.forEach(k=>{
-  // FIX v2: označ zdroj zariadenia
-  try{ if(typeof payload!=='undefined' && payload && typeof payload==='object'){ payload._deviceId = devId; } }catch(e){}
-  try{ if(typeof data!=='undefined' && data && typeof data==='object'){ data._deviceId = devId; } }catch(e){}
-  try{ if(typeof docData!=='undefined' && docData && typeof docData==='object'){ docData._deviceId = devId; } }catch(e){}
-
     const v = originalGetItem(k);
     if(v) payload[k] = v;
   });

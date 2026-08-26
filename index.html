@@ -112,35 +112,43 @@ function initCloudSync(){
           }
         }catch(e){}
         try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
+        // Zisti kde som - podľa active triedy, nie podľa hash
+        const curActive = document.querySelector('.bottom .nav.active');
+        const curText = (curActive ? curActive.textContent : t).toLowerCase();
+        const onBilling = curText.includes('vyúčt') || curText.includes('vyuct');
+        const onHome = curText.includes('domov') || curText.includes('home');
+        
         if(isDoch){
+          // Som na DOCHÁDZKA - prekresli len dochádzku, ostaň tu
           try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
           try{ if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers(); }catch(e){}
           try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
           try{ const list=document.getElementById('attendanceList'); if(list && typeof renderAttendanceRows==='function') list.innerHTML=renderAttendanceRows(); }catch(e){}
           try{ if(typeof updateAttendanceTotals==='function') updateAttendanceTotals(); }catch(e){}
-          // aj vyúčtovanie sa prepočíta - ak je otvorené moje vyúčtovania, prekresli ho
+          let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
+          toastEl=document.createElement('div'); toastEl.id='toast-sync';
+          toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
+          toastEl.textContent='● Dochádzka aktualizovaná - prepočítané';
+          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
+        } else if(onBilling){
+          // Som na MOJE VYÚČTOVANIA - prekresli len vyúčtovanie, ostaň tu, neskáč na domov
           try{ if(typeof renderMonthlyBilling==='function'){ renderMonthlyBilling(); } }catch(e){}
           let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
           toastEl=document.createElement('div'); toastEl.id='toast-sync';
           toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
-          toastEl.textContent='● Dochádzka a vyúčtovanie aktualizované';
+          toastEl.textContent='● Vyúčtovanie aktualizované - platby prepočítané';
           document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
         } else {
-          // VŽDY prekresli aj vyúčtovanie, aj keď si na inej karte - aby moje vyúčtovania mali hneď nové platby
-          try{ if(typeof renderMonthlyBilling==='function'){ 
-            const billingActive = document.querySelector('.bottom .nav.active');
-            const isBilling = billingActive && billingActive.textContent.toLowerCase().includes('vyúčt');
-            if(isBilling) renderMonthlyBilling();
-          } }catch(e){}
-          try{ if(typeof renderHome==='function') renderHome(); }catch(e){}
-          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
-          try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
+          // Som na DOMOV alebo iná karta - len rýchly prehľad, ostaň kde som
+          try{ if(typeof renderHome==='function' && onHome) renderHome(); }catch(e){}
+          try{ if(typeof updateHomeQuickOverview==='function' && onHome) updateHomeQuickOverview(); }catch(e){}
+          try{ if(typeof updateHomeGroupCounts==='function' && onHome) updateHomeGroupCounts(); }catch(e){}
+          // ak nie som na domov, nerob nič iné - len toast že dáta prišli
           let toastEl=document.getElementById('toast-sync'); if(toastEl) toastEl.remove();
           toastEl=document.createElement('div'); toastEl.id='toast-sync';
-          const isBillingTab = t.toLowerCase().includes('vyúčt');
-          toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid '+(isBillingTab?'#35b83a':'#f3b51b')+';color:'+(isBillingTab?'#35b83a':'#f3b51b')+';padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
-          toastEl.textContent = isBillingTab ? '● Vyúčtovanie aktualizované - platby prepočítané' : '● RÝCHLY PREHĽAD aktualizovaný';
-          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 3000);
+          toastEl.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;';
+          toastEl.textContent='● Dáta aktualizované';
+          document.body.appendChild(toastEl); setTimeout(()=>toastEl.remove(), 2000);
         }
       }catch(e){}
       console.log("✅ Aktualizované bez orla, ostávam v karte");

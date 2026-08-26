@@ -8829,6 +8829,46 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+
+<script id="stay-card">
+(function(){
+  let lastSeen=0;
+  window.addEventListener('cloud-sync-update', function(){
+    try{
+      const now=Date.now();
+      if(now-lastSeen<1500) return;
+      lastSeen=now;
+      const active=document.querySelector('.bottom .nav.active');
+      const txt=(active?active.textContent:'DOMOV');
+      const isDoch=txt.toLowerCase().includes('doch');
+      try{ const mm=localStorage.getItem('gt-members'); if(mm){ const p=JSON.parse(mm); if(Array.isArray(p)) membersData=p; } }catch(e){}
+      try{ if(typeof loadSchedules==='function') loadSchedules(); }catch(e){}
+      if(isDoch){
+        try{ if(typeof loadAttendance==='function') loadAttendance(); }catch(e){}
+        try{ if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers(); }catch(e){}
+        try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
+        try{ const list=document.getElementById('attendanceList'); if(list && typeof renderAttendanceRows==='function') list.innerHTML=renderAttendanceRows(); }catch(e){}
+        try{ if(typeof updateAttendanceTotals==='function') updateAttendanceTotals(); }catch(e){}
+        let t=document.getElementById('toast-sync'); if(t) t.remove();
+        t=document.createElement('div'); t.id='toast-sync';
+        t.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#0f1a0f;border:1px solid #35b83a;color:#35b83a;padding:9px 15px;border-radius:20px;font-size:12px;z-index:999999;';
+        t.textContent='● Dochádzka aktualizovaná - prepočítané';
+        document.body.appendChild(t); setTimeout(()=>{ t.remove(); }, 3000);
+      } else {
+        try{ if(typeof renderHome==='function') renderHome(); }catch(e){}
+        try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
+        try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
+        let t=document.getElementById('toast-sync'); if(t) t.remove();
+        t=document.createElement('div'); t.id='toast-sync';
+        t.style.cssText='position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;';
+        t.textContent='● RÝCHLY PREHĽAD aktualizovaný';
+        document.body.appendChild(t); setTimeout(()=>{ t.remove(); }, 2200);
+      }
+    }catch(e){}
+  });
+})();
+</script>
+
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

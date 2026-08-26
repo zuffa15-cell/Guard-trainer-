@@ -50,12 +50,14 @@ function initCloudSync(){
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
     if(!data) return;
+    const alreadyReloadedFor = Number(localStorage.getItem('gt-last-reloaded-at')||0);
+    if(data._updatedAt && data._updatedAt === alreadyReloadedFor){
+      return; // už sme pre toto _updatedAt reloadli
+    }
     if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
-      // moje vlastné zmeny - ignoruj
       return;
     }
     if(data._updatedAt && data._updatedAt <= lastCloudUpdate) {
-      // stará zmena - ignoruj
       return;
     }
     
@@ -82,67 +84,51 @@ function initCloudSync(){
     }
 
     if(changed) {
-      window.dispatchEvent(new Event('cloud-sync-update'));
+      console.log("📥 Zmena z cloudu - veľký refresh ale len raz");
       try{
-        if(typeof loadSchedules==='function') loadSchedules();
-        if(typeof loadMembers==='function') loadMembers();
-        if(typeof loadAttendance==='function') loadAttendance();
-        const activeNav = document.querySelector('.bottom .nav.active, .bottom-nav .active');
-        const activeText = activeNav ? activeNav.textContent : 'DOMOV';
-        // DOMOV -> len RÝCHLY PREHĽAD + viditeľný tichý refresh
-        if(activeText.includes('DOMOV') || !activeNav){
-          try{ if(typeof renderHome==='function') renderHome(); }catch(e){}
-          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
-          try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
-          // Vždy prekresli aj ak si na inej karte - rýchly prehľad na pozadí
-          try{
-            const toast = document.createElement('div');
-            toast.style.cssText='position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;opacity:.95;';
-            toast.textContent='● Tichý refresh - RÝCHLY PREHĽAD aktualizovaný';
-            document.body.appendChild(toast);
-            setTimeout(()=>toast.remove(),2500);
-          }catch(e){}
-        } else if(activeText.includes('DOCHÁDZKA')){
-          // DOCHÁDZKA -> hneď refresh po Uložiť na druhom mobile - PREPOČÍTAŤ VŠETKO
-          try{
-            // 1. Načítaj najnovšie dáta z localStorage do pamäte
-            if(typeof loadAttendanceFromMembers==='function') loadAttendanceFromMembers();
-            if(typeof loadAttendance==='function') loadAttendance();
-            // 2. Prekresli tabuľku dochádzky a platby/tréningy
-            if(typeof refreshAttendance==='function') refreshAttendance();
-            if(typeof renderAttendanceRows==='function') renderAttendanceRows();
-            if(typeof updateAttendanceTotals==='function') updateAttendanceTotals();
-            if(typeof renderMemberAttendance==='function') renderMemberAttendance();
-            if(typeof render==='function') render();
-            if(typeof renderHome==='function') { /* aj rýchly prehľad na pozadí */ try{ updateHomeQuickOverview(); }catch(e){} }
-            // 3. Ak existuje attendanceState, znovu načítaj current group
-            if(typeof attendanceState!=='undefined' && attendanceState.group){
-              try{ if(typeof applyTrainingSettingsForAttendance==='function') applyTrainingSettingsForAttendance(); }catch(e){}
-              try{ if(typeof refreshAttendance==='function') refreshAttendance(); }catch(e){}
-            }
-          }catch(e){ console.warn("dochadzka full refresh fail", e); }
-          try{ 
-            const toast = document.createElement('div');
-            toast.style.cssText='position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #35b83a;color:#35b83a;padding:8px 14px;border-radius:20px;font-size:12px;z-index:999999;';
-            toast.textContent='● Dochádzka aktualizovaná z druhého mobilu - prepočítané';
-            document.body.appendChild(toast);
-            setTimeout(()=>toast.remove(),3000);
-          }catch(e){}
-        } else {
-          // ČLENOVIA / KALENDÁR -> len rýchly prehľad + toast aby si videl tichý refresh
-          try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
-          try{ if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts(); }catch(e){}
-          try{ if(typeof renderHome==='function') renderHome(); }catch(e){} // prepočíta aj na pozadí
-          try{
-            const toast = document.createElement('div');
-            toast.style.cssText='position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #f3b51b;color:#f3b51b;padding:7px 13px;border-radius:18px;font-size:11px;z-index:999999;opacity:.95;';
-            toast.textContent='● Tichý refresh - prehľad aktualizovaný';
-            document.body.appendChild(toast);
-            setTimeout(()=>toast.remove(),2500);
-          }catch(e){}
+        // Zabráň slučke - ulož že pre tento timestamp už reloadujeme
+        if(data && data._updatedAt){
+          localStorage.setItem('gt-last-reloaded-at', String(data._updatedAt));
+          lastCloudUpdate = data._updatedAt;
         }
+        const active = document.querySelector('.bottom .nav.active');
+        const tab = active ? active.textContent : 'DOMOV';
+        let grp=null;
+        try{ if(typeof attendanceState!=='undefined' && attendanceState.group) grp=attendanceState.group; }catch(e){}
+        originalSetItem('gt-restore-nav', JSON.stringify({tab:tab,group:grp,time:Date.now()}));
       }catch(e){}
+      // len jeden reload, nie každé 2 sekundy
+      if(!window._reloading){
+        window._reloading = true;
+        setTimeout(()=>location.reload(), 500);
+      }
     }
+    // restore po reload
+    (function(){
+      try{
+        const s=originalGetItem('gt-restore-nav');
+        if(!s) return;
+        const d=JSON.parse(s);
+        if(Date.now()-d.time>15000){ localStorage.removeItem('gt-restore-nav'); return; }
+        window.addEventListener('DOMContentLoaded',()=>{
+          setTimeout(()=>{
+            try{
+              const t=(d.tab||'').toLowerCase();
+              if(t.includes('dochádzka')){ if(typeof nav==='function') nav('attendance'); }
+              else if(t.includes('kalendár')||t.includes('kalendar')){ if(typeof nav==='function') nav('calendar'); }
+              else if(t.includes('členovia')||t.includes('clenovia')){ if(typeof nav==='function') nav('members'); }
+              else if(t.includes('tréneri')){ if(typeof nav==='function') nav('trainers'); }
+              else if(t.includes('financie')){ if(typeof nav==='function') nav('finance'); }
+              if(d.group){
+                setTimeout(()=>{ try{ if(typeof openAttendanceGroup==='function') openAttendanceGroup(d.group); }catch(e){} if(typeof refreshAttendance==='function'){ try{ refreshAttendance(); }catch(e){} } }, 1000);
+              }
+              localStorage.removeItem('gt-restore-nav');
+              window._reloading=false;
+            }catch(e){}
+          }, 900);
+        });
+      }catch(e){}
+    })();
   });
 
   // 2. Ak je cloud prázdny, nahraj lokálne dáta (len raz)
@@ -184,28 +170,22 @@ localStorage.setItem = function(key, value){
   originalSetItem(key, value);
   if(isApplyingRemote) return;
   if(!syncEnabled || !cloudEnabled || !key.startsWith('gt-')) return;
-  // DOCHÁDZKU neposielaj počas zaškrtávania - až pri Uložiť
-  if(key.includes('attendance')){
-    window._pendingAttendanceLocal = true;
-    return;
-  }
+  if(key==='gt-last-reloaded-at' || key==='gt-restore-nav') return;
+  if(key.includes('attendance')){ window._pendingAttendanceLocal=true; return; }
   clearTimeout(window._cloudPushTimeout);
-  window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 600);
+  window._cloudPushTimeout = setTimeout(()=>pushToCloud(), 800);
 };
 (function(){
-  function hookSave(){
+  function hook(){
     document.querySelectorAll('button').forEach(b=>{
-      if(b._patched) return;
+      if(b._p) return;
       const t=(b.textContent||'').toLowerCase();
-      if(t.includes('uložiť') && (t.includes('dochádzku') || t.includes('vyúčtovanie') || t.includes('vyuctovanie'))){
-        b._patched=true;
-        b.addEventListener('click', ()=>{
-          setTimeout(()=>{ try{ pushToCloud(true); }catch(e){} window._pendingAttendanceLocal=false; }, 400);
-        }, true);
+      if(t.includes('uložiť') && (t.includes('dochádzku')||t.includes('vyúčtovanie')||t.includes('vyuctovanie'))){
+        b._p=true; b.addEventListener('click',()=>{ setTimeout(()=>{ try{ pushToCloud(true);}catch(e){} }, 500); }, true);
       }
     });
   }
-  setInterval(hookSave, 1000);
+  setInterval(hook, 1500);
 })();
 
 // UI indikátor

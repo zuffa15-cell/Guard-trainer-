@@ -3251,7 +3251,9 @@ html,body{color-scheme:dark!important;}
  }
  button.addEventListener('click',login);
  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});
- try{if(localStorage.getItem(KEY)==='1')overlay.remove()}catch(e){}
+ // Pri novom načítaní aplikácie vždy zobraz prihlasovanie.
+ // Úspešné heslo sa nebude automaticky preskakovať.
+
 })();
 </script>
 

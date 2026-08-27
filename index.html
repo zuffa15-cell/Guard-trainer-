@@ -4586,7 +4586,6 @@ function saveTrainerProfile(id){
    if(isAdmin() && loginPasswordInput && String(loginPasswordInput.value||'').trim()){
      t.loginPassword=String(loginPasswordInput.value).trim();
      t.loginPasswordSet=true;
-     loginPasswordInput.value='';
    }
    persistTrainersData();
 

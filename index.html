@@ -3136,7 +3136,21 @@ html,body{color-scheme:dark!important;}
   color:#ef3939!important;
 }
 </style>
-</head>
+<style id="head-other-details-style">
+.head-other-summary{margin:10px 0 14px!important;padding:10px 12px!important}
+.head-other-summary h3{margin:0 0 8px!important;font-size:18px!important;color:#ffc62a!important}
+.head-other-detail-row{display:grid!important;grid-template-columns:1.05fr .8fr 1.8fr .65fr!important;align-items:center!important;gap:8px!important;padding:7px 0!important;border-bottom:1px solid rgba(190,150,30,.35)!important}
+.head-other-detail-row:last-child{border-bottom:0!important}
+.head-other-date,.head-other-type,.head-other-desc{font-size:14px!important}
+.head-other-type.plus,.head-other-detail-row strong.plus{color:#4fbc35!important}
+.head-other-type.minus,.head-other-detail-row strong.minus{color:#ef3939!important}
+.head-other-detail-row strong{text-align:right!important;font-size:15px!important}
+@media(max-width:600px){
+ .head-other-detail-row{grid-template-columns:1.15fr .75fr 1.35fr .7fr!important;gap:5px!important}
+ .head-other-date,.head-other-type,.head-other-desc{font-size:12px!important}
+ .head-other-detail-row strong{font-size:13px!important}
+}
+</style></head>
 <body class="gtSplashV323Active">
 <div id="gtSplashV319">
   <div class="gtSplash319Stage">
@@ -8004,6 +8018,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
   const realTrainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===targetTrainerName);
   if(!realTrainer){ toast('Tréner sa v zozname nenašiel'); renderHeadTrainerBilling(); return; }
   const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
+  const otherDetails=getMonthlyOtherDetails(rows);
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'MÁJ';
   app.innerHTML=`
@@ -8030,8 +8045,21 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
       </table>
     </div>
     <section class="billing-card head-other-summary">
-      <div class="bill-row"><span>Iné +</span><strong class="plus">${sum('otherPlus')} €</strong></div>
-      <div class="bill-row minus"><span>Iné −</span><strong class="minus">− ${sum('otherMinus')} €</strong></div>
+      <h3>INÉ PLATBY – PODROBNOSTI</h3>
+      <div class="head-other-detail-head">
+        <span>DÁTUM</span>
+        <span>INÉ +/−</span>
+        <span>POPIS</span>
+        <span>SUMA</span>
+      </div>
+      ${otherDetails.length ? otherDetails.map(x => `
+        <div class="head-other-detail-row">
+          <span class="head-other-date">${x.date}</span>
+          <span class="head-other-type ${x.type==='Iné +'?'plus':'minus'}">${x.type}</span>
+          <span class="head-other-desc">${x.reason}</span>
+          <strong class="${x.type==='Iné +'?'plus':'minus'}">${Number(x.amount)>0?'+':'−'}${Math.abs(Number(x.amount||0))} €</strong>
+        </div>
+      `).join('') : `<div class="head-other-empty">Žiadne iné platby.</div>`}
     </section>
     <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${mName} ${year}</small><br>${clubHandoverLabel(getClubHandoverStatus(trainerName,month,year),true,trainerName,month,year,sum('clubAmount'))}</span><strong>${sum('clubAmount')} €${getClubHandoverStatus(trainerName,month,year)?' <span style="color:#4ade80;font-weight:900;font-size:26px;vertical-align:middle;margin-left:7px;">✓</span>':''}</strong></div>
     <div class="trainer-billing-actions">
@@ -8765,6 +8793,14 @@ html,body{color-scheme:dark!important;}
 .member-month-history-row.member-month-click{background:#0a0a0a!important;background-color:#0a0a0a!important;color:#eee!important;}
 </style>
 <style id="no-login-fix"> #gtLoginOverlayV329{display:none!important;} </style>
+<style id="head-other-details-fix">
+.head-other-detail-head{display:grid;grid-template-columns:1.15fr .9fr 1.5fr .8fr;gap:8px;padding:0 8px 8px;border-bottom:1px solid rgba(212,160,23,.45);font-size:11px;font-weight:800;color:#aaa;text-transform:uppercase}
+.head-other-detail-row{display:grid;grid-template-columns:1.15fr .9fr 1.5fr .8fr;gap:8px;align-items:center;padding:10px 8px;border-bottom:1px solid rgba(212,160,23,.22)}
+.head-other-detail-row:last-child{border-bottom:0}
+.head-other-date,.head-other-type,.head-other-desc,.head-other-detail-row strong{min-width:0}
+.head-other-detail-row strong{text-align:right}
+.head-other-empty{padding:12px 8px;color:#999}
+</style>
 </head><body>
       <h1>ZAPLATENÉ ČLENSKÉ</h1>
       <div class="meta">${summary?.innerText||''}</div>
@@ -10799,7 +10835,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
       const btn=ev.target.closest && ev.target.closest('.head-trainer-name');
       if(!btn) return;
       ev.preventDefault();
-      ev.stopPropagation();
+      ev.stopImmediatePropagation();
       const name=btn.getAttribute('data-trainer') || (btn.querySelector('b') ? btn.querySelector('b').textContent : '');
       const title=document.querySelector('.head-title-row h2');
       const txt=title ? title.textContent : '';

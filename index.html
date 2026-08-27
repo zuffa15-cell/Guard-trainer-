@@ -5337,6 +5337,8 @@ function saveNewMemberFromForm(id){
  const preview=document.getElementById('applicationPreview');
  if(appFile&&appFile.files&&appFile.files.length){
    m.application=true;
+try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
+
    m.applicationDate=formatPaymentDate(appToday().iso);
    m.memberSince=m.applicationDate;
    if(preview && preview.dataset.fileData){
@@ -5408,6 +5410,8 @@ function saveMemberProfile(id,isNew=false){
  const preview=document.getElementById('applicationPreview');
  if(appFile&&appFile.files.length){
    m.application=true;
+try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
+
    m.applicationDate=formatPaymentDate(appToday().iso);
    m.memberSince=m.applicationDate;
    if(preview && preview.dataset.fileData){
@@ -6280,8 +6284,12 @@ function toggleApplication(i){
  // It cannot be removed here. Removal is allowed only in member settings/edit.
  if(a.application || (m && m.application)){
    a.application=true;
+try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
+
    if(m){
      m.application=true;
+try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
+
      if(!m.applicationDate) m.applicationDate=a.applicationDate||formatPaymentDate(attendanceState.date);
      m.memberSince=m.applicationDate;
      a.applicationDate=m.applicationDate;
@@ -6292,9 +6300,13 @@ function toggleApplication(i){
  }
 
  a.application=true;
+try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
+
  a.applicationDate=formatPaymentDate(attendanceState.date);
  if(m){
    m.application=true;
+try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
+
    m.applicationDate=a.applicationDate;
    m.memberSince=m.applicationDate;
  }
@@ -6320,6 +6332,8 @@ function offerAttendanceApplicationPhoto(i){
      const m=membersData.find(x=>x.surname===a.surname&&x.name===a.name);
      if(m){
        m.application=true;
+try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
+
        m.applicationDate=a.applicationDate||formatPaymentDate(attendanceState.date);
        m.applicationFile=reader.result;
        m.applicationFileName=file.name;
@@ -7394,7 +7408,7 @@ function trainingBilling(){
 
       <div class="billing-note">Dlžné: <b>${debt} €</b> — do sumy odovzdávanej klubu sa nezapočítava.</div>
 
-      <button type="button" class="confirm-billing" onclick="return saveTrainingBilling()">✓ ULOŽIŤ VYÚČTOVANIE</button>
+      <button type="button" class="confirm-billing" onclick="return saveTrainingBilling(); this.textContent='✓ Uložené'; this.style.background='#22c55e'; this.style.color='white';">✓ ULOŽIŤ VYÚČTOVANIE</button>
     </main>
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>

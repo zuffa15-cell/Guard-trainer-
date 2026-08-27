@@ -3150,8 +3150,75 @@ html,body{color-scheme:dark!important;}
  .head-other-date,.head-other-type,.head-other-desc{font-size:12px!important}
  .head-other-detail-row strong{font-size:13px!important}
 }
-</style></head>
+</style>
+<style id="gt-simple-login-step1">
+#gtSimpleLoginStep1{
+ position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;
+ background:#111;
+ padding:24px;box-sizing:border-box;
+}
+#gtSimpleLoginStep1 .gt-login-box{
+ width:min(390px,100%);padding:30px 24px;border-radius:18px;text-align:center;
+ background:#1d1d1d;box-shadow:0 12px 45px rgba(0,0,0,.45);
+}
+#gtSimpleLoginStep1 .gt-login-title{font-size:28px;font-weight:900;letter-spacing:1px;margin-bottom:28px}
+#gtSimpleLoginStep1 input{
+ width:100%;box-sizing:border-box;padding:15px 16px;border-radius:11px;
+ border:1px solid #555;background:#292929;color:#fff;font-size:18px;text-align:center;
+}
+#gtSimpleLoginStep1 button{
+ width:100%;margin-top:14px;padding:15px;border:0;border-radius:11px;
+ background:#f0b900;color:#111;font-weight:900;font-size:16px;
+}
+#gtSimpleLoginStep1 .gt-login-error{display:none;color:#ef5555;margin-top:12px;font-size:14px}
+</style>
+</head>
 <body class="gtSplashV323Active">
+<div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
+ <div class="gt-login-box">
+   <div class="gt-login-title">GUARD TRAINER</div>
+   <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
+   <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
+   <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
+ </div>
+</div>
+<script id="gtSimpleLoginStep1Script">
+(function(){
+ const overlay=document.getElementById('gtSimpleLoginStep1');
+ const input=document.getElementById('gtSimpleLoginPassword');
+ const button=document.getElementById('gtSimpleLoginButton');
+ const error=document.getElementById('gtSimpleLoginError');
+ const KEY='gt-simple-login-step1';
+ function openApp(account){
+   try{
+     localStorage.setItem(KEY,'1');
+     if(account) localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
+   }catch(e){}
+   overlay.remove();
+   try{ if(typeof window.showApp==='function') window.showApp(); }catch(e){}
+ }
+ function login(){
+   error.style.display='none';
+   const pass=(input.value||'').trim();
+   if(pass==='Admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+   let trainers=[];
+   try{
+     const raw=localStorage.getItem('trainersData');
+     const arr=raw?JSON.parse(raw):[];
+     trainers=Array.isArray(arr)?arr:[];
+   }catch(e){}
+   const t=trainers.find(x=>x && x.active!==false && String(x.loginPassword||'')===pass);
+   if(t){
+     openApp({role:String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer',
+       display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
+   }else error.style.display='block';
+ }
+ button.addEventListener('click',login);
+ input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});
+ try{if(localStorage.getItem(KEY)==='1')overlay.remove()}catch(e){}
+})();
+</script>
+
 <div id="gtSplashV319">
   <div class="gtSplash319Stage">
     <video id="gtSplashExactVideo" class="gtSplash323Video"
@@ -4392,6 +4459,7 @@ function renderTrainerProfile(id){
     <label>PRIEZVISKO<input id="tpLast" value="${t.full.split(' ').slice(1).join(' ')}"></label>
     <label>E-MAIL<input id="tpEmail" value="${t.email}"></label>
     <label>TELEFÓN<input id="tpPhone" value="${t.phone}"></label>
+    ${isAdmin()?`<label>HESLO PRE PRIHLÁSENIE<input id="tpLoginPassword" type="password" placeholder="${t.loginPasswordSet?'••••••••':'Nastaviť heslo'}" autocomplete="new-password"></label>`:''}
    </div>
   </section>
 
@@ -4478,7 +4546,14 @@ function saveTrainerProfile(id){
    syncTrainerGroupToSchedules(t,t.groups);
 
    // Trainer profiles are persistent: edits survive refresh/reopen.
+   const loginPasswordInput=document.getElementById('tpLoginPassword');
+   if(isAdmin() && loginPasswordInput && String(loginPasswordInput.value||'').trim()){
+     t.loginPassword=String(loginPasswordInput.value).trim();
+     t.loginPasswordSet=true;
+     loginPasswordInput.value='';
+   }
    persistTrainersData();
+
 
    const btn=document.getElementById('trainerProfileSaveBtn');
    if(btn){
@@ -6035,7 +6110,7 @@ function renderMore(){
      ${isAdmin()?`<button class="more-menu-item admin-schedule-btn" onclick="openCreateSchedule()">📅 <span><b>VYTVORIŤ ROZVRH</b><small>Vytvorenie a opakovanie tréningov</small></span>›</button>
      <button class="more-menu-item admin-schedule-btn" onclick="openScheduleManager()">🗓️ <span><b>SPRAVOVAŤ ROZVRH</b><small>Upraviť alebo vymazať tréning</small></span>›</button>`:''}
      ${isAdmin()||isAdminTesting()?`<button class="more-menu-item admin-schedule-btn" onclick="openRoleTesting()">🧪 <span><b>TESTOVANIE APLIKÁCIE</b><small>Vyskúšať pohľad Admin, Hlavný tréner, Tréner 1 alebo Tréner 2</small></span>›</button>`:''}
-     ${hasHeadTrainerAccess()&&!isAdminTesting()?`<button class="more-menu-item" onclick="toggleHeadTrainerMode()">↔ <span><b>${isHeadTrainer()?'PREPNÚŤ NA TRÉNERA':'PREPNÚŤ NA HLAVNÉHO TRÉNERA'}</b><small>Prepnutie medzi tvojimi oprávnenými pohľadmi</small></span>›</button>`:''}
+     
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
        <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Tréneri, oprávnenia a pozvánky</small></span>›</button>

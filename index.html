@@ -9249,41 +9249,6 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
-
-<script id="gtSimpleLogoutStep4">
-(function(){
- function addLogout(){
-   if(!document.body.classList.contains('gtAppMode')) return;
-   if(!location.hash.includes('more')) return;
-   if(document.getElementById('gtSimpleLogoutButton')) return;
-
-   // Find the More page/container without depending on one exact class name.
-   var candidates=document.querySelectorAll('main,section,.page,.screen,.content');
-   var target=null;
-   for(var i=0;i<candidates.length;i++){
-     var el=candidates[i];
-     if(/VIAC|MORE/i.test(el.textContent||'')){ target=el; break; }
-   }
-   if(!target) target=document.body;
-
-   var b=document.createElement('button');
-   b.id='gtSimpleLogoutButton';
-   b.type='button';
-   b.className='more-menu-item';
-   b.style.cssText='width:100%;margin-top:10px;border:1px solid #555;background:#242424;color:#fff;border-radius:12px;padding:13px 15px;text-align:left;font-weight:800;';
-   b.innerHTML='🚪 <span><b>ODHLÁSIŤ</b><small style="display:block;color:#aaa;margin-top:3px;font-weight:500">Odhlásiť používateľa na tomto zariadení</small></span>';
-   b.onclick=function(){
-     try{localStorage.removeItem('gt-simple-login-account')}catch(e){}
-     try{localStorage.removeItem('gt-simple-login-step1')}catch(e){}
-     location.reload();
-   };
-   target.appendChild(b);
- }
- document.addEventListener('click',function(){setTimeout(addLogout,80)},true);
- window.addEventListener('hashchange',function(){setTimeout(addLogout,80)});
- setInterval(addLogout,700);
-})();
-</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

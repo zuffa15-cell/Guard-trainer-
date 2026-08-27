@@ -3197,21 +3197,57 @@ html,body{color-scheme:dark!important;}
    overlay.remove();
    try{ if(typeof window.showApp==='function') window.showApp(); }catch(e){}
  }
- function login(){
-   error.style.display='none';
-   const pass=(input.value||'').trim();
-   if(pass==='Admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+ function findTrainerByPassword(pass){
    let trainers=[];
    try{
      const raw=localStorage.getItem('trainersData');
      const arr=raw?JSON.parse(raw):[];
      trainers=Array.isArray(arr)?arr:[];
    }catch(e){}
-   const t=trainers.find(x=>x && x.active!==false && String(x.loginPassword||'')===pass);
-   if(t){
-     openApp({role:String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer',
-       display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
-   }else error.style.display='block';
+   // Aktuálny názov úložiska je gt-trainers-v395.
+   // Prihlásenie číta priamo všetky trénerove údaje z rovnakého lokálneho
+   // úložiska, ktoré synchronizuje Firebase.
+   if(!trainers.length){
+     try{
+       const keys=Object.keys(localStorage).filter(k=>/^gt-trainers-v\d+$/.test(k));
+       keys.sort((a,b)=>Number((b.match(/v(\d+)$/)||[])[1]||0)-Number((a.match(/v(\d+)$/)||[])[1]||0));
+       if(keys[0]){
+         const arr=JSON.parse(localStorage.getItem(keys[0])||'[]');
+         if(Array.isArray(arr)) trainers=arr;
+       }
+     }catch(e){}
+   }
+   return trainers.find(x=>x && x.active!==false && String(x.loginPassword||'')===pass) || null;
+ }
+ function openTrainer(t){
+   openApp({role:String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer',
+     display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
+ }
+ function login(){
+   error.style.display='none';
+   const pass=(input.value||'').trim();
+   if(pass==='Admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+   const t=findTrainerByPassword(pass);
+   if(t){openTrainer(t);return}
+
+   // Na druhom zariadení môže Firebase doručiť trénerov až chvíľu po otvorení.
+   // Počkáme iba na jednu cloud-sync zmenu a potom heslo skontrolujeme znova.
+   error.textContent='⏳ Overujem heslo…';
+   error.style.display='block';
+   let done=false;
+   const retry=function(){
+     if(done)return;
+     done=true;
+     window.removeEventListener('cloud-sync-update',retry);
+     const fresh=findTrainerByPassword(pass);
+     if(fresh){openTrainer(fresh);}
+     else{
+       error.textContent='Nesprávne heslo';
+       error.style.display='block';
+     }
+   };
+   window.addEventListener('cloud-sync-update',retry,{once:true});
+   setTimeout(retry,4000);
  }
  button.addEventListener('click',login);
  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});

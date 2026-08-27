@@ -3251,9 +3251,7 @@ html,body{color-scheme:dark!important;}
  }
  button.addEventListener('click',login);
  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});
- // Pri novom načítaní aplikácie vždy zobraz prihlasovanie.
- // Úspešné heslo sa nebude automaticky preskakovať.
-
+ try{if(localStorage.getItem(KEY)==='1')overlay.remove()}catch(e){}
 })();
 </script>
 
@@ -4497,7 +4495,7 @@ function renderTrainerProfile(id){
     <label>PRIEZVISKO<input id="tpLast" value="${t.full.split(' ').slice(1).join(' ')}"></label>
     <label>E-MAIL<input id="tpEmail" value="${t.email}"></label>
     <label>TELEFÓN<input id="tpPhone" value="${t.phone}"></label>
-    ${isAdmin()?`<label>HESLO PRE PRIHLÁSENIE<input id="tpLoginPassword" type="password" placeholder="${t.loginPasswordSet?'••••••••':'Nastaviť heslo'}" autocomplete="new-password"></label>`:''}
+    ${isAdmin()?`<label>HESLO PRE PRIHLÁSENIE<input id="tpLoginPassword" type="text" value="${t.loginPassword||''}" placeholder="Nastaviť heslo" autocomplete="off"></label>`:''}
    </div>
   </section>
 

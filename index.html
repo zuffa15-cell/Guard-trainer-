@@ -4525,9 +4525,7 @@ const membersData=[
         m.surname=m.surname+' '+g;
       }
       membersData.push(m);
-      
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); localStorage.setItem('gt-members-v466', JSON.stringify(membersData)); }catch(e){}
-counts[g]++;
+      counts[g]++;
     }
   }
   normalizeAllMembers();
@@ -4710,9 +4708,7 @@ function createMemberFromMembers(){
    newMember:true
  };
  membersData.push(m);
- 
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); localStorage.setItem('gt-members-v466', JSON.stringify(membersData)); }catch(e){}
-renderMemberEditForm(id,true);
+ renderMemberEditForm(id,true);
 }
 
 function showMemberGroupFilter(){
@@ -7045,9 +7041,7 @@ function addNewMember(){
      membershipAmount:0,registration:false,debt:0,application:false
    };
    membersData.push(member);
- 
-try{ localStorage.setItem('gt-members', JSON.stringify(membersData)); localStorage.setItem('gt-members-v466', JSON.stringify(membersData)); }catch(e){}
-}else if(!(member.groups||[]).includes(attendanceState.group)){
+ }else if(!(member.groups||[]).includes(attendanceState.group)){
    member.groups=[...(member.groups||[]),attendanceState.group];
  }
  persistMembersData();

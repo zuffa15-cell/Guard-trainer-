@@ -3121,6 +3121,21 @@ html,body{color-scheme:dark!important;}
   }
 }
 </style>
+
+<style id="head-other-summary-style">
+.head-other-summary{
+  margin:10px 0 14px!important;
+}
+.head-other-summary .bill-row{
+  padding:10px 12px!important;
+}
+.head-other-summary .bill-row strong.plus{
+  color:#4fbc35!important;
+}
+.head-other-summary .bill-row strong.minus{
+  color:#ef3939!important;
+}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSplashV319">
@@ -6953,8 +6968,8 @@ function updateAttendanceTotals(){
  const newCount=attendanceState.members.filter(m=>m.newMember).length;
  const pe=document.getElementById('presentCount'); if(pe)pe.textContent=presentCount;
  const ne=document.getElementById('newCount'); if(ne)ne.textContent=newCount;
- const membershipCount=attendanceState.members.filter(m=>Number(membershipPaidHere(m)||0)>0).length;
- const registrationCount=attendanceState.members.filter(m=>registrationPaidHere(m)).length;
+ const membershipCount=attendanceState.members.filter(m=>Number(currentMemberPaymentTotals(m).membership||0)>0).length;
+ const registrationCount=attendanceState.members.filter(m=>Number(currentMemberPaymentTotals(m).registration||0)>0).length;
  const debtCount=attendanceState.members.filter(m=>Number(m.debt||0)>0).length;
  const plus=Number(attendanceState.otherPlus||0);
  const minus=Number(attendanceState.otherMinus||0);
@@ -8014,6 +8029,10 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
        <tfoot><tr><th>SPOLU<br><small>${mName} ${year}</small></th><th>${rows.length}</th><th>${sum('trainingSum')} €</th><th>${sum('membershipSum')} €</th><th>${sum('registrationSum')} €</th><th>${sum('otherPlus')} €</th><th>−${sum('otherMinus')} €</th><th>${sum('gross')} €</th><th class="minus">−${sum('trainerReward')} €</th><th class="club-amount">${sum('clubAmount')} €</th></tr></tfoot>
       </table>
     </div>
+    <section class="billing-card head-other-summary">
+      <div class="bill-row"><span>Iné +</span><strong class="plus">${sum('otherPlus')} €</strong></div>
+      <div class="bill-row minus"><span>Iné −</span><strong class="minus">− ${sum('otherMinus')} €</strong></div>
+    </section>
     <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${mName} ${year}</small><br>${clubHandoverLabel(getClubHandoverStatus(trainerName,month,year),true,trainerName,month,year,sum('clubAmount'))}</span><strong>${sum('clubAmount')} €${getClubHandoverStatus(trainerName,month,year)?' <span style="color:#4ade80;font-weight:900;font-size:26px;vertical-align:middle;margin-left:7px;">✓</span>':''}</strong></div>
     <div class="trainer-billing-actions">
       <button type="button" class="gt-trainer-pdf-btn" data-trainer="${String(trainerName).replace(/"/g,'&quot;')}" data-month="${month}" data-year="${year}" title="Uložiť mesačné vyúčtovanie trénera do PDF">PDF</button>

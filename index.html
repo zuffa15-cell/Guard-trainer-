@@ -443,6 +443,17 @@ body{overflow-x:hidden}
 .billing-note{font-size:11px;color:#999;margin:6px 2px 12px}.billing-note b{color:#ffb31c}
 .confirm-billing{width:100%;border:0;border-radius:8px;padding:12px;background:linear-gradient(145deg,#58c747,#23891c);color:#fff;font-weight:700;box-shadow:inset 0 2px 3px rgba(255,255,255,.3),0 3px 5px #000}
 .billing-open{background:linear-gradient(145deg,#3f9cff,#075eb6)!important;color:#fff!important}
+.confirm-billing{
+  background:linear-gradient(145deg,#ffc72c,#df8e00)!important;
+  color:#111!important;
+  border:1px solid #ffd95a!important;
+  font-weight:800;
+}
+.confirm-billing.billing-saved{
+  background:linear-gradient(145deg,#58c747,#23891c)!important;
+  color:#fff!important;
+  border-color:#70df61!important;
+}
 
 
 .billing-group{display:flex;align-items:center;gap:12px;border-radius:9px;padding:10px 12px;color:#fff;box-shadow:inset 0 2px 4px rgba(255,255,255,.2),0 3px 6px rgba(0,0,0,.4);margin-top:8px}
@@ -4473,9 +4484,8 @@ function normalizeMember(m){
  m.group=m.groups[0];
  // Oficiálny dátum vstupu do klubu je dátum odovzdania prihlášky.
  // Prihláška môže byť zaevidovaná cez Dochádzku alebo priamo v Profile člena.
- if(m.application && m.applicationDate){
-   m.memberSince=m.applicationDate;
- }
+ if(m.application && m.applicationDate && !m.memberSinceManual){ m.memberSince=m.applicationDate; }
+ if(!m.application){ m.applicationDate=''; m.memberSince=''; m.memberSinceManual=false; }
  return m;
 }
 function normalizeAllMembers(){
@@ -5241,7 +5251,7 @@ function renderMemberEditForm(id,isNew=false){
    <label>PRIEZVISKO <span class="required-field">*</span><input id="mpSurname" value="${m.surname}" required></label>
    <label>MENO <span class="required-field">*</span><input id="mpName" value="${m.name}" required></label>
    <label>DÁTUM NARODENIA<input id="mpDob" value="${m.dob}"></label>
-   <label>DÁTUM PRÍCHODU DO KLUBU<input id="mpMemberSince" value="${m.applicationDate||m.memberSince||`${String(appToday().day).padStart(2,'0')}. ${String(appToday().month).padStart(2,'0')}. ${appToday().year}`}" placeholder="DD. MM. RRRR" ${m.applicationDate?'readonly':''}></label>
+   <label>DÁTUM PRÍCHODU DO KLUBU<input id="mpMemberSince" value="${m.memberSince||m.applicationDate||`${String(appToday().day).padStart(2,'0')}. ${String(appToday().month).padStart(2,'0')}. ${appToday().year}`}" placeholder="DD. MM. RRRR"></label>
    <label>TELEFÓN<input id="mpPhone" value="${m.phone}"></label>
    <label class="group-edit-label">SKUPINY
     <div class="edit-group-picker" id="mpGroups">
@@ -5265,7 +5275,7 @@ function deleteMemberApplication(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
  m.application=false; m.applicationDate=''; m.applicationFile=''; m.applicationFileName='';
  // Po odstránení prihlášky už dátum členstva nie je dátum prihlášky.
- m.memberSince='';
+ m.memberSince=''; m.memberSinceManual=false;
  persistMembersData();
  const preview=document.getElementById('applicationPreview'); if(preview)preview.textContent='';
  const btn=document.querySelector('.delete-application-btn'); if(btn)btn.remove();
@@ -5325,8 +5335,10 @@ function saveNewMemberFromForm(id){
  m.name=name;
  m.dob=(document.getElementById('mpDob')?.value||'').trim();
  const memberSinceInput=(document.getElementById('mpMemberSince')?.value||'').trim();
- if(m.application && m.applicationDate) m.memberSince=m.applicationDate;
- else if(memberSinceInput) m.memberSince=memberSinceInput;
+ if(m.application && m.applicationDate){
+   if(memberSinceInput && memberSinceInput!==m.applicationDate){ m.memberSince=memberSinceInput; m.memberSinceManual=true; }
+   else if(!m.memberSinceManual) m.memberSince=m.applicationDate;
+ } else if(memberSinceInput){ m.memberSince=memberSinceInput; m.memberSinceManual=true; }
  else if(!m.memberSince){ const t=appToday(); m.memberSince=`${String(t.day).padStart(2,'0')}. ${String(t.month).padStart(2,'0')}. ${t.year}`; }
  m.phone=(document.getElementById('mpPhone')?.value||'').trim();
  m.groups=(document.getElementById('mpGroup')?.value||'').split(',').filter(Boolean);
@@ -7408,7 +7420,7 @@ function trainingBilling(){
 
       <div class="billing-note">Dlžné: <b>${debt} €</b> — do sumy odovzdávanej klubu sa nezapočítava.</div>
 
-      <button type="button" class="confirm-billing" onclick="return saveTrainingBilling(); this.textContent='✓ Uložené'; this.style.background='#22c55e'; this.style.color='white';">✓ ULOŽIŤ VYÚČTOVANIE</button>
+      <button type="button" class="confirm-billing" onclick="return saveTrainingBilling(this);">✓ ULOŽIŤ VYÚČTOVANIE</button>
     </main>
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
@@ -7477,7 +7489,7 @@ function forceMyBillingScreen(){
 }
 window.forceMyBillingScreen=forceMyBillingScreen;
 
-function saveTrainingBilling(){
+function saveTrainingBilling(saveButton){
   if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
   // Vyúčtovanie sa pre rovnaký tréning vždy aktualizuje do jedného záznamu.
   // Tréner teda môže uložiť vyúčtovanie opakovane po zmene dochádzky.
@@ -7595,11 +7607,15 @@ function saveTrainingBilling(){
   persistMonthlyBillingRecords();
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
-  location.hash='trainer-month';
+  if(saveButton){
+    saveButton.classList.add('billing-saved');
+    saveButton.textContent='✓ ULOŽENÉ';
+  }
   setTimeout(function(){
+    location.hash='trainer-month';
     try{ window.dispatchEvent(new HashChangeEvent('hashchange')); }
     catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
-  },50);
+  },1500);
   return false;
 }
 

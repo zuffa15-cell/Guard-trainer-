@@ -3227,27 +3227,73 @@ html,body{color-scheme:dark!important;}
    error.style.display='none';
    const pass=(input.value||'').trim();
    if(pass==='Admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+
    const t=findTrainerByPassword(pass);
    if(t){openTrainer(t);return}
 
-   // Na druhom zariadení môže Firebase doručiť trénerov až chvíľu po otvorení.
-   // Počkáme iba na jednu cloud-sync zmenu a potom heslo skontrolujeme znova.
+   // Ak lokálne dáta ešte nie sú zosynchronizované, načítaj trénerov
+   // priamo z rovnakého Firebase dokumentu. Toto je dôležité pre druhé zariadenie.
    error.textContent='⏳ Overujem heslo…';
    error.style.display='block';
-   let done=false;
-   const retry=function(){
-     if(done)return;
-     done=true;
-     window.removeEventListener('cloud-sync-update',retry);
-     const fresh=findTrainerByPassword(pass);
-     if(fresh){openTrainer(fresh);}
+
+   let finished=false;
+   const finish=(trainer)=>{
+     if(finished)return;
+     finished=true;
+     if(trainer){openTrainer(trainer);}
      else{
        error.textContent='Nesprávne heslo';
        error.style.display='block';
      }
    };
+
+   // Najprv počkaj na bežnú synchronizáciu.
+   const retry=()=>{
+     if(finished)return;
+     const fresh=findTrainerByPassword(pass);
+     if(fresh){finish(fresh);}
+   };
    window.addEventListener('cloud-sync-update',retry,{once:true});
-   setTimeout(retry,4000);
+
+   // Súčasne urob priamy cloud lookup, nezávislý od načasovania syncu.
+   try{
+     if(typeof db!=='undefined' && db){
+       db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
+         if(finished)return;
+         const data=doc.exists?doc.data():{};
+         let arr=[];
+         const keys=Object.keys(data||{}).filter(k=>/^gt-trainers-v\d+$/.test(k));
+         keys.sort((a,b)=>Number((b.match(/v(\d+)$/)||[])[1]||0)-Number((a.match(/v(\d+)$/)||[])[1]||0));
+         for(const k of keys){
+           try{
+             const x=JSON.parse(data[k]||'[]');
+             if(Array.isArray(x)&&x.length){arr=x;break;}
+           }catch(e){}
+         }
+         // Podpora aj pre starší názov kľúča, ak by bol v cloude.
+         if(!arr.length && data.trainersData){
+           try{
+             const x=JSON.parse(data.trainersData||'[]');
+             if(Array.isArray(x))arr=x;
+           }catch(e){}
+         }
+         const found=arr.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
+         if(found){
+           // Zapíš cloud dáta lokálne, aby bola aplikácia po prihlásení konzistentná.
+           try{
+             if(keys[0]) originalSetItem(keys[0],data[keys[0]]);
+           }catch(e){}
+           finish(found);
+         }
+       }).catch(()=>{});
+     }
+   }catch(e){}
+
+   // Záverečná kontrola po čase.
+   setTimeout(()=>{
+     if(finished)return;
+     finish(findTrainerByPassword(pass));
+   },8000);
  }
  button.addEventListener('click',login);
  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});
@@ -4593,6 +4639,15 @@ function saveTrainerProfile(id){
      t.loginPasswordSet=true;
    }
    persistTrainersData();
+   // Heslo trénera musí ísť okamžite aj do existujúceho Firebase cloudu,
+   // aby ho vedelo použiť druhé zariadenie.
+   try{
+     if(typeof pushToCloud==='function'){
+       setTimeout(()=>{try{pushToCloud()}catch(e){}},500);
+       setTimeout(()=>{try{pushToCloud()}catch(e){}},2500);
+       setTimeout(()=>{try{pushToCloud()}catch(e){}},5000);
+     }
+   }catch(e){}
 
 
    const btn=document.getElementById('trainerProfileSaveBtn');

@@ -3194,6 +3194,21 @@ html,body{color-scheme:dark!important;}
      localStorage.setItem(KEY,'1');
      if(account) localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
    }catch(e){}
+   // Prihlásenie musí nastaviť skutočnú rolu používateľa.
+   // Predtým zostávala na zariadení stará rola ADMIN.
+   try{
+     const role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
+     if(typeof activeUserRole!=='undefined'){
+       activeUserRole=(role==='admin')?'admin':(role==='head'?'head':'trainer');
+       localStorage.setItem('gt-user-role',activeUserRole);
+       if(activeUserRole!=='head') localStorage.removeItem('gt-head-trainer-access');
+       document.body.classList.toggle('head-readonly',activeUserRole==='head');
+     }else{
+       localStorage.setItem('gt-user-role',role==='admin'?'admin':(role==='head'?'head':'trainer'));
+     }
+     if(role!=='admin') localStorage.removeItem('gt-admin-testing');
+     if(account && account.trainer_id!=null) localStorage.setItem('gt-current-trainer-id',String(account.trainer_id));
+   }catch(e){}
    overlay.remove();
    try{ if(typeof window.showApp==='function') window.showApp(); }catch(e){}
  }

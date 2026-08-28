@@ -10976,22 +10976,48 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   function app(){return document.querySelector('.app')}
   function splash(){return document.getElementById('gtSplashV319')||document.getElementById('gtSplash')||document.querySelector('[id*="Splash"]')}
   function showApp(){
-    console.log('🚀 AUTO-START: orol -> domov (bez prihlásenia)');
+    console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');
     localStorage.setItem('gt-auth-initialized','true');
-    localStorage.setItem('gt-is-admin','true');
-    localStorage.setItem('gt-user-role','admin');
-    localStorage.removeItem('gt-admin-testing');
-    localStorage.removeItem('gt-test-trainer');
-    window.GT_TEST_ROLE='admin';
-    if(typeof activeUserRole !== 'undefined') activeUserRole='admin';
-    try{ document.body.classList.remove('head-readonly'); }catch(e){}
-    var o=document.getElementById('gtLoginOverlayV329'); if(o){ o.style.display='none'; o.classList.remove('gt-show'); try{o.remove()}catch(e){} }
-    var s=splash(); if(s){ s.classList.add('hide'); setTimeout(()=>{ try{s.style.display='none'; s.remove();}catch(e){} }, 300); }
+
+    // NIKDY neprepínaj po prihlásení trénera automaticky na ADMIN.
+    // Rolu určuje účet uložený prihlasovacím mechanizmom.
+    let account=null;
+    try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
+    const role=account && account.role ? String(account.role).toLowerCase() :
+      (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
+
+    const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
+    localStorage.setItem('gt-user-role',finalRole);
+    localStorage.setItem('gt-is-admin',finalRole==='admin'?'true':'false');
+    if(finalRole!=='admin'){
+      localStorage.removeItem('gt-admin-testing');
+      localStorage.removeItem('gt-test-trainer');
+    }
+    window.GT_TEST_ROLE=finalRole;
+
+    try{
+      if(typeof activeUserRole !== 'undefined') activeUserRole=finalRole;
+      document.body.classList.toggle('head-readonly',finalRole==='head');
+    }catch(e){}
+
+    var o=document.getElementById('gtLoginOverlayV329');
+    if(o){ o.style.display='none'; o.classList.remove('gt-show'); try{o.remove()}catch(e){} }
+    var sp=splash();
+    if(sp){ sp.classList.add('hide'); setTimeout(()=>{ try{sp.style.display='none'; sp.remove();}catch(e){} },300); }
     document.body.classList.remove('gtLoginMode','gtSplashActive','splash-active','splashVisible','gtSplashV323Active');
     document.documentElement.classList.remove('gtSplashV323Doc');
     document.body.classList.add('gtAppMode');
-    var a=app(); if(a){ a.style.setProperty('display','block','important'); a.style.setProperty('visibility','visible','important'); a.style.setProperty('opacity','1','important'); a.style.setProperty('pointer-events','auto','important'); }
-    try{ if(typeof window.renderHome==='function') window.renderHome(); else if(typeof window.render==='function') window.render(); }catch(e){ console.warn(e); }
+    var a=app();
+    if(a){
+      a.style.setProperty('display','block','important');
+      a.style.setProperty('visibility','visible','important');
+      a.style.setProperty('opacity','1','important');
+      a.style.setProperty('pointer-events','auto','important');
+    }
+    try{
+      if(typeof window.renderHome==='function') window.renderHome();
+      else if(typeof window.render==='function') window.render();
+    }catch(e){ console.warn(e); }
     try{ window.scrollTo(0,0); }catch(e){}
     try{ history.replaceState({gtRoute:'home'},'', location.pathname+'#home'); }catch(e){}
   }

@@ -3261,6 +3261,20 @@ html,body{color-scheme:dark!important;}
        db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
          if(finished)return;
          const data=doc.exists?doc.data():{};
+
+         // 1) Primárne vyhľadaj v samostatnom zozname hesiel.
+         try{
+           if(data['gt-trainer-login-passwords']){
+             const pw=JSON.parse(data['gt-trainer-login-passwords']);
+             const found=Object.values(pw||{}).find(x=>x && x.active!==false && String(x.password||'').trim()===pass);
+             if(found){
+               finish({id:found.id,full:found.name,role:found.role,groups:Array.isArray(found.groups)?found.groups:[]});
+               return;
+             }
+           }
+         }catch(e){}
+
+         // 2) Fallback: starší trainersData uložené v cloude.
          let arr=[];
          const keys=Object.keys(data||{}).filter(k=>/^gt-trainers-v\d+$/.test(k));
          keys.sort((a,b)=>Number((b.match(/v(\d+)$/)||[])[1]||0)-Number((a.match(/v(\d+)$/)||[])[1]||0));
@@ -3270,30 +3284,19 @@ html,body{color-scheme:dark!important;}
              if(Array.isArray(x)&&x.length){arr=x;break;}
            }catch(e){}
          }
-         // Podpora aj pre starší názov kľúča, ak by bol v cloude.
          if(!arr.length && data.trainersData){
-           try{
-             const x=JSON.parse(data.trainersData||'[]');
-             if(Array.isArray(x))arr=x;
-           }catch(e){}
+           try{const x=JSON.parse(data.trainersData||'[]');if(Array.isArray(x))arr=x;}catch(e){}
          }
          const found=arr.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
-         if(found){
-           // Zapíš cloud dáta lokálne, aby bola aplikácia po prihlásení konzistentná.
-           try{
-             if(keys[0]) originalSetItem(keys[0],data[keys[0]]);
-           }catch(e){}
-           finish(found);
-         }
+         if(found) finish(found);
        }).catch(()=>{});
      }
    }catch(e){}
-
    // Záverečná kontrola po čase.
    setTimeout(()=>{
      if(finished)return;
      finish(findTrainerByPassword(pass));
-   },8000);
+   },10000);
  }
  button.addEventListener('click',login);
  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});
@@ -4637,6 +4640,14 @@ function saveTrainerProfile(id){
    if(isAdmin() && loginPasswordInput && String(loginPasswordInput.value||'').trim()){
      t.loginPassword=String(loginPasswordInput.value).trim();
      t.loginPasswordSet=true;
+     // Samostatný cloudový zoznam hesiel. Nezávisí od verzie trainersData,
+     // takže druhé zariadenie vie heslo nájsť aj po aktualizácii aplikácie.
+     try{
+       const pwRaw=originalGetItem('gt-trainer-login-passwords');
+       const pw= pwRaw ? JSON.parse(pwRaw) : {};
+       pw[String(t.id)]={id:t.id,name:String(t.full||t.name||'').trim(),password:t.loginPassword,active:t.active!==false,role:String(t.role||'TRÉNER').trim(),groups:Array.isArray(t.groups)?t.groups:[]};
+       localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
+     }catch(e){}
    }
    persistTrainersData();
    // Heslo trénera musí ísť okamžite aj do existujúceho Firebase cloudu,

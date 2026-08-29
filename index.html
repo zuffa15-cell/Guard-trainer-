@@ -4632,8 +4632,24 @@ function isTestTrainerAccount(t){
  const n=String(t?.full||t?.name||'').trim().toLowerCase();
  return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2';
 }
-function visibleTrainerProfiles(){ return (trainersData||[]).filter(t=>!isTestTrainerAccount(t)); }
+function visibleTrainerProfiles(){ return (trainersData||[]).filter(t=>!isTestTrainerAccount(t) && !t.isTemplate); }
+function ensureTemplateTrainer(){
+  try{
+    if(!Array.isArray(trainersData)) return null;
+    let t=trainersData.find(x=>x.isTemplate===true || String(x.full||x.name||'').trim().toUpperCase()==='VZOROVÝ TRÉNER');
+    if(!t){
+      const id=Math.max(0,...trainersData.map(x=>Number(x.id)||0))+1;
+      t={id,full:'VZOROVÝ TRÉNER',name:'VZOROVÝ TRÉNER',email:'',phone:'',
+        role:'TRÉNER',license:'',valid:'',status:'VZOR',active:false,
+        groups:[],loginPassword:'',loginPasswordSet:false,isTemplate:true};
+      trainersData.push(t);
+      persistTrainersData();
+    }
+    return t;
+  }catch(e){return null;}
+}
 function renderTrainers(){
+ ensureTemplateTrainer();
  // Always reconcile trainer profiles with the current schedule before rendering.
  // This also removes deleted groups from trainer profiles.
  syncTrainerGroupsFromSchedules();
@@ -4988,12 +5004,13 @@ function newTrainer(){
  return renderNewTrainerDirect();
 }
 function renderNewTrainerDirect(){
- const app=document.querySelector('.app');
+ if(!isAdmin()){ toast('Trénera môže pridať iba administrátor'); return false; }
  const groups=getAdminCreatedGroups();
- app.innerHTML=`
+ const templateGroups=['A','B','C','D','D+'].filter(c=>groups.some(g=>String(g[0]).toUpperCase()===c));
+ document.querySelector('.app').innerHTML=`
   <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
   <main class="content trainer-profile-page">
-   <div class="profile-title-row"><div><h2>VYTVORIŤ TRÉNERA</h2><small>Vytvorenie reálneho účtu trénera</small></div></div>
+   <div class="profile-title-row"><div><h2>NOVÝ TRÉNER</h2><small>Vytvorené podľa vzoru „VZOROVÝ TRÉNER“</small></div></div>
    <section class="profile-box"><h3>OSOBNÉ ÚDAJE</h3><div class="profile-grid">
     <label>MENO<input id="newTrFirst" placeholder="Meno"></label>
     <label>PRIEZVISKO<input id="newTrLast" placeholder="Priezvisko"></label>
@@ -5002,11 +5019,11 @@ function renderNewTrainerDirect(){
    </div></section>
    <section class="profile-box"><h3>FUNKCIA</h3><label>FUNKCIA<select id="newTrRole"><option value="TRÉNER">TRÉNER</option><option value="HLAVNÝ TRÉNER">HLAVNÝ TRÉNER</option></select></label></section>
    <section class="profile-box"><h3>PRIDELENÉ SKUPINY</h3><div class="group-picker" id="newTrGroups">
-    ${groups.map(([c,n])=>`<button type="button" title="${n}" data-code="${c}" onclick="this.classList.toggle('selected')">${trainerBadge(c)}</button>`).join('') || '<small class="group-edit-note">Zatiaľ nie sú vytvorené žiadne skupiny.</small>'}
+    ${templateGroups.map(c=>`<button type="button" data-code="${c}" onclick="this.classList.toggle('selected')">${trainerBadge(c)}</button>`).join('')}
    </div></section>
    <section class="profile-box"><h3>PRIHLÁSENIE</h3>
     <label>HESLO PRE PRIHLÁSENIE<input id="newTrPassword" type="text" placeholder="napr. Karol" autocomplete="off"></label>
-    <small style="display:block;color:#aaa;margin-top:7px">Toto heslo zadá tréner na svojom zariadení.</small>
+    <small style="display:block;color:#aaa;margin-top:7px">Nový tréner dostane vlastné heslo a vlastné ID.</small>
    </section>
    <button type="button" id="saveNewTrainerDirectBtn" class="primary-btn">✓ VYTVORIŤ TRÉNERA</button>
    <button type="button" class="sub-cancel" style="width:100%;margin-top:8px" onclick="renderTrainers()">ZRUŠIŤ</button>
@@ -5015,7 +5032,7 @@ function renderNewTrainerDirect(){
  if(btn) btn.addEventListener('click',()=>saveNewTrainerDirect());
  return false;
 }
-window.saveNewTrainerDirect=saveNewTrainerDirect;
+
 function saveNewTrainerDirect(){
  if(!isAdmin()){toast('Trénera môže vytvoriť iba administrátor');return false;}
  const val=id=>String(document.getElementById(id)?.value||'').trim();
@@ -5023,28 +5040,34 @@ function saveNewTrainerDirect(){
  if(!first||!last||!password){toast('Vyplň meno, priezvisko a heslo');return false;}
  const selected=[...document.querySelectorAll('#newTrGroups button.selected[data-code]')]
    .map(b=>String(b.dataset.code||'').trim().toUpperCase()).filter(Boolean);
- const assignedGroups=[...new Set(selected)];
  const id=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1;
  const full=(first+' '+last).trim();
- const t={id,full,name:full,email:val('newTrEmail'),phone:val('newTrPhone'),role:val('newTrRole')||'TRÉNER',license:'',valid:'31. 12. 2099',status:'AKTÍVNA',active:true,groups:assignedGroups,loginPassword:password,loginPasswordSet:true};
+ // Copy ONLY the trainer profile structure. Never copy Peter/template
+ // attendance, billing, schedules or payment records.
+ const t={
+   id,full,name:full,email:val('newTrEmail'),phone:val('newTrPhone'),
+   role:val('newTrRole')||'TRÉNER',license:'',valid:'31. 12. 2099',
+   status:'AKTÍVNA',active:true,groups:[...new Set(selected)],
+   loginPassword:password,loginPasswordSet:true,
+   isTemplate:false
+ };
  trainersData.push(t);
  try{
    const pwRaw=originalGetItem('gt-trainer-login-passwords');
    const pw=pwRaw?JSON.parse(pwRaw):{};
-   pw[String(id)]={id,name:full,password,active:true,role:t.role,groups:assignedGroups};
+   pw[String(id)]={
+     id,name:full,password,active:true,role:t.role,
+     groups:[...t.groups],isTemplate:false
+   };
    localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
  }catch(e){}
  persistTrainersData();
- // Pri vytvorení nového trénera zatiaľ nemeníme existujúce tréningy.
- // Priradenie skupín patrí výhradne novému trénerovi.
-
  try{pushToCloud()}catch(e){}
  toast('Tréner bol vytvorený');
  setTimeout(()=>renderTrainers(),500);
  return false;
 }
 
-window.__trainerSortAsc=true;
 function sortTrainers(){
  window.__trainerSortAsc=!window.__trainerSortAsc;
  const input=document.querySelector('.trainer-filters input');
@@ -8602,7 +8625,7 @@ function getHeadTrainerRowsForMonth(month=appToday().month,year=appToday().year)
   // ZDROJ PRAVDY PRE HLAVNÉHO TRÉNERA:
   // Použi presne tie isté mesačné záznamy, ktoré vidí detail „Moje vyúčtovanie“
   // konkrétneho trénera. Tým sa čísla (vrátane REGISTRÁCIE) nemôžu rozísť.
-  const trainers=(trainersData||[]).filter(t=>String(t.role||'').trim().toUpperCase()!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t));
+  const trainers=(trainersData||[]).filter(t=>String(t.role||'').trim().toUpperCase()!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t) && !t.isTemplate);
   const normName=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
   return trainers.map(t=>{
     const name=String(t.full||t.name||'').trim();

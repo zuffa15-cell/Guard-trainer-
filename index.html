@@ -3859,23 +3859,38 @@ window.updateHomeQuickOverview=updateHomeQuickOverview;
 
 
 function getCurrentTestTrainerProfile(){
+  // REAL LOGIN: the login account itself contains trainer_id + groups.
+  // Do not depend on trainersData having finished Firebase synchronization.
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
     const role=String(account?.role||'').trim().toLowerCase();
-    const isRealTrainerRole=(role==='trainer' || role==='tréner' || role==='trener');
+    const isRealTrainerRole=(role==='trainer'||role==='tréner'||role==='trener');
     if(account && account.trainer_id!=null && isRealTrainerRole){
       const real=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
-      if(real) return real;
+      if(real){
+        // Merge the login snapshot only when the profile is missing groups.
+        if(!Array.isArray(real.groups) && Array.isArray(account.groups)) real.groups=[...account.groups];
+        return real;
+      }
+      // Firebase profile not loaded yet: the authenticated account is still
+      // sufficient to authorize its assigned groups.
+      return {
+        id:Number(account.trainer_id),
+        full:String(account.display_name||'').trim(),
+        name:String(account.display_name||'').trim(),
+        role:'TRÉNER',
+        groups:Array.isArray(account.groups)?[...account.groups]:[]
+      };
     }
   }catch(e){}
   if(!window.GT_TEST_ROLE || window.GT_TEST_ROLE==='admin' || window.GT_TEST_ROLE==='head') return null;
-  // Legacy test mode only.
   const target=window.GT_TEST_ROLE==='trainer2' ? 'Tréner 2' : (window.GT_TEST_ROLE==='trainer1' ? 'Tréner 1' : CURRENT_TRAINER_NAME);
   return (trainersData||[]).find(t=>String(t.full||t.name||'').trim()===target) || null;
 }
+
 function getCurrentTestTrainerGroupCodes(){
   const p=getCurrentTestTrainerProfile();
-  return p ? new Set((p.groups||[]).map(c=>String(c).toUpperCase())) : null;
+  return p ? new Set((p.groups||[]).map(c=>String(c).trim().toUpperCase()).filter(Boolean)) : null;
 }
 function getCurrentTrainerDisplayName(){
   // Pri reálnom prihlásení používame ID účtu uložené prihlasovaním.
@@ -4121,6 +4136,13 @@ function renderHeadHome(){
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
 function renderHome(){
+  if(!isAdmin() && !isHeadTrainer()){
+    try{
+      const p=getCurrentTestTrainerProfile();
+      if(p) MY_TRAINER_GROUPS=Array.isArray(p.groups)?[...p.groups]:getCurrentTrainerGroups();
+    }catch(e){}
+  }
+
   if(isHeadTrainer()){ renderHeadHome(); return; }
   const app=document.querySelector('.app');
   const t=appToday();

@@ -4492,51 +4492,43 @@ function persistTrainersData(){
    sa automaticky doplní o skupiny, ku ktorým je v rozvrhu priradený. */
 function syncTrainerGroupsFromSchedules(){
   try{
-    const schedules=JSON.parse(localStorage.getItem('gt-schedule')||'[]')||[];
+    const schedules=getSavedSchedules();
     let changed=false;
-    // Tréner 1/Tréner 2 boli iba testovacie účty. Reálne tréningy nesmú
-    // zostať naviazané na ich staré ID/meno.
-    schedules.forEach(s=>{
-      const oldIds=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
-      const oldName=String(s.trainer||'').trim().toLowerCase();
-      const oldNames=Array.isArray(s.trainers)?s.trainers.map(x=>String(x).trim().toLowerCase()):[];
+    // Remove only legacy test trainer references from schedules.
+    schedules.forEach(sc=>{
       const staleNames=new Set(['tréner 1','trener 1','tréner 2','trener 2']);
-      const stale=staleNames.has(oldName) || oldNames.some(n=>staleNames.has(n));
-      if(stale){
-        const keptIds=oldIds.filter(id=>{
+      const oldName=String(sc.trainer||'').trim().toLowerCase();
+      const oldNames=Array.isArray(sc.trainers)?sc.trainers.map(x=>String(x).trim().toLowerCase()):[];
+      if(staleNames.has(oldName)||oldNames.some(n=>staleNames.has(n))){
+        const ids=Array.isArray(sc.trainerIds)?sc.trainerIds.map(Number):[];
+        sc.trainerIds=ids.filter(id=>{
           const t=(trainersData||[]).find(x=>Number(x.id)===Number(id));
-          const n=String(t?.full||t?.name||'').trim().toLowerCase();
-          return !staleNames.has(n);
+          return !staleNames.has(String(t?.full||t?.name||'').trim().toLowerCase());
         });
-        if(keptIds.length!==oldIds.length || stale){
-          s.trainerIds=keptIds;
-          if(Number(s.trainerId) && !keptIds.includes(Number(s.trainerId))) s.trainerId=keptIds[0]||null;
-          const nt=(trainersData||[]).find(x=>Number(x.id)===Number(s.trainerId));
-          s.trainer=nt?.full||nt?.name||'';
-          s.trainers=Array.isArray(s.trainers)?s.trainers.filter(x=>!staleNames.has(String(x).trim().toLowerCase())):[];
-          if(nt && !s.trainers.includes(nt.full||nt.name)) s.trainers.push(nt.full||nt.name);
-          changed=true;
+        sc.trainers=Array.isArray(sc.trainers)?sc.trainers.filter(n=>!staleNames.has(String(n).trim().toLowerCase())):[];
+        const primary=(trainersData||[]).find(t=>Number(t.id)===Number(sc.trainerId));
+        if(!primary || staleNames.has(String(primary.full||primary.name||'').trim().toLowerCase())){
+          sc.trainerId=sc.trainerIds[0]||null;
+          const nt=(trainersData||[]).find(t=>Number(t.id)===Number(sc.trainerId));
+          sc.trainer=nt?.full||nt?.name||'';
         }
+        changed=true;
       }
     });
+
+    // IMPORTANT: trainer profile groups are authoritative. Never replace them
+    // with groups inferred from schedule rows, otherwise a newly assigned group
+    // disappears before the trainer can use it.
     (trainersData||[]).forEach(t=>{
-      const id=Number(t.id);
-      const derived=new Set();
-      schedules.forEach(s=>{
-        const assigned=Array.isArray(s.trainerIds)
-          ? s.trainerIds.map(Number).includes(id)
-          : String(s.trainerId||'')===String(id);
-        const code=String(s.groupCode||'').trim().toUpperCase();
-        if(assigned && code) derived.add(code);
-      });
-      // The schedule is the source of truth for trainer↔group assignment.
-      // Keep the profile exactly synchronized with the groups assigned in schedules
-      // (including removals), instead of only merging newly found groups.
-      const current=Array.isArray(t.groups)?t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean):[];
-      const next=[...derived];
-      if(next.join('|')!==current.join('|')){ t.groups=next; changed=true; }
+      if(!Array.isArray(t.groups)) t.groups=[];
+      const normalized=[...new Set(t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean))];
+      if(normalized.join('|')!==t.groups.join('|')){t.groups=normalized;changed=true;}
     });
-    if(changed) persistTrainersData();
+
+    if(changed){
+      localStorage.setItem('gt-schedule',JSON.stringify(schedules));
+      persistTrainersData();
+    }
   }catch(e){ console.warn('Synchronizácia tréner ↔ skupina sa nepodarila',e); }
 }
 function syncTrainerGroupToSchedules(trainer, selectedGroups){
@@ -4756,6 +4748,7 @@ function saveTrainerProfile(id){
        localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
      }catch(e){}
    }
+   try{syncTrainerGroupToSchedules(t,t.groups)}catch(e){}
    persistTrainersData();
    // Heslo trénera musí ísť okamžite aj do existujúceho Firebase cloudu,
    // aby ho vedelo použiť druhé zariadenie.

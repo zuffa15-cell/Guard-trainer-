@@ -4431,6 +4431,31 @@ function syncTrainerGroupsFromSchedules(){
   try{
     const schedules=JSON.parse(localStorage.getItem('gt-schedule')||'[]')||[];
     let changed=false;
+    // Tréner 1/Tréner 2 boli iba testovacie účty. Reálne tréningy nesmú
+    // zostať naviazané na ich staré ID/meno.
+    schedules.forEach(s=>{
+      const oldIds=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
+      const oldName=String(s.trainer||'').trim().toLowerCase();
+      const oldNames=Array.isArray(s.trainers)?s.trainers.map(x=>String(x).trim().toLowerCase()):[];
+      const staleNames=new Set(['tréner 1','trener 1','tréner 2','trener 2']);
+      const stale=staleNames.has(oldName) || oldNames.some(n=>staleNames.has(n));
+      if(stale){
+        const keptIds=oldIds.filter(id=>{
+          const t=(trainersData||[]).find(x=>Number(x.id)===Number(id));
+          const n=String(t?.full||t?.name||'').trim().toLowerCase();
+          return !staleNames.has(n);
+        });
+        if(keptIds.length!==oldIds.length || stale){
+          s.trainerIds=keptIds;
+          if(Number(s.trainerId) && !keptIds.includes(Number(s.trainerId))) s.trainerId=keptIds[0]||null;
+          const nt=(trainersData||[]).find(x=>Number(x.id)===Number(s.trainerId));
+          s.trainer=nt?.full||nt?.name||'';
+          s.trainers=Array.isArray(s.trainers)?s.trainers.filter(x=>!staleNames.has(String(x).trim().toLowerCase())):[];
+          if(nt && !s.trainers.includes(nt.full||nt.name)) s.trainers.push(nt.full||nt.name);
+          changed=true;
+        }
+      }
+    });
     (trainersData||[]).forEach(t=>{
       const id=Number(t.id);
       const derived=new Set();

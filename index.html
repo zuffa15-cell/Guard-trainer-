@@ -3868,6 +3868,17 @@ function getCurrentTestTrainerGroupCodes(){
   return p ? new Set((p.groups||[]).map(c=>String(c).toUpperCase())) : null;
 }
 function getCurrentTrainerDisplayName(){
+  // Pri reálnom prihlásení používame ID účtu uložené prihlasovaním.
+  // Starý CURRENT_TRAINER_NAME / testovací profil je iba fallback pre staré testovanie.
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    if(account && account.trainer_id!=null){
+      const id=Number(account.trainer_id);
+      const t=(trainersData||[]).find(x=>Number(x.id)===id);
+      if(t) return String(t.full||t.name||'').trim();
+      if(account.display_name) return String(account.display_name).trim();
+    }
+  }catch(e){}
   const p=getCurrentTestTrainerProfile();
   return p ? (p.full||p.name||CURRENT_TRAINER_NAME) : (window.GT_TEST_ROLE==='head'?getMainTrainerDisplayName():CURRENT_TRAINER_NAME);
 }
@@ -4518,7 +4529,11 @@ function trainerBadge(c){
  return `<i class="trainer-group ${cls}" style="background:${getGroupColor(c,'gold')} !important;background-image:none !important;">${c}</i>`;
 }
 // Testovacie roly používajú rovnaké profily ako Admin.
-function visibleTrainerProfiles(){ return trainersData; }
+function isTestTrainerAccount(t){
+ const n=String(t?.full||t?.name||'').trim().toLowerCase();
+ return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2';
+}
+function visibleTrainerProfiles(){ return (trainersData||[]).filter(t=>!isTestTrainerAccount(t)); }
 function renderTrainers(){
  // Always reconcile trainer profiles with the current schedule before rendering.
  // This also removes deleted groups from trainer profiles.
@@ -4528,7 +4543,7 @@ function renderTrainers(){
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
  <main class="content trainers-page">
-  <div class="trainer-head"><div><span class="trainer-head-icon">♟</span><div><h2>TRÉNERI</h2><small>Správa trénerov a ich oprávnení</small></div></div><button onclick="newTrainer()">＋ PRIDAŤ TRÉNERA</button></div>
+  <div class="trainer-head"><div><span class="trainer-head-icon">♟</span><div><h2>TRÉNERI</h2><small>${isAdmin()?'Správa trénerov a ich oprávnení':'Prehľad všetkých trénerov – iba na čítanie'}</small></div></div>${isAdmin()?`<button onclick="newTrainer()">＋ PRIDAŤ TRÉNERA</button>`:''}</div>
   <div class="trainer-stats"><div><b>${trainerList.length}</b><span>Tréneri spolu</span></div><div><b>${active}</b><span>Aktívni</span></div><div><b>0</b><span>Platnosť čoskoro vyprší</span></div><div><b>0</b><span>Platnosť vypršala</span></div></div>
   <div class="trainer-filters"><input placeholder="⌕  Hľadať trénera..." oninput="filterTrainers(this.value)"><button>VŠETCI TRÉNERI⌄</button><button id="trainerSortBtn" type="button" onclick="sortTrainers()">ZORADIŤ: MENO A–Z⌄</button></div>
   <div id="trainerList">${trainerRows(trainerList)}</div>
@@ -4582,13 +4597,13 @@ function renderTrainerProfile(id){
   <section class="profile-editor ${canEditTrainerProfile()?'':'profile-readonly-editor'}">
    <div class="profile-photo-col">
      ${getTrainerPhoto(t.id)?`<img class="profile-avatar photo-avatar" src="${getTrainerPhoto(t.id)}" alt="">`:`<div class="profile-avatar">${t.name.charAt(0)}</div>`}
-     <button type="button" onclick="chooseTrainerPhoto(${t.id})">📷 ZMENIŤ FOTO</button>
+     ${canEditTrainerProfile()?`<button type="button" onclick="chooseTrainerPhoto(${t.id})">📷 ZMENIŤ FOTO</button>`:''}
    </div>
    <div class="profile-fields">
-    <label>MENO<input id="tpFirst" value="${t.full.split(' ')[0]||''}"></label>
-    <label>PRIEZVISKO<input id="tpLast" value="${t.full.split(' ').slice(1).join(' ')}"></label>
-    <label>E-MAIL<input id="tpEmail" value="${t.email}"></label>
-    <label>TELEFÓN<input id="tpPhone" value="${t.phone}"></label>
+    <label>MENO<input id="tpFirst" value="${t.full.split(' ')[0]||''}" ${canEditTrainerProfile()?'':'disabled'}></label>
+    <label>PRIEZVISKO<input id="tpLast" value="${t.full.split(' ').slice(1).join(' ')}" ${canEditTrainerProfile()?'':'disabled'}></label>
+    <label>E-MAIL<input id="tpEmail" value="${t.email}" ${canEditTrainerProfile()?'':'disabled'}></label>
+    <label>TELEFÓN<input id="tpPhone" value="${t.phone}" ${canEditTrainerProfile()?'':'disabled'}></label>
     ${isAdmin()?`<label>HESLO PRE PRIHLÁSENIE<input id="tpLoginPassword" type="text" value="${t.loginPassword||''}" placeholder="Nastaviť heslo" autocomplete="off"></label>`:''}
    </div>
   </section>
@@ -4597,14 +4612,14 @@ function renderTrainerProfile(id){
    <h3>FUNKCIA A OPRÁVNENIA</h3>
    <div class="profile-grid">
     <label>FUNKCIA
-      <select id="tpRole"><option ${t.role==='HLAVNÝ TRÉNER'?'selected':''}>HLAVNÝ TRÉNER</option><option ${t.role==='TRÉNERKA'?'selected':''}>TRÉNERKA</option><option ${t.role==='TRÉNER'?'selected':''}>TRÉNER</option></select>
+      <select id="tpRole" ${canEditTrainerProfile()?'':'disabled'}><option ${t.role==='HLAVNÝ TRÉNER'?'selected':''}>HLAVNÝ TRÉNER</option><option ${t.role==='TRÉNERKA'?'selected':''}>TRÉNERKA</option><option ${t.role==='TRÉNER'?'selected':''}>TRÉNER</option></select>
     </label>
     <label>LICENCIA
-      <select id="tpLicense"><option ${t.license==='Trieda 1'?'selected':''}>Trieda 1</option><option ${t.license==='Trieda 2'?'selected':''}>Trieda 2</option><option ${t.license==='Trieda 3'?'selected':''}>Trieda 3</option></select>
+      <select id="tpLicense" ${canEditTrainerProfile()?'':'disabled'}><option ${t.license==='Trieda 1'?'selected':''}>Trieda 1</option><option ${t.license==='Trieda 2'?'selected':''}>Trieda 2</option><option ${t.license==='Trieda 3'?'selected':''}>Trieda 3</option></select>
     </label>
-    <label>PLATNOSŤ LICENCIE DO<input id="tpValid" value="${t.valid}"></label>
+    <label>PLATNOSŤ LICENCIE DO<input id="tpValid" value="${t.valid}" ${canEditTrainerProfile()?'':'disabled'}></label>
     <label>STAV
-      <select id="tpStatus"><option ${String(t.status||'AKTÍVNA').toUpperCase()==='AKTÍVNA'?'selected':''}>AKTÍVNA</option><option ${String(t.status||'').toUpperCase()==='NEAKTÍVNA'?'selected':''}>NEAKTÍVNA</option></select>
+      <select id="tpStatus" ${canEditTrainerProfile()?'':'disabled'}><option ${String(t.status||'AKTÍVNA').toUpperCase()==='AKTÍVNA'?'selected':''}>AKTÍVNA</option><option ${String(t.status||'').toUpperCase()==='NEAKTÍVNA'?'selected':''}>NEAKTÍVNA</option></select>
     </label>
    </div>
   </section>
@@ -4612,7 +4627,7 @@ function renderTrainerProfile(id){
   <section class="profile-box ${canEditTrainerProfile()?'':'profile-readonly-editor'}">
    <h3>PRIDELENÉ SKUPINY</h3>
    <div class="group-picker">
-    ${getAdminCreatedGroups().map(([c,n])=>`<button type="button" title="${n}" data-code="${c}" class="${t.groups.includes(c)?'selected ':''}gp-${c.replace('+','p')}" onclick="this.classList.toggle('selected')">${trainerBadge(c)}</button>`).join('') || '<small class="group-edit-note">Zatiaľ nie sú vytvorené žiadne skupiny.</small>'}
+    ${getAdminCreatedGroups().map(([c,n])=>`<button type="button" title="${n}" data-code="${c}" class="${t.groups.includes(c)?'selected ':''}gp-${c.replace('+','p')}" onclick="${canEditTrainerProfile() ? "this.classList.toggle('selected')" : "return false;"}">${trainerBadge(c)}</button>`).join('') || '<small class="group-edit-note">Zatiaľ nie sú vytvorené žiadne skupiny.</small>'}
    </div>
   </section>
   ${canEditTrainerProfile()?`<section class="profile-delete-box">
@@ -4860,8 +4875,58 @@ window.openAndroidShareIntent=openAndroidShareIntent;
 
 function newTrainer(){
  if(!isAdmin()){ toast('Trénera môže pridať iba administrátor'); return false; }
- return renderInviteTrainer();
+ return renderNewTrainerDirect();
 }
+function renderNewTrainerDirect(){
+ const app=document.querySelector('.app');
+ const groups=getAdminCreatedGroups();
+ app.innerHTML=`
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <main class="content trainer-profile-page">
+   <div class="profile-title-row"><div><h2>VYTVORIŤ TRÉNERA</h2><small>Vytvorenie reálneho účtu trénera</small></div></div>
+   <section class="profile-box"><h3>OSOBNÉ ÚDAJE</h3><div class="profile-grid">
+    <label>MENO<input id="newTrFirst" placeholder="Meno"></label>
+    <label>PRIEZVISKO<input id="newTrLast" placeholder="Priezvisko"></label>
+    <label>E-MAIL<input id="newTrEmail" type="email" placeholder="meno@email.sk"></label>
+    <label>TELEFÓN<input id="newTrPhone" placeholder="0900 123 456"></label>
+   </div></section>
+   <section class="profile-box"><h3>FUNKCIA</h3><label>FUNKCIA<select id="newTrRole"><option value="TRÉNER">TRÉNER</option><option value="HLAVNÝ TRÉNER">HLAVNÝ TRÉNER</option></select></label></section>
+   <section class="profile-box"><h3>PRIDELENÉ SKUPINY</h3><div class="group-picker" id="newTrGroups">
+    ${groups.map(([c,n])=>`<button type="button" title="${n}" data-code="${c}" onclick="this.classList.toggle('selected')">${trainerBadge(c)}</button>`).join('') || '<small class="group-edit-note">Zatiaľ nie sú vytvorené žiadne skupiny.</small>'}
+   </div></section>
+   <section class="profile-box"><h3>PRIHLÁSENIE</h3>
+    <label>HESLO PRE PRIHLÁSENIE<input id="newTrPassword" type="text" placeholder="napr. Karol" autocomplete="off"></label>
+    <small style="display:block;color:#aaa;margin-top:7px">Toto heslo zadá tréner na svojom zariadení.</small>
+   </section>
+   <button type="button" class="primary-btn" onclick="return saveNewTrainerDirect()">✓ VYTVORIŤ TRÉNERA</button>
+   <button type="button" class="sub-cancel" style="width:100%;margin-top:8px" onclick="renderTrainers()">ZRUŠIŤ</button>
+  </main>`;
+ return false;
+}
+function saveNewTrainerDirect(){
+ if(!isAdmin()){toast('Trénera môže vytvoriť iba administrátor');return false;}
+ const val=id=>String(document.getElementById(id)?.value||'').trim();
+ const first=val('newTrFirst'), last=val('newTrLast'), password=val('newTrPassword');
+ if(!first||!last||!password){toast('Vyplň meno, priezvisko a heslo');return false;}
+ const selected=[...document.querySelectorAll('#newTrGroups button.selected[data-code]')].map(b=>String(b.dataset.code||'').trim().toUpperCase()).filter(Boolean);
+ const id=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1;
+ const full=(first+' '+last).trim();
+ const t={id,full,name:full,email:val('newTrEmail'),phone:val('newTrPhone'),role:val('newTrRole')||'TRÉNER',license:'',valid:'31. 12. 2099',status:'AKTÍVNA',active:true,groups:selected,loginPassword:password,loginPasswordSet:true};
+ trainersData.push(t);
+ try{
+   const pwRaw=originalGetItem('gt-trainer-login-passwords');
+   const pw=pwRaw?JSON.parse(pwRaw):{};
+   pw[String(id)]={id,name:full,password,active:true,role:t.role,groups:selected};
+   localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
+ }catch(e){}
+ persistTrainersData();
+ try{syncTrainerGroupToSchedules(t,selected)}catch(e){}
+ try{pushToCloud()}catch(e){}
+ toast('Tréner bol vytvorený');
+ setTimeout(()=>renderTrainers(),500);
+ return false;
+}
+
 window.__trainerSortAsc=true;
 function sortTrainers(){
  window.__trainerSortAsc=!window.__trainerSortAsc;
@@ -6259,7 +6324,7 @@ function renderMore(){
      
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
-       ${isAdmin()?`<button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Tréneri, oprávnenia a pozvánky</small></span>›</button>`:''}
+       <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
 <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
 
      </div>
@@ -8404,7 +8469,7 @@ function getHeadTrainerRowsForMonth(month=appToday().month,year=appToday().year)
   // ZDROJ PRAVDY PRE HLAVNÉHO TRÉNERA:
   // Použi presne tie isté mesačné záznamy, ktoré vidí detail „Moje vyúčtovanie“
   // konkrétneho trénera. Tým sa čísla (vrátane REGISTRÁCIE) nemôžu rozísť.
-  const trainers=(trainersData||[]).filter(t=>String(t.role||'').trim().toUpperCase()!=='HLAVNÝ TRÉNER');
+  const trainers=(trainersData||[]).filter(t=>String(t.role||'').trim().toUpperCase()!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t));
   const normName=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
   return trainers.map(t=>{
     const name=String(t.full||t.name||'').trim();
@@ -9702,7 +9767,7 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
     (isAdmin() || (typeof isHeadTrainer==='function' && isHeadTrainer()));
   if(privileged) return rows;
 
-  const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+  const me=String(getCurrentTrainerDisplayName()||'').trim();
   const norm=s=>String(s||'').trim().toUpperCase();
 
   const accepted=substitutionOffers.filter(o=>{

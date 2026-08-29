@@ -4679,7 +4679,7 @@ function renderPendingTrainerInvitations(){
 function trainerRows(arr){
  return arr.map(t=>{
    const template=!!t.isTemplate;
-   return `<article class="trainer-row ${template?'trainer-template-row':''}" ${template?'':'onclick="renderTrainerProfile('+t.id+')"'} style="${template?'opacity:.72;cursor:default;':''}">
+   return `<article class="trainer-row ${template?'trainer-template-row':''}" onclick="renderTrainerProfile(${t.id})" style="${template?'opacity:.82;cursor:pointer;':''}">
     ${getTrainerPhoto(t.id)?`<img class="trainer-initial photo-avatar" src="${getTrainerPhoto(t.id)}" alt="">`:`<div class="trainer-initial">${String(t.name||'V').charAt(0)}</div>`}
     <div class="trainer-main"><b>${t.name}</b><span>${template?'VZOR – nepoužíva sa na prihlásenie':('✉ '+(t.email||''))}</span>${template?'<span>ŠABLÓNA PRE NOVÝCH TRÉNEROV</span>':('<span>⌕ '+(t.phone||'')+'</span>')}</div>
     <div class="trainer-license"><small>${template?'VZOROVÝ PROFIL':'LICENCIA'}</small><b>${template?'⚙ VZOR':'🛡 '+(t.license||'')}</b><span>${template?'Nepatrí žiadnemu trénerovi':'Platnosť do:'}</span><em>${template?'—':(t.valid||'')}</em><label class="${template?'':'active-label'}">${template?'VZOR':'AKTÍVNA'}</label></div>
@@ -4703,7 +4703,7 @@ function filterTrainers(q){
  if(el) el.innerHTML=trainerRows(list);
 }
 function renderTrainerProfile(id){
- const t=visibleTrainerProfiles().find(x=>x.id===id); if(!t || t.isTemplate)return;
+ const t=visibleTrainerProfiles().find(x=>x.id===id); if(!t)return;
  const currentRoute=(location.hash||'').replace('#','')||'home';
  if(currentRoute!=='trainerProfile' && currentRoute!=='trainerEdit'){
    try{ history.pushState({gtRoute:'trainerProfile',gtParent:currentRoute,gtId:Number(id)},'',location.pathname+location.search+'#trainerProfile'); }catch(e){ location.hash='trainerProfile'; }

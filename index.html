@@ -3457,25 +3457,31 @@ const HOME_HTML = document.querySelector('.app').innerHTML;
 function getCurrentTrainerGroups(){
   const schedules=getSavedSchedules();
   const today=appToday().iso;
-  const trainerName=String(CURRENT_TRAINER_NAME||'').trim();
-  const trainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim()===trainerName);
-  const trainerId=trainer?.id;
-  const groups=new Set();
-
-  // The trainer's assigned groups are stored directly on the trainer profile.
-  // Use them as the primary permission source so the calendar remains usable
-  // even when a schedule record has no trainerIds yet.
-  if(trainer && Array.isArray(trainer.groups)) {
-    trainer.groups.forEach(g=>{ if(String(g||'').trim()) groups.add(String(g).trim()); });
+  let trainer=null, trainerId=null, trainerName='';
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    if(account && account.trainer_id!=null){
+      trainerId=Number(account.trainer_id);
+      trainer=(trainersData||[]).find(t=>Number(t.id)===trainerId)||null;
+      trainerName=String(trainer?.full||trainer?.name||account.display_name||'').trim();
+    }
+  }catch(e){}
+  // Legacy test mode only.
+  if(trainerId==null || !trainer){
+    trainerName=String(CURRENT_TRAINER_NAME||'').trim();
+    trainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim()===trainerName)||null;
+    trainerId=trainer?.id ?? null;
   }
-
-  // Also include groups explicitly assigned through the current schedule.
+  const groups=new Set();
+  if(trainer && Array.isArray(trainer.groups)){
+    trainer.groups.forEach(g=>{const v=String(g||'').trim().toUpperCase();if(v)groups.add(v);});
+  }
   schedules.forEach(x=>{
     const active=(!x.startDate||today>=x.startDate)&&(!x.until||today<=x.until);
     const assigned=Array.isArray(x.trainerIds)
       ? x.trainerIds.map(Number).includes(Number(trainerId))
-      : String(x.trainer||'').trim()===trainerName;
-    if(active&&assigned&&x.groupCode) groups.add(String(x.groupCode).trim());
+      : (x.trainerId!=null ? Number(x.trainerId)===Number(trainerId) : String(x.trainer||'').trim()===trainerName);
+    if(active&&assigned&&x.groupCode) groups.add(String(x.groupCode).trim().toUpperCase());
   });
   return [...groups];
 }
@@ -6109,7 +6115,9 @@ function startAdminTestRole(role){
     activeUserRole='trainer';
     localStorage.setItem('gt-user-role','trainer');
     document.body.classList.remove('head-readonly');
-    CURRENT_TRAINER_NAME = role==='trainer2' ? 'Tréner 2' : 'Tréner 1';
+    if(!(account && account.trainer_id!=null)){
+      CURRENT_TRAINER_NAME = role==='trainer2' ? 'Tréner 2' : 'Tréner 1';
+    }
     // Pri prepnutí testovacej role okamžite obnov aj povolené skupiny.
     // Inak kalendár používal skupiny predchádzajúceho používateľa.
     MY_TRAINER_GROUPS = getCurrentTrainerGroups();
@@ -11158,6 +11166,15 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     const role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
     const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
+     if(finalRole==='trainer' && account && account.trainer_id!=null){
+       try{
+         const rt=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
+         if(rt){
+           CURRENT_TRAINER_NAME=String(rt.full||rt.name||account.display_name||'').trim();
+           MY_TRAINER_GROUPS=Array.isArray(rt.groups)?[...rt.groups]:[];
+         }
+       }catch(e){}
+     }
 
     localStorage.setItem('gt-user-role',finalRole);
     localStorage.setItem('gt-is-admin',finalRole==='admin'?'true':'false');

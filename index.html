@@ -3293,7 +3293,13 @@ html,body{color-scheme:dark!important;}
              const pw=JSON.parse(data['gt-trainer-login-passwords']);
              const found=Object.values(pw||{}).find(x=>x && x.active!==false && String(x.password||'').trim()===pass);
              if(found){
-               finish({id:found.id,full:found.name,role:found.role,groups:Array.isArray(found.groups)?found.groups:[]});
+               const live=(trainersData||[]).find(t=>Number(t.id)===Number(found.id));
+               finish({
+                 id:found.id,
+                 full:String(live?.full||live?.name||found.name||'').trim(),
+                 role:live?.role||found.role,
+                 groups:Array.isArray(live?.groups)?[...live.groups]:(Array.isArray(found.groups)?[...found.groups]:[])
+               });
                return;
              }
            }
@@ -4785,15 +4791,26 @@ function saveTrainerProfile(id){
 
    // Trainer profiles are persistent: edits survive refresh/reopen.
    const loginPasswordInput=document.getElementById('tpLoginPassword');
-   if(isAdmin() && loginPasswordInput && String(loginPasswordInput.value||'').trim()){
-     t.loginPassword=String(loginPasswordInput.value).trim();
-     t.loginPasswordSet=true;
-     // Samostatný cloudový zoznam hesiel. Nezávisí od verzie trainersData,
-     // takže druhé zariadenie vie heslo nájsť aj po aktualizácii aplikácie.
+   if(isAdmin()){
+     if(loginPasswordInput && String(loginPasswordInput.value||'').trim()){
+       t.loginPassword=String(loginPasswordInput.value).trim();
+       t.loginPasswordSet=true;
+     }
+     // ALWAYS synchronize the trainer's group assignment into the login
+     // registry. Previously this happened only when the password field was
+     // changed, so a newly assigned group was invisible after login.
      try{
        const pwRaw=originalGetItem('gt-trainer-login-passwords');
-       const pw= pwRaw ? JSON.parse(pwRaw) : {};
-       pw[String(t.id)]={id:t.id,name:String(t.full||t.name||'').trim(),password:t.loginPassword,active:t.active!==false,role:String(t.role||'TRÉNER').trim(),groups:Array.isArray(t.groups)?t.groups:[]};
+       const pw=pwRaw?JSON.parse(pwRaw):{};
+       const oldPw=pw[String(t.id)]||{};
+       pw[String(t.id)]={
+         id:t.id,
+         name:String(t.full||t.name||'').trim(),
+         password:String(t.loginPassword||oldPw.password||''),
+         active:t.active!==false,
+         role:String(t.role||'TRÉNER').trim(),
+         groups:Array.isArray(t.groups)?[...t.groups]:[]
+       };
        localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
      }catch(e){}
    }
@@ -5015,7 +5032,7 @@ function saveNewTrainerDirect(){
  try{
    const pwRaw=originalGetItem('gt-trainer-login-passwords');
    const pw=pwRaw?JSON.parse(pwRaw):{};
-   pw[String(id)]={id,name:full,password,active:true,role:t.role,groups:selected};
+   pw[String(id)]={id,name:full,password,active:true,role:t.role,groups:assignedGroups};
    localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
  }catch(e){}
  persistTrainersData();

@@ -3929,9 +3929,18 @@ function filterHomeItemsForCurrentRole(items){
 }
 
 function openHomeTodayTraining(g){
-  if(!isAdmin() && !isHeadTrainer() && !trainerOwnsTraining(g)){
-    toast('Tento tréning patrí inému trénerovi.');
-    return false;
+  if(!isAdmin() && !isHeadTrainer()){
+    const p=getCurrentTestTrainerProfile();
+    const myGroups=new Set((p?.groups||[]).map(x=>String(x).toUpperCase()));
+    const code=String(g?.code||g?.group||'').toUpperCase();
+    if(code && myGroups.has(code)){
+      // Assigned group may be opened even if the schedule row was created
+      // before trainerId was added. The attendance screen still verifies
+      // ownership for concrete training records.
+    }else if(!trainerOwnsTraining(g)){
+      toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
+      return false;
+    }
   }
   // HARD SEPARATION: Home has its own entry context. It must never read the
   // last date selected in Calendar, even if the Calendar was opened moments ago.

@@ -4632,7 +4632,11 @@ function isTestTrainerAccount(t){
  const n=String(t?.full||t?.name||'').trim().toLowerCase();
  return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2';
 }
-function visibleTrainerProfiles(){ return (trainersData||[]).filter(t=>!isTestTrainerAccount(t) && !t.isTemplate); }
+function visibleTrainerProfiles(){
+  // The template is intentionally visible to the Admin, but never usable as
+  // a login account and never included in trainer accounting.
+  return (trainersData||[]).filter(t=>!isTestTrainerAccount(t));
+}
 function ensureTemplateTrainer(){
   try{
     if(!Array.isArray(trainersData)) return null;
@@ -4650,11 +4654,11 @@ function ensureTemplateTrainer(){
 }
 function renderTrainers(){
  ensureTemplateTrainer();
- // Always reconcile trainer profiles with the current schedule before rendering.
- // This also removes deleted groups from trainer profiles.
- syncTrainerGroupsFromSchedules();
+ // Profile assignments are authoritative. Do not overwrite them from the
+ // schedule when the trainer list is opened.
+ ensureTemplateTrainer();
  const app=document.querySelector('.app');
- const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
+ const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
  <main class="content trainers-page">
@@ -4673,13 +4677,16 @@ function renderPendingTrainerInvitations(){
 }
 
 function trainerRows(arr){
- return arr.map(t=>`<article class="trainer-row" onclick="renderTrainerProfile(${t.id})">
-  ${getTrainerPhoto(t.id)?`<img class="trainer-initial photo-avatar" src="${getTrainerPhoto(t.id)}" alt="">`:`<div class="trainer-initial">${t.name.charAt(0)}</div>`}
-  <div class="trainer-main"><b>${t.name}</b><span>✉ ${t.email}</span><span>⌕ ${t.phone}</span></div>
-  <div class="trainer-license"><small>LICENCIA</small><b>🛡 ${t.license}</b><span>Platnosť do:</span><em>${t.valid}</em><label class="${t.active===false||String(t.status||'').toUpperCase()==='NEAKTÍVNA'?'inactive-label':'active-label'}">${t.active===false||String(t.status||'').toUpperCase()==='NEAKTÍVNA'?'NEAKTÍVNA':'AKTÍVNA'}</label></div>
-  <div class="trainer-groups"><small>SKUPINY</small><div>${t.groups.map(trainerBadge).join('')}</div><span>♟ ${t.groups.length} skupiny</span></div>
-  <div class="trainer-actions"><span class="trainer-view-only">›<small>DETAIL</small></span></div>
- </article>`).join('');
+ return arr.map(t=>{
+   const template=!!t.isTemplate;
+   return `<article class="trainer-row ${template?'trainer-template-row':''}" ${template?'':'onclick="renderTrainerProfile('+t.id+')"'} style="${template?'opacity:.72;cursor:default;':''}">
+    ${getTrainerPhoto(t.id)?`<img class="trainer-initial photo-avatar" src="${getTrainerPhoto(t.id)}" alt="">`:`<div class="trainer-initial">${String(t.name||'V').charAt(0)}</div>`}
+    <div class="trainer-main"><b>${t.name}</b><span>${template?'VZOR – nepoužíva sa na prihlásenie':('✉ '+(t.email||''))}</span>${template?'<span>ŠABLÓNA PRE NOVÝCH TRÉNEROV</span>':('<span>⌕ '+(t.phone||'')+'</span>')}</div>
+    <div class="trainer-license"><small>${template?'VZOROVÝ PROFIL':'LICENCIA'}</small><b>${template?'⚙ VZOR':'🛡 '+(t.license||'')}</b><span>${template?'Nepatrí žiadnemu trénerovi':'Platnosť do:'}</span><em>${template?'—':(t.valid||'')}</em><label class="${template?'':'active-label'}">${template?'VZOR':'AKTÍVNA'}</label></div>
+    <div class="trainer-groups"><small>SKUPINY</small><div>${(t.groups||[]).map(trainerBadge).join('')}</div><span>♟ ${(t.groups||[]).length} skupiny</span></div>
+    <div class="trainer-actions"><span class="trainer-view-only">${template?'VZOR':'›'}<small>${template?'ŠABLÓNA':'DETAIL'}</small></span></div>
+   </article>`;
+ }).join('');
 }
 function filterTrainers(q){
  const x=String(q||'').toLowerCase();
@@ -4696,7 +4703,7 @@ function filterTrainers(q){
  if(el) el.innerHTML=trainerRows(list);
 }
 function renderTrainerProfile(id){
- const t=visibleTrainerProfiles().find(x=>x.id===id); if(!t)return;
+ const t=visibleTrainerProfiles().find(x=>x.id===id); if(!t || t.isTemplate)return;
  const currentRoute=(location.hash||'').replace('#','')||'home';
  if(currentRoute!=='trainerProfile' && currentRoute!=='trainerEdit'){
    try{ history.pushState({gtRoute:'trainerProfile',gtParent:currentRoute,gtId:Number(id)},'',location.pathname+location.search+'#trainerProfile'); }catch(e){ location.hash='trainerProfile'; }

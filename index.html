@@ -4734,7 +4734,7 @@ function saveTrainerProfile(id){
      }catch(e){
        console.error('trainer save return',e);
      }
-   },650);
+   },1500);
       toast('Profil trénera uložený');
 }catch(err){
    console.error('saveTrainerProfile',err);
@@ -4911,10 +4911,13 @@ function saveNewTrainerDirect(){
  const val=id=>String(document.getElementById(id)?.value||'').trim();
  const first=val('newTrFirst'), last=val('newTrLast'), password=val('newTrPassword');
  if(!first||!last||!password){toast('Vyplň meno, priezvisko a heslo');return false;}
- const selected=[...document.querySelectorAll('#newTrGroups button.selected[data-code]')].map(b=>String(b.dataset.code||'').trim().toUpperCase()).filter(Boolean);
+ const selected=[...document.querySelectorAll('#newTrGroups button.selected[data-code]')]
+   .map(b=>String(b.dataset.code||'').trim().toUpperCase()).filter(Boolean);
+ const existing=new Set(getAdminGroupCodes());
+ const assignedGroups=selected.filter(c=>existing.has(c));
  const id=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1;
  const full=(first+' '+last).trim();
- const t={id,full,name:full,email:val('newTrEmail'),phone:val('newTrPhone'),role:val('newTrRole')||'TRÉNER',license:'',valid:'31. 12. 2099',status:'AKTÍVNA',active:true,groups:selected,loginPassword:password,loginPasswordSet:true};
+ const t={id,full,name:full,email:val('newTrEmail'),phone:val('newTrPhone'),role:val('newTrRole')||'TRÉNER',license:'',valid:'31. 12. 2099',status:'AKTÍVNA',active:true,groups:assignedGroups,loginPassword:password,loginPasswordSet:true};
  trainersData.push(t);
  try{
    const pwRaw=originalGetItem('gt-trainer-login-passwords');
@@ -4923,7 +4926,9 @@ function saveNewTrainerDirect(){
    localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
  }catch(e){}
  persistTrainersData();
- try{syncTrainerGroupToSchedules(t,selected)}catch(e){}
+ // Pri vytvorení nového trénera zatiaľ nemeníme existujúce tréningy.
+ // Priradenie skupín patrí výhradne novému trénerovi.
+
  try{pushToCloud()}catch(e){}
  toast('Tréner bol vytvorený');
  setTimeout(()=>renderTrainers(),500);

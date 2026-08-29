@@ -4783,9 +4783,9 @@ function saveTrainerProfile(id){
      .map(b=>String(b.dataset.code||'').trim().toUpperCase())
      .filter(Boolean);
 
-   // Keep only groups that currently exist according to Admin.
-   const existing=new Set(getAdminGroupCodes());
-   t.groups=selected.filter(c=>existing.has(c));
+   // Skupiny vybrané v profile trénera sú autoritatívne.
+   // Neobmedzuj ich podľa dnešného rozvrhu – tréner môže mať viac skupín.
+   t.groups=[...new Set(selected)];
    // Zmena priradenia v profile sa okamžite premietne aj do rozvrhov/skupín.
    syncTrainerGroupToSchedules(t,t.groups);
 
@@ -5023,8 +5023,7 @@ function saveNewTrainerDirect(){
  if(!first||!last||!password){toast('Vyplň meno, priezvisko a heslo');return false;}
  const selected=[...document.querySelectorAll('#newTrGroups button.selected[data-code]')]
    .map(b=>String(b.dataset.code||'').trim().toUpperCase()).filter(Boolean);
- const existing=new Set(getAdminGroupCodes());
- const assignedGroups=selected.filter(c=>existing.has(c));
+ const assignedGroups=[...new Set(selected)];
  const id=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1;
  const full=(first+' '+last).trim();
  const t={id,full,name:full,email:val('newTrEmail'),phone:val('newTrPhone'),role:val('newTrRole')||'TRÉNER',license:'',valid:'31. 12. 2099',status:'AKTÍVNA',active:true,groups:assignedGroups,loginPassword:password,loginPasswordSet:true};

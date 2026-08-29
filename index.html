@@ -3853,15 +3853,17 @@ window.updateHomeQuickOverview=updateHomeQuickOverview;
 
 
 function getCurrentTestTrainerProfile(){
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    if(account && account.trainer_id!=null && String(account.role||'').toLowerCase()==='trainer'){
+      const real=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
+      if(real) return real;
+    }
+  }catch(e){}
   if(!window.GT_TEST_ROLE || window.GT_TEST_ROLE==='admin' || window.GT_TEST_ROLE==='head') return null;
-  // Testovacia rola musí byť viazaná na konkrétneho trénera podľa mena,
-  // nie na poradie v poli trainersData. Poradie sa môže meniť a potom by
-  // 'Tréner 1' omylom používal profil iného trénera.
-  const target=window.GT_TEST_ROLE==='trainer2' ? 'Tréner 2' : 'Tréner 1';
-  const exact=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===target.toUpperCase());
-  if(exact) return exact;
-  const real=(trainersData||[]).filter(t=>String(t.role||'').toUpperCase()!=='HLAVNÝ TRÉNER');
-  return real.find(t=>String(t.full||t.name||'').trim().toUpperCase()===target.toUpperCase()) || null;
+  // Legacy test mode only.
+  const target=window.GT_TEST_ROLE==='trainer2' ? 'Tréner 2' : (window.GT_TEST_ROLE==='trainer1' ? 'Tréner 1' : CURRENT_TRAINER_NAME);
+  return (trainersData||[]).find(t=>String(t.full||t.name||'').trim()===target) || null;
 }
 function getCurrentTestTrainerGroupCodes(){
   const p=getCurrentTestTrainerProfile();
@@ -3883,7 +3885,27 @@ function getCurrentTrainerDisplayName(){
   return p ? (p.full||p.name||CURRENT_TRAINER_NAME) : (window.GT_TEST_ROLE==='head'?getMainTrainerDisplayName():CURRENT_TRAINER_NAME);
 }
 
+function currentTrainerAccountId(){
+  try{
+    const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const id=Number(a&&a.trainer_id);
+    return Number.isFinite(id)?id:null;
+  }catch(e){ return null; }
+}
+function trainerOwnsTraining(item){
+  if(isAdmin() || isHeadTrainer()) return true;
+  const myId=currentTrainerAccountId();
+  if(myId==null || !item) return false;
+  const ids=Array.isArray(item.trainerIds)?item.trainerIds.map(Number):[];
+  if(item.trainerId!=null) ids.push(Number(item.trainerId));
+  return ids.includes(myId);
+}
+
 function filterHomeItemsForCurrentRole(items){
+  const accountId=currentTrainerAccountId();
+  if(accountId!=null && !isAdmin() && !isHeadTrainer()){
+    return (items||[]).filter(item=>trainerOwnsTraining(item));
+  }
   const allowed=getCurrentTestTrainerGroupCodes();
   if(!allowed) return items;
   const iso=appToday().iso;
@@ -3907,6 +3929,10 @@ function filterHomeItemsForCurrentRole(items){
 }
 
 function openHomeTodayTraining(g){
+  if(!isAdmin() && !isHeadTrainer() && !trainerOwnsTraining(g)){
+    toast('Tento tréning patrí inému trénerovi.');
+    return false;
+  }
   // HARD SEPARATION: Home has its own entry context. It must never read the
   // last date selected in Calendar, even if the Calendar was opened moments ago.
   if(g && g.substitutionInactive){
@@ -6748,6 +6774,20 @@ function applyBillingSnapshotToAttendance(){
 }
 
 function attendance(){
+  if(!isAdmin() && !isHeadTrainer()){
+    const accountId=currentTrainerAccountId();
+    if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
+    const wantedDate=attendanceState.date||appToday().iso;
+    const wantedGroup=String(attendanceState.group||'').toUpperCase();
+    const wantedTime=String(attendanceState.trainingTime||'');
+    const own=(typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
+      String(x.code||'').toUpperCase()===wantedGroup &&
+      (!wantedTime || String(x.time||'')===wantedTime) &&
+      trainerOwnsTraining(x)
+    );
+    if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
+  }
+
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
   if(window.__attendanceOpenSource==='home' || window.__attendanceHomeDate){

@@ -3192,7 +3192,17 @@ html,body{color-scheme:dark!important;}
  function openApp(account){
    try{
      localStorage.setItem(KEY,'1');
-     if(account) localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
+     if(account){
+       localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
+       if(account.trainer_id!=null && String(account.role||'').toLowerCase()!=='admin'){
+         localStorage.setItem('gt-current-trainer-snapshot',JSON.stringify({
+           trainer_id:Number(account.trainer_id),
+           display_name:String(account.display_name||''),
+           role:String(account.role||'trainer'),
+           groups:Array.isArray(account.groups)?[...account.groups]:[]
+         }));
+       }
+     }
    }catch(e){}
    // Prihlásenie musí nastaviť skutočnú rolu používateľa.
    // Predtým zostávala na zariadení stará rola ADMIN.
@@ -3460,27 +3470,27 @@ function getCurrentTrainerGroups(){
   let trainer=null, trainerId=null, trainerName='';
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-    if(account && account.trainer_id!=null){
+    if(account?.trainer_id!=null){
       trainerId=Number(account.trainer_id);
       trainer=(trainersData||[]).find(t=>Number(t.id)===trainerId)||null;
       trainerName=String(trainer?.full||trainer?.name||account.display_name||'').trim();
+      if(!trainer){
+        const p=getCurrentTestTrainerProfile();
+        trainer=p; trainerName=String(p?.full||p?.name||account.display_name||'').trim();
+      }
     }
   }catch(e){}
-  // Legacy test mode only.
-  if(trainerId==null || !trainer){
+  if(!trainer){
     trainerName=String(CURRENT_TRAINER_NAME||'').trim();
     trainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim()===trainerName)||null;
     trainerId=trainer?.id ?? null;
   }
   const groups=new Set();
-  if(trainer && Array.isArray(trainer.groups)){
-    trainer.groups.forEach(g=>{const v=String(g||'').trim().toUpperCase();if(v)groups.add(v);});
-  }
+  (trainer?.groups||[]).forEach(g=>{const v=String(g).trim().toUpperCase();if(v)groups.add(v);});
   schedules.forEach(x=>{
     const active=(!x.startDate||today>=x.startDate)&&(!x.until||today<=x.until);
-    const assigned=Array.isArray(x.trainerIds)
-      ? x.trainerIds.map(Number).includes(Number(trainerId))
-      : (x.trainerId!=null ? Number(x.trainerId)===Number(trainerId) : String(x.trainer||'').trim()===trainerName);
+    const assigned=Array.isArray(x.trainerIds)?x.trainerIds.map(Number).includes(Number(trainerId)):
+      (x.trainerId!=null?Number(x.trainerId)===Number(trainerId):String(x.trainer||'').trim()===trainerName);
     if(active&&assigned&&x.groupCode) groups.add(String(x.groupCode).trim().toUpperCase());
   });
   return [...groups];
@@ -3859,35 +3869,28 @@ window.updateHomeQuickOverview=updateHomeQuickOverview;
 
 
 function getCurrentTestTrainerProfile(){
-  // REAL LOGIN: the login account itself contains trainer_id + groups.
-  // Do not depend on trainersData having finished Firebase synchronization.
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
     const role=String(account?.role||'').trim().toLowerCase();
-    const isRealTrainerRole=(role==='trainer'||role==='tréner'||role==='trener');
-    if(account && account.trainer_id!=null && isRealTrainerRole){
-      const real=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
+    if(account && account.trainer_id!=null && (role==='trainer'||role==='tréner'||role==='trener')){
+      const id=Number(account.trainer_id);
+      const real=(trainersData||[]).find(t=>Number(t.id)===id);
       if(real){
-        // Merge the login snapshot only when the profile is missing groups.
         if(!Array.isArray(real.groups) && Array.isArray(account.groups)) real.groups=[...account.groups];
         return real;
       }
-      // Firebase profile not loaded yet: the authenticated account is still
-      // sufficient to authorize its assigned groups.
-      return {
-        id:Number(account.trainer_id),
-        full:String(account.display_name||'').trim(),
-        name:String(account.display_name||'').trim(),
-        role:'TRÉNER',
-        groups:Array.isArray(account.groups)?[...account.groups]:[]
-      };
+      try{
+        const pw=JSON.parse(localStorage.getItem('gt-trainer-login-passwords')||'{}');
+        const hit=pw[String(id)];
+        if(hit) return {id,full:String(hit.name||account.display_name||''),name:String(hit.name||account.display_name||''),role:'TRÉNER',groups:Array.isArray(hit.groups)?hit.groups:[]};
+      }catch(e){}
+      return {id,full:String(account.display_name||''),name:String(account.display_name||''),role:'TRÉNER',groups:Array.isArray(account.groups)?account.groups:[]};
     }
   }catch(e){}
   if(!window.GT_TEST_ROLE || window.GT_TEST_ROLE==='admin' || window.GT_TEST_ROLE==='head') return null;
-  const target=window.GT_TEST_ROLE==='trainer2' ? 'Tréner 2' : (window.GT_TEST_ROLE==='trainer1' ? 'Tréner 1' : CURRENT_TRAINER_NAME);
-  return (trainersData||[]).find(t=>String(t.full||t.name||'').trim()===target) || null;
+  const target=window.GT_TEST_ROLE==='trainer2'?'Tréner 2':(window.GT_TEST_ROLE==='trainer1'?'Tréner 1':CURRENT_TRAINER_NAME);
+  return (trainersData||[]).find(t=>String(t.full||t.name||'').trim()===target)||null;
 }
-
 function getCurrentTestTrainerGroupCodes(){
   const p=getCurrentTestTrainerProfile();
   return p ? new Set((p.groups||[]).map(c=>String(c).trim().toUpperCase()).filter(Boolean)) : null;

@@ -4898,11 +4898,14 @@ function renderNewTrainerDirect(){
     <label>HESLO PRE PRIHLÁSENIE<input id="newTrPassword" type="text" placeholder="napr. Karol" autocomplete="off"></label>
     <small style="display:block;color:#aaa;margin-top:7px">Toto heslo zadá tréner na svojom zariadení.</small>
    </section>
-   <button type="button" class="primary-btn" onclick="return saveNewTrainerDirect()">✓ VYTVORIŤ TRÉNERA</button>
+   <button type="button" id="saveNewTrainerDirectBtn" class="primary-btn">✓ VYTVORIŤ TRÉNERA</button>
    <button type="button" class="sub-cancel" style="width:100%;margin-top:8px" onclick="renderTrainers()">ZRUŠIŤ</button>
   </main>`;
+ const btn=document.getElementById('saveNewTrainerDirectBtn');
+ if(btn) btn.addEventListener('click',()=>saveNewTrainerDirect());
  return false;
 }
+window.saveNewTrainerDirect=saveNewTrainerDirect;
 function saveNewTrainerDirect(){
  if(!isAdmin()){toast('Trénera môže vytvoriť iba administrátor');return false;}
  const val=id=>String(document.getElementById(id)?.value||'').trim();

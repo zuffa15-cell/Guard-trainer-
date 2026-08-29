@@ -3911,7 +3911,20 @@ function trainerOwnsTraining(item){
 function filterHomeItemsForCurrentRole(items){
   const accountId=currentTrainerAccountId();
   if(accountId!=null && !isAdmin() && !isHeadTrainer()){
-    return (items||[]).filter(item=>trainerOwnsTraining(item));
+    // For a real trainer, the profile assignment is authoritative for which
+    // group cards are visible. Do NOT require trainerId on the schedule row:
+    // old/new schedule rows can legitimately lack that field, while the Admin
+    // has already assigned the group to this trainer.
+    const p=getCurrentTestTrainerProfile();
+    const allowed=new Set((p?.groups||[]).map(x=>String(x).trim().toUpperCase()).filter(Boolean));
+    const iso=appToday().iso;
+    const me=getCurrentTrainerDisplayName();
+    const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
+    return (items||[]).filter(g=>{
+      const code=String(g?.code||'').trim().toUpperCase();
+      const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && String(o.time||'')===String(g.time||''));
+      return allowed.has(code) || incoming;
+    });
   }
   const allowed=getCurrentTestTrainerGroupCodes();
   if(!allowed) return items;
@@ -3929,12 +3942,9 @@ function filterHomeItemsForCurrentRole(items){
     return allowed.has(String(g.code||'').toUpperCase()) || incoming;
   }).map(g=>{
     const incoming=incomingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
-    // Accepted substitute sees this training exactly like a normal training:
-    // no "ZASTUPOVANÝ TRÉNING" label, no special inactive styling.
     return incoming ? {...g,substitutionActive:false,substitutionLabel:'',substitutionBy:''} : g;
   });
 }
-
 function openHomeTodayTraining(g){
   if(!isAdmin() && !isHeadTrainer()){
     const p=getCurrentTestTrainerProfile();
@@ -4119,7 +4129,7 @@ function renderHome(){
   let html=HOME_HTML;
   html=html.replace(/<button class="menu"[^>]*>☰<\/button>/, '');
   html=html.replace(/<div class="date">[\s\S]*?<\/div>/,`<div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>`);
-  const listHtml=items.length ? items.map(g=>{const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};const homeDate=appToday().iso;const cancelled=isTrainingCancelled(homeDate,g.code,g.time,g.name);const headInactive = isHeadTrainer();return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:'${g.code}',name:'${String(g.name||'').replace(/'/g,"\\'")}',substitutionInactive:${!!g.substitutionInactive},substitutionBy:'${String(g.substitutionBy||'').replace(/'/g,"\\'")}',scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'}})`}" data-group-code="${g.code}" data-group-name="${g.name}"><div class="badge ${g.code.toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}${g.substitutionLabel?`<small class="sub-home-label">${g.substitutionLabel}${g.substitutionBy?` · ${g.substitutionBy}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${g.time}<br><i>⌖</i>${g.location||'Watsonova 4'}${g.trainer?`<br><i>♟</i>${g.trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;}).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;
+  const listHtml=items.length ? items.map(g=>{const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};const homeDate=appToday().iso;const cancelled=isTrainingCancelled(homeDate,g.code,g.time,g.name);const headInactive = isHeadTrainer();return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:'${g.code}',name:'${String(g.name||'').replace(/'/g,"\\'")}',substitutionInactive:${!!g.substitutionInactive},substitutionBy:'${String(g.substitutionBy||'').replace(/'/g,"\\'")}',scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`}" data-group-code="${g.code}" data-group-name="${g.name}"><div class="badge ${g.code.toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}${g.substitutionLabel?`<small class="sub-home-label">${g.substitutionLabel}${g.substitutionBy?` · ${g.substitutionBy}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${g.time}<br><i>⌖</i>${g.location||'Watsonova 4'}${g.trainer?`<br><i>♟</i>${g.trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;}).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;
   html=html.replace(/<section class="training-list">[\s\S]*?<\/section>/,`<section class="training-list">${listHtml}</section>`);app.innerHTML=html;updateHomeGroupCounts();updateHomeQuickOverview();
 }
 
@@ -4492,43 +4502,51 @@ function persistTrainersData(){
    sa automaticky doplní o skupiny, ku ktorým je v rozvrhu priradený. */
 function syncTrainerGroupsFromSchedules(){
   try{
-    const schedules=getSavedSchedules();
+    const schedules=JSON.parse(localStorage.getItem('gt-schedule')||'[]')||[];
     let changed=false;
-    // Remove only legacy test trainer references from schedules.
-    schedules.forEach(sc=>{
+    // Tréner 1/Tréner 2 boli iba testovacie účty. Reálne tréningy nesmú
+    // zostať naviazané na ich staré ID/meno.
+    schedules.forEach(s=>{
+      const oldIds=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
+      const oldName=String(s.trainer||'').trim().toLowerCase();
+      const oldNames=Array.isArray(s.trainers)?s.trainers.map(x=>String(x).trim().toLowerCase()):[];
       const staleNames=new Set(['tréner 1','trener 1','tréner 2','trener 2']);
-      const oldName=String(sc.trainer||'').trim().toLowerCase();
-      const oldNames=Array.isArray(sc.trainers)?sc.trainers.map(x=>String(x).trim().toLowerCase()):[];
-      if(staleNames.has(oldName)||oldNames.some(n=>staleNames.has(n))){
-        const ids=Array.isArray(sc.trainerIds)?sc.trainerIds.map(Number):[];
-        sc.trainerIds=ids.filter(id=>{
+      const stale=staleNames.has(oldName) || oldNames.some(n=>staleNames.has(n));
+      if(stale){
+        const keptIds=oldIds.filter(id=>{
           const t=(trainersData||[]).find(x=>Number(x.id)===Number(id));
-          return !staleNames.has(String(t?.full||t?.name||'').trim().toLowerCase());
+          const n=String(t?.full||t?.name||'').trim().toLowerCase();
+          return !staleNames.has(n);
         });
-        sc.trainers=Array.isArray(sc.trainers)?sc.trainers.filter(n=>!staleNames.has(String(n).trim().toLowerCase())):[];
-        const primary=(trainersData||[]).find(t=>Number(t.id)===Number(sc.trainerId));
-        if(!primary || staleNames.has(String(primary.full||primary.name||'').trim().toLowerCase())){
-          sc.trainerId=sc.trainerIds[0]||null;
-          const nt=(trainersData||[]).find(t=>Number(t.id)===Number(sc.trainerId));
-          sc.trainer=nt?.full||nt?.name||'';
+        if(keptIds.length!==oldIds.length || stale){
+          s.trainerIds=keptIds;
+          if(Number(s.trainerId) && !keptIds.includes(Number(s.trainerId))) s.trainerId=keptIds[0]||null;
+          const nt=(trainersData||[]).find(x=>Number(x.id)===Number(s.trainerId));
+          s.trainer=nt?.full||nt?.name||'';
+          s.trainers=Array.isArray(s.trainers)?s.trainers.filter(x=>!staleNames.has(String(x).trim().toLowerCase())):[];
+          if(nt && !s.trainers.includes(nt.full||nt.name)) s.trainers.push(nt.full||nt.name);
+          changed=true;
         }
-        changed=true;
       }
     });
-
-    // IMPORTANT: trainer profile groups are authoritative. Never replace them
-    // with groups inferred from schedule rows, otherwise a newly assigned group
-    // disappears before the trainer can use it.
     (trainersData||[]).forEach(t=>{
-      if(!Array.isArray(t.groups)) t.groups=[];
-      const normalized=[...new Set(t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean))];
-      if(normalized.join('|')!==t.groups.join('|')){t.groups=normalized;changed=true;}
+      const id=Number(t.id);
+      const derived=new Set();
+      schedules.forEach(s=>{
+        const assigned=Array.isArray(s.trainerIds)
+          ? s.trainerIds.map(Number).includes(id)
+          : String(s.trainerId||'')===String(id);
+        const code=String(s.groupCode||'').trim().toUpperCase();
+        if(assigned && code) derived.add(code);
+      });
+      // The schedule is the source of truth for trainer↔group assignment.
+      // Keep the profile exactly synchronized with the groups assigned in schedules
+      // (including removals), instead of only merging newly found groups.
+      const current=Array.isArray(t.groups)?t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean):[];
+      const next=[...derived];
+      if(next.join('|')!==current.join('|')){ t.groups=next; changed=true; }
     });
-
-    if(changed){
-      localStorage.setItem('gt-schedule',JSON.stringify(schedules));
-      persistTrainersData();
-    }
+    if(changed) persistTrainersData();
   }catch(e){ console.warn('Synchronizácia tréner ↔ skupina sa nepodarila',e); }
 }
 function syncTrainerGroupToSchedules(trainer, selectedGroups){
@@ -4748,7 +4766,6 @@ function saveTrainerProfile(id){
        localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
      }catch(e){}
    }
-   try{syncTrainerGroupToSchedules(t,t.groups)}catch(e){}
    persistTrainersData();
    // Heslo trénera musí ísť okamžite aj do existujúceho Firebase cloudu,
    // aby ho vedelo použiť druhé zariadenie.

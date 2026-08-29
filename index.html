@@ -3291,7 +3291,7 @@ html,body{color-scheme:dark!important;}
          try{
            if(data['gt-trainer-login-passwords']){
              const pw=JSON.parse(data['gt-trainer-login-passwords']);
-             const found=Object.values(pw||{}).find(x=>x && x.active!==false && String(x.password||'').trim()===pass);
+             const found=Object.values(pw||{}).find(x=>x && x.active!==false && !x.isTemplate && String(x.password||'').trim()===pass);
              if(found){
                const live=(trainersData||[]).find(t=>Number(t.id)===Number(found.id));
                finish({
@@ -5045,33 +5045,77 @@ function saveNewTrainerDirect(){
  const val=id=>String(document.getElementById(id)?.value||'').trim();
  const first=val('newTrFirst'), last=val('newTrLast'), password=val('newTrPassword');
  if(!first||!last||!password){toast('Vyplň meno, priezvisko a heslo');return false;}
+
  const selected=[...document.querySelectorAll('#newTrGroups button.selected[data-code]')]
    .map(b=>String(b.dataset.code||'').trim().toUpperCase()).filter(Boolean);
+
+ // IMPORTANT: create the new account with the same PROFILE/ACCOUNT schema as
+ // the real Peter Onuščák account. We copy no attendance, billing or schedules.
+ const peter=(trainersData||[]).find(x=>
+   !x.isTemplate &&
+   String(x.full||x.name||'').trim().toLowerCase()==='peter onuščák'
+ ) || (trainersData||[]).find(x=>!x.isTemplate && x.active!==false);
+
  const id=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1;
  const full=(first+' '+last).trim();
- // Copy ONLY the trainer profile structure. Never copy Peter/template
- // attendance, billing, schedules or payment records.
+
  const t={
-   id,full,name:full,email:val('newTrEmail'),phone:val('newTrPhone'),
-   role:val('newTrRole')||'TRÉNER',license:'',valid:'31. 12. 2099',
-   status:'AKTÍVNA',active:true,groups:[...new Set(selected)],
-   loginPassword:password,loginPasswordSet:true,
+   ...(peter||{}),
+   id,
+   full,
+   name:full,
+   email:val('newTrEmail'),
+   phone:val('newTrPhone'),
+   role:val('newTrRole')||'TRÉNER',
+   groups:[...new Set(selected)],
+   loginPassword:password,
+   loginPasswordSet:true,
+   active:true,
+   status:'AKTÍVNA',
    isTemplate:false
  };
+
+ // Explicitly remove anything that belongs to Peter's historical data.
+ delete t.attendance;
+ delete t.trainingAttendance;
+ delete t.trainingAttendanceByGroup;
+ delete t.monthlyBillingRecords;
+ delete t.billing;
+ delete t.finance;
+ delete t.schedules;
+ delete t.schedule;
+ delete t.trainings;
+ delete t.payments;
+ delete t.paymentHistory;
+ delete t.debts;
+
  trainersData.push(t);
+
+ // Save both the profile and the independent login registry.
  try{
    const pwRaw=originalGetItem('gt-trainer-login-passwords');
    const pw=pwRaw?JSON.parse(pwRaw):{};
    pw[String(id)]={
-     id,name:full,password,active:true,role:t.role,
-     groups:[...t.groups],isTemplate:false
+     id,
+     name:full,
+     password,
+     active:true,
+     role:t.role,
+     groups:[...t.groups],
+     isTemplate:false
    };
    localStorage.setItem('gt-trainer-login-passwords',JSON.stringify(pw));
  }catch(e){}
+
  persistTrainersData();
- try{pushToCloud()}catch(e){}
+
+ // Force the newly-created real account to the shared cloud immediately.
+ try{
+   if(typeof pushToCloud==='function') pushToCloud(true);
+ }catch(e){}
+
  toast('Tréner bol vytvorený');
- setTimeout(()=>renderTrainers(),500);
+ setTimeout(()=>renderTrainers(),700);
  return false;
 }
 

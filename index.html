@@ -3855,7 +3855,9 @@ window.updateHomeQuickOverview=updateHomeQuickOverview;
 function getCurrentTestTrainerProfile(){
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-    if(account && account.trainer_id!=null && String(account.role||'').toLowerCase()==='trainer'){
+    const role=String(account?.role||'').trim().toLowerCase();
+    const isRealTrainerRole=(role==='trainer' || role==='tréner' || role==='trener');
+    if(account && account.trainer_id!=null && isRealTrainerRole){
       const real=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
       if(real) return real;
     }
@@ -3898,7 +3900,12 @@ function trainerOwnsTraining(item){
   if(myId==null || !item) return false;
   const ids=Array.isArray(item.trainerIds)?item.trainerIds.map(Number):[];
   if(item.trainerId!=null) ids.push(Number(item.trainerId));
-  return ids.includes(myId);
+  if(ids.includes(myId)) return true;
+  try{
+    const me=(trainersData||[]).find(t=>Number(t.id)===myId);
+    const myName=String(me?.full||me?.name||'').trim().toLowerCase();
+    return !!myName && myName===String(item.trainer||'').trim().toLowerCase();
+  }catch(e){ return false; }
 }
 
 function filterHomeItemsForCurrentRole(items){
@@ -4215,7 +4222,17 @@ function scheduleItemsForDate(iso){
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),
       trainerReward:Number(x.trainerReward ?? (String(x.groupCode||'').toUpperCase()==='C'?3:2)),
-      scheduleId:x.id
+      scheduleId:x.id,
+      trainerId:x.trainerId!=null?Number(x.trainerId):(
+        (trainersData||[]).find(t=>String(t.full||t.name||'').trim().toLowerCase()===String(x.trainer||'').trim().toLowerCase())?.id ?? null
+      ),
+      trainerIds:Array.isArray(x.trainerIds)?x.trainerIds.map(Number).filter(Number.isFinite):(
+        x.trainerId!=null?[Number(x.trainerId)]:(
+          (trainersData||[]).find(t=>String(t.full||t.name||'').trim().toLowerCase()===String(x.trainer||'').trim().toLowerCase())?.id != null
+            ? [Number((trainersData||[]).find(t=>String(t.full||t.name||'').trim().toLowerCase()===String(x.trainer||'').trim().toLowerCase()).id)]
+            : []
+        )
+      )
     });
   });
   return out;

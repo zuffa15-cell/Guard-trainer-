@@ -8518,7 +8518,7 @@ function renderYearlyBilling(){
     <main class="content yearly-billing-page">
       <div class="monthly-trainer-card">
         <div class="trainer-avatar">T</div>
-        <div><b>TRÉNER</b><span>JÁN NOVÁK</span></div>
+        <div><b>TRÉNER</b><span>${getCurrentTrainerDisplayName() || CURRENT_TRAINER_NAME || "Tréner"}</span></div>
         <div class="monthly-badge">VYÚČTOVANIE</div>
       </div>
       <div class="section-title monthly-title">▣ &nbsp; VYÚČTOVANIE – <b>${year}</b></div>
@@ -10410,6 +10410,27 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
 }
 window.openAttendanceFromBillingRow=openAttendanceFromBillingRow;
 
+
+function repairLegacyTrainer1BillingOwnership(){
+  try{
+    if(isAdmin() || isHeadTrainer()) return;
+    const me=String(getCurrentTrainerDisplayName()||'').trim();
+    if(!me || /^TRÉNER\s*1$/i.test(me)) return;
+    let changed=false;
+    monthlyBillingRecords=(monthlyBillingRecords||[]).map(r=>{
+      const d=parsePaymentDate(r?.date);
+      const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:'';
+      if(iso>=TRAINING_DATA_START_DATE && String(r?.trainer||'').trim().toUpperCase()==='TRÉNER 1'){
+        changed=true;
+        return {...r,trainer:me};
+      }
+      return r;
+    });
+    if(changed) persistMonthlyBillingRecords();
+  }catch(e){ console.warn('Oprava starého mena trénera vo vyúčtovaní:',e); }
+}
+repairLegacyTrainer1BillingOwnership();
+
 function renderMonthlyBilling(year=null,targetMonth=null){
   const app=document.querySelector('.app');
   if(!app) return false;
@@ -10517,7 +10538,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
     <main class="content monthly-billing-page">
       <div class="monthly-trainer-card">
         <div class="trainer-avatar">T</div>
-        <div><b>TRÉNER</b><span>${CURRENT_TRAINER_NAME}</span></div>
+        <div><b>TRÉNER</b><span>${getCurrentTrainerDisplayName() || CURRENT_TRAINER_NAME || "Tréner"}</span></div>
         <div class="monthly-badge">VYÚČTOVANIE</div>
       </div>
       <div class="section-title monthly-title">▣ &nbsp; MOJE VYÚČTOVANIE – <b>${month}</b></div>
@@ -10605,7 +10626,7 @@ function buildMyMonthlyBillingPDFBlob(){
 
   const title=page.querySelector('.monthly-title')?.innerText || 'MOJE VYÚČTOVANIE';
   const trainer=page.querySelector('.monthly-trainer-card span')?.innerText ||
-    CURRENT_TRAINER_NAME || 'Tréner';
+    getCurrentTrainerDisplayName() || CURRENT_TRAINER_NAME || 'Tréner';
 
   const details=[...page.querySelectorAll('.monthly-other-row')]
     .map(el=>[...el.children].map(x=>clean(x.innerText)))

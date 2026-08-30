@@ -7327,7 +7327,7 @@ function renderMembershipPaymentCell(m,i){
   return `<button ${dis} class="pay-btn" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">ČLENSKÉ</button>`;
 }
 function renderRegistrationPaymentCell(m,i){
-  const locked=isAttendanceFullyLocked()&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
   const dis=locked?'disabled':'';
   if(memberAccountDateMatches(m,m.registrationAccountDate) && Number(m.registrationAccountAmount||0)>0){
     const cls='pay-btn reg-account-on';
@@ -10477,6 +10477,21 @@ function renderHeadTrainerAttendanceReadOnly(){
   return false;
 }
 function openGroup(code,name,time='',source='calendar'){
+  if(isHeadTrainer() && String(source||'').toLowerCase()==='calendar'){
+    const openDate=`${selectedCalendarYear}-${String(selectedCalendarMonth+1).padStart(2,'0')}-${String(selectedCalendarDay).padStart(2,'0')}`;
+    attendanceState.date=openDate;
+    attendanceState.group=code;
+    attendanceState.name=name;
+    attendanceState.trainingTime=String(time||'');
+    window.__attendanceOpenedFromCalendar=true;
+    window.__attendanceOpenSource='calendar';
+    window.__headTrainerReadOnly=true;
+    // Render the same attendance screen directly. Do not change hash first:
+    // the global hashchange handler previously redirected head trainers Home.
+    attendance();
+    return false;
+  }
+
   // Opening attendance normally must not inherit a financial snapshot from
   // a previously opened billing row.
   attendanceState.billingPaymentSnapshot=null;

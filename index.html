@@ -4356,8 +4356,8 @@ function dayRows(){
     const countText=counts?`<div class="attendance-count-meta">Prítomní: <b>${counts.present}</b> · Noví: <b>${counts.newCount}</b></div>`:'';
     const testAllowed = typeof getCurrentTestTrainerGroupCodes==='function' ? getCurrentTestTrainerGroupCodes() : null;
     const trainerGroups = testAllowed instanceof Set ? testAllowed : new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
-    const trainerAssigned=!isHeadTrainer() && (isAdmin() || trainerGroups.has(String(g.code||'').trim().toUpperCase()));
-    const groupInactive=headInactive || (!isAdmin() && !trainerAssigned);
+    const trainerAssigned=isAdmin() || isHeadTrainer() || trainerGroups.has(String(g.code||'').trim().toUpperCase());
+    const groupInactive=(!isHeadTrainer() && !isAdmin() && !trainerAssigned);
     return `<article class="training ${cancelled?'cancelled-training':''} ${groupInactive?'group-inactive':''}" data-group-code="${g.code}" data-group-name="${g.name}"
       onclick="${cancelled||groupInactive?'return false;':`openGroup('${safeCode}','${safeName}','${safeTime}')`}"
       oncontextmenu="event.preventDefault(); ${groupInactive?'return false;':`groupLongPress('${safeCode}','${safeName}','${safeTime}','${dateLabel}'); return false;`}">
@@ -6965,7 +6965,7 @@ function attendance(){
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
       <div class="brand">GUARD TRAINER</div>
     </header>
-    <main class="content attendance-page ${isAttendanceFullyLocked()?'attendance-readonly':''}">
+    <main class="content attendance-page ${(isAttendanceFullyLocked()||isHeadTrainer())?'attendance-readonly':''}">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
         <div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div>
@@ -6976,11 +6976,11 @@ function attendance(){
       <div class="att-meta">◷ 17:30 – 18:45　⌖ Watsonova 4　♙ ${attendanceState.members.length} členov</div>
 
       <div class="finance">
-        <button class="fin-card fin-training" ${isAttendanceFullyLocked()&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
+        <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
         <button class="fin-card fin-membership" disabled onclick="toast('Členské sa zadáva pri členovi')"><b>ČLENSKÉ</b><strong id="sumMembership">0 €</strong><small id="countMembership">0 platieb</small></button>
         <button class="fin-card fin-registration" disabled onclick="toast('Registrácia je 30 €')"><b>REGISTRÁCIA</b><strong id="sumRegistration">0 €</strong><small id="countRegistration">0 platieb</small></button>
-        <button class="fin-card fin-plus" ${isAttendanceFullyLocked()&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
-        <button class="fin-card fin-minus" ${isAttendanceFullyLocked()&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
+        <button class="fin-card fin-plus" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
+        <button class="fin-card fin-minus" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
         <button class="fin-card fin-debt" disabled onclick="toast('Dlžné sa nezapočítava do vybraného súčtu')"><b>DLŽNÉ</b><strong id="sumDebt">0 €</strong><small id="countDebt">0 dlžníkov</small></button>
         <div class="finance-total"><span>SPOLU VYBRANÉ</span><strong id="sumSelected">0 €</strong><span>DLŽNÉ SPOLU <b id="sumDebtTotal">0 €</b></span></div>
       </div>
@@ -7022,7 +7022,7 @@ function openAttendanceMemberProfile(index){
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
 function renderAttendanceRows(){
- const locked=isAttendanceFullyLocked()&&!isAdmin();
+ const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
@@ -10460,10 +10460,8 @@ function openGroup(code,name,time='',source='calendar'){
   attendanceState.billingPaymentSnapshot=null;
   attendanceState.billingAttendanceSnapshot=null;
   attendanceState.billingRecordSnapshot=null;
-  if(isHeadTrainer()){
-    toast('Hlavný tréner nemôže zapisovať dochádzku');
-    return false;
-  }
+  // Hlavný tréner môže skupinu z Kalendára otvoriť na kontrolu,
+  // ale Dochádzka sa mu zobrazí iba na čítanie.
   // Home -> group must ALWAYS open today's attendance. Calendar -> group
   // must open the date selected in the calendar. These two entry points are
   // intentionally independent so a previously selected calendar day cannot

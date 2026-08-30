@@ -10455,24 +10455,30 @@ function toast(t){
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),1800);
 }
 function openHeadTrainerGroupReadOnly(code,name,time=''){
-  attendanceState.date=`${selectedCalendarYear}-${String(selectedCalendarMonth+1).padStart(2,'0')}-${String(selectedCalendarDay).padStart(2,'0')}`;
-  attendanceState.group=code; attendanceState.name=name; attendanceState.trainingTime=String(time||'');
+  const openDate=`${selectedCalendarYear}-${String(selectedCalendarMonth+1).padStart(2,'0')}-${String(selectedCalendarDay).padStart(2,'0')}`;
+  attendanceState.date=openDate;
+  attendanceState.group=code;
+  attendanceState.name=name;
+  attendanceState.trainingTime=String(time||'');
   window.__headTrainerReadOnly=true;
+  window.__attendanceOpenedFromCalendar=true;
+  window.__attendanceOpenSource='calendar';
   location.hash='attendance';
   renderHeadTrainerAttendanceReadOnly();
 }
 function renderHeadTrainerAttendanceReadOnly(){
   const app=document.querySelector('.app'); if(!app)return false;
-  const code=String(attendanceState.group||'').toUpperCase();
-  const members=(membersData||[]).filter(m=>(m.groups||[m.group]).some(g=>String(g||'').trim().toUpperCase()===code));
+  const code=String(attendanceState.group||'').trim().toUpperCase();
+  const members=(membersData||[]).filter(m=>(Array.isArray(m.groups)?m.groups:[m.group]).some(g=>String(g||'').trim().toUpperCase()===code));
   app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
   <main class="content attendance-page attendance-readonly">
    <div class="calendar-head"><div class="section-title">☑ DOCHÁDZKA</div><div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div></div>
-   <div class="att-group" style="--admin-group-color:${getGroupColor(code,'gold')};background:var(--admin-group-color) !important;"><span>${code}</span><b>${attendanceState.name||code}</b></div>
+   <div class="att-group"><span>${code}</span><b>${attendanceState.name||code}</b></div>
    <div class="att-meta">◷ ${attendanceState.trainingTime||''}　⌖ Watsonova 4　♙ ${members.length} členov</div>
-   <div style="margin:12px 0;padding:10px;border-radius:10px;background:rgba(255,255,255,.08);text-align:center">HLAVNÝ TRÉNER – IBA NA ČÍTANIE</div>
-   ${members.map(m=>`<div class="att-row"><div class="att-name"><b>${m.surname||''}</b><span>${m.name||''}</span></div><div class="pay-btn ${m.training?'on training-on':''}" disabled>${m.training?'PRÍTOMNÝ':'—'}</div></div>`).join('')}
+   <div style="margin:12px 0;padding:10px;border-radius:10px;text-align:center">HLAVNÝ TRÉNER – IBA NA ČÍTANIE</div>
+   <div class="member-list">${members.map(m=>`<div class="att-row"><div class="att-name"><b>${m.surname||''}</b><span>${m.name||''}</span></div><div class="pay-btn" disabled>—</div></div>`).join('')}</div>
   </main>`;
+  return false;
 }
 function openGroup(code,name,time='',source='calendar'){
   // Opening attendance normally must not inherit a financial snapshot from

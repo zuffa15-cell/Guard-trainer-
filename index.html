@@ -3217,6 +3217,24 @@ html,body{color-scheme:dark!important;}
   overflow:visible!important;
 }
 .home-topbar .brand.home-brand{position:static!important;transform:none!important;left:auto!important;right:auto!important}
+</style><style>
+.home-topbar{overflow:hidden!important;width:100%!important;box-sizing:border-box!important}
+.home-topbar .brand.home-brand{
+ display:flex!important;flex-direction:row!important;align-items:center!important;
+ justify-content:center!important;gap:7px!important;width:100%!important;
+ max-width:100%!important;margin:0!important;padding:0 4px!important;
+ white-space:nowrap!important;overflow:hidden!important;line-height:1!important;
+ font-size:22px!important;box-sizing:border-box!important;
+}
+.home-topbar .logged-trainer-name{
+ display:inline-block!important;font-size:10px!important;font-weight:600!important;
+ white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;
+ max-width:38vw!important;opacity:.9;
+}
+@media(max-width:420px){
+ .home-topbar .brand.home-brand{font-size:21px!important;gap:5px!important}
+ .home-topbar .logged-trainer-name{font-size:10px!important;max-width:37vw!important}
+}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -4176,7 +4194,7 @@ function renderHeadHome(){
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
   const birthdayRows=birthdays.map(m=>`<div class="birthday-row"><span class="birthday-name">${m.surname} ${m.name} <strong class="birthday-age">— ${m.age} rokov</strong></span><span class="birthday-group">${headHomeGroupShort((m.groups||[m.group])[0])}</span><span class="birthday-date">${m.next.getDate()}. ${m.next.getMonth()+1}.</span></div>`).join('');
-  app.innerHTML=`<header class="topbar home-topbar"><div class="brand">GUARD TRAINER</div></header><main class="content head-home-dashboard">
+  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand">GUARD TRAINER<span class="logged-trainer-name">${getLoggedTrainerDisplayName()}</span></div></header><main class="content head-home-dashboard">
   <section class="head-welcome-card"><div class="welcome-small">${greeting}</div><div class="welcome-big">HLAVNÝ TRÉNER</div><div class="welcome-date">${t.day}. ${skMonths[t.month-1]} ${t.year}</div></section>
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
@@ -4188,16 +4206,12 @@ function renderHeadHome(){
 function getLoggedTrainerDisplayName(){
   try{
     if(isAdmin()) return 'ADMIN';
-    const p=typeof getCurrentTrainerProfile==='function'?getCurrentTrainerProfile():null;
-    if(p) return String(p.full||p.name||'').trim();
-    const raw=originalGetItem('gt-current-trainer');
-    if(raw){
-      const x=JSON.parse(raw);
-      return String(x.full||x.fullName||x.name||x.trainerName||x.email||'').trim();
-    }
+    const n=String(getCurrentTrainerDisplayName()||'').trim();
+    if(n && n!=='TRÉNER 1' && n!=='TRÉNER 2') return n;
   }catch(e){}
   return '';
 }
+
 function renderHome(){
   if(!isAdmin() && !isHeadTrainer()){
     try{
@@ -8521,6 +8535,20 @@ const headTrainerYearData=[
 ];
 
 
+
+function cleanupPeterOnuscakBillingX(){
+  try{
+    const target='PETER ONUŠČÁK';
+    const before=monthlyBillingRecords.length;
+    monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
+      const trainer=String(r?.trainer||r?.name||'').trim().toUpperCase();
+      const group=String(r?.group||r?.groupCode||'').trim().toUpperCase();
+      return !(trainer===target && group==='X');
+    });
+    if(monthlyBillingRecords.length!==before) persistMonthlyBillingRecords();
+  }catch(e){ console.warn('Čistenie skupiny X z vyúčtovania Petra sa nepodarilo',e); }
+}
+cleanupPeterOnuscakBillingX();
 
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().toUpperCase();

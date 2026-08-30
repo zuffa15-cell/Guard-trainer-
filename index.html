@@ -3505,7 +3505,8 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 
 <script>
 /* v457 – FIX: trainer calendar permissions use profile-assigned groups */
-const APP_START_DATE = '2026-05-08';
+const APP_START_DATE = '2026-08-31';
+const TRAINING_DATA_START_DATE = '2026-08-31';
 function appToday(){
   const d=new Date();
   return {year:d.getFullYear(),month:d.getMonth()+1,day:d.getDate(),
@@ -4119,6 +4120,8 @@ function headHomeMonthAttendance(){
     (monthlyBillingRecords||[]).forEach(r=>{
       const d=parsePaymentDate(r.date);
       if(!d || d.month!==Number(t.month) || d.year!==Number(t.year)) return;
+      const recordIso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      if(recordIso<TRAINING_DATA_START_DATE) return;
       if(norm(r.trainer||r.name)!==norm(name)) return;
       if(r.substituteReference) return;
       const g=norm(r.group);
@@ -4175,7 +4178,16 @@ function renderHeadHome(){
   // Hlavný tréner: sumy členského a registračného v karte PLATBY
   // musia byť totožné so sumami v mesačnom zúčtovaní trénerov.
   // Priamo zapísané evidenčné platby na účet sa zobrazujú osobitne nižšie.
-  const headBillingRowsForPayments=(()=>{try{return getHeadTrainerRowsForMonth(t.month,t.year)||[];}catch(e){return [];}})();
+  const headBillingRowsForPayments=(()=>{
+    try{
+      return (getHeadTrainerRowsForMonth(t.month,t.year)||[]).filter(r=>{
+        const d=parsePaymentDate(r?.date);
+        if(!d)return false;
+        const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+        return iso>=TRAINING_DATA_START_DATE;
+      });
+    }catch(e){return [];}
+  })();
   const membershipSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.membership||0),0);
   const registrationSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.registration||0),0);
   const membership=membershipPayments.filter(p=>{const d=parsePaymentDate(p.date);return d&&d.year===t.year&&d.month===t.month;});
@@ -6649,8 +6661,12 @@ try{
   const parsed=raw?JSON.parse(raw):null;
   if(parsed && typeof parsed==='object'){
     Object.keys(parsed).forEach(k=>{
-      trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {};
+      const date=String(k).split('|')[0];
+      if(date>=TRAINING_DATA_START_DATE){
+        trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {};
+      }
     });
+    try{ localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup)); }catch(e){}
   }
 }catch(e){ console.warn('Attendance history load failed',e); }
 
@@ -7957,7 +7973,15 @@ try{
   // DÔLEŽITÉ: uložené vyúčtovania sa musia po otvorení aplikácie znovu načítať.
   // Bez tohto kroku boli údaje po refreshi prázdne a hlavný tréner videl samé nuly.
   const savedBilling=JSON.parse(localStorage.getItem('gt-monthly-billing-v221')||'null');
-  if(Array.isArray(savedBilling)) monthlyBillingRecords=savedBilling;
+  if(Array.isArray(savedBilling)){
+    monthlyBillingRecords=savedBilling.filter(r=>{
+      const d=parsePaymentDate(r?.date);
+      if(!d) return false;
+      const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      return iso>=TRAINING_DATA_START_DATE;
+    });
+    persistMonthlyBillingRecords();
+  }
 }catch(e){ console.warn('Načítanie uložených vyúčtovaní sa nepodarilo',e); }
 function normalizeMonthlyBillingRecords(){
   const map=new Map();

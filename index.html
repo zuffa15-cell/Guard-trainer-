@@ -3995,10 +3995,6 @@ function openHomeTodayTraining(g){
     toast('Tento tréning je zastupovaný trénerom '+(g.substitutionBy||'iným trénerom')+'.');
     return false;
   }
-  if(isHeadTrainer()){
-    toast('Hlavný tréner nemôže zapisovať dochádzku');
-    return false;
-  }
   const todayIso=appToday().iso;
   window.__attendanceOpenedFromCalendar=false;
   window.__attendanceOpenSource='home';
@@ -4359,7 +4355,7 @@ function dayRows(){
     const trainerAssigned=isAdmin() || isHeadTrainer() || trainerGroups.has(String(g.code||'').trim().toUpperCase());
     const groupInactive=(!isHeadTrainer() && !isAdmin() && !trainerAssigned);
     return `<article class="training ${cancelled?'cancelled-training':''} ${groupInactive?'group-inactive':''}" data-group-code="${g.code}" data-group-name="${g.name}"
-      onclick="${cancelled?'return false;':(headInactive?`openHeadTrainerGroupReadOnly('${safeCode}','${safeName}','${safeTime}')`:(groupInactive?'return false;':`openGroup('${safeCode}','${safeName}','${safeTime}')`))}"
+      onclick="${cancelled?'return false;':`openGroup('${safeCode}','${safeName}','${safeTime}','calendar')`}"
       oncontextmenu="event.preventDefault(); ${groupInactive?'return false;':`groupLongPress('${safeCode}','${safeName}','${safeTime}','${dateLabel}'); return false;`}">
       <div class="badge ${String(g.code||'').toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code||'?'} </div>
       <div class="info"><div class="title">${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}</div>
@@ -7314,7 +7310,7 @@ function adminCancelPayment(type,i){
 }
 
 function renderMembershipPaymentCell(m,i){
-  const locked=isAttendanceFullyLocked()&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
   const dis=locked?'disabled':'';
   const key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
   const draft=attendanceState.membershipDrafts?.[key];
@@ -10909,7 +10905,6 @@ window.addEventListener('hashchange',()=>{
   if(r==='statistics'){ renderStatistics(); return; }
   if(r==='calendar'){ renderCalendar(); return; }
   if(r==='attendance'){
-    if(isHeadTrainer()){ location.hash='home'; renderHome(); return; }
     if(window.__attendanceOpenedFromCalendar){
       window.__attendanceOpenedFromCalendar=false;
       window.__attendanceOpenSource='calendar';

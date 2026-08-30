@@ -8550,6 +8550,71 @@ function cleanupPeterOnuscakBillingX(){
 }
 cleanupPeterOnuscakBillingX();
 
+
+/* v669 – nový štart tréningov od 31.08.2026.
+   Odstránené sú historické tréningové údaje z mája a júna 2026.
+   Profily členov/trénerov a nastavenia zostávajú zachované. */
+function cleanupMayJune2026TrainingData(){
+  const isMayJune2026Date = value => {
+    try{
+      const d=parsePaymentDate(value);
+      return !!(d && d.year===2026 && (d.month===5 || d.month===6));
+    }catch(e){ return false; }
+  };
+  try{
+    if(Array.isArray(monthlyBillingRecords)){
+      monthlyBillingRecords=monthlyBillingRecords.filter(r=>!isMayJune2026Date(r&&r.date));
+      persistMonthlyBillingRecords();
+    }
+  }catch(e){ console.warn('Čistenie vyúčtovania máj/jún 2026:',e); }
+
+  // Remove attendance records saved as date-keyed objects/arrays.
+  const attendanceKeys=[
+    'gt-attendance','gt-attendance-data','guard-trainer-attendance',
+    'attendanceData','attendanceRecords'
+  ];
+  attendanceKeys.forEach(key=>{
+    try{
+      const raw=localStorage.getItem(key);
+      if(!raw)return;
+      const data=JSON.parse(raw);
+      let changed=false;
+      if(Array.isArray(data)){
+        const filtered=data.filter(x=>{
+          const date=x?.date||x?.trainingDate||x?.day||x?.iso;
+          const remove=isMayJune2026Date(date);
+          if(remove)changed=true;
+          return !remove;
+        });
+        if(changed)localStorage.setItem(key,JSON.stringify(filtered));
+      }else if(data && typeof data==='object'){
+        Object.keys(data).forEach(k=>{
+          if(isMayJune2026Date(k)){delete data[k];changed=true;}
+          else if(data[k] && typeof data[k]==='object'){
+            const date=data[k].date||data[k].trainingDate||data[k].day||data[k].iso;
+            if(isMayJune2026Date(date)){delete data[k];changed=true;}
+          }
+        });
+        if(changed)localStorage.setItem(key,JSON.stringify(data));
+      }
+    }catch(e){}
+  });
+
+  // Remove dated training/billing history from common stores, but DO NOT touch schedules.
+  ['gt-training-history','gt-training-records','gt-training-data'].forEach(key=>{
+    try{
+      const raw=localStorage.getItem(key);
+      if(!raw)return;
+      const data=JSON.parse(raw);
+      if(Array.isArray(data)){
+        const filtered=data.filter(x=>!isMayJune2026Date(x?.date||x?.trainingDate||x?.day||x?.iso));
+        localStorage.setItem(key,JSON.stringify(filtered));
+      }
+    }catch(e){}
+  });
+}
+cleanupMayJune2026TrainingData();
+
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().toUpperCase();
   let rows=monthlyBillingRecords.filter(r=>String(r.trainer||r.name||'').trim().toUpperCase()===target).filter(r=>{
@@ -9869,13 +9934,7 @@ function getAnnualTrainerData(){
 function renderTrainerYearDetail(trainerName){
   const app=document.querySelector('.app');
   const months=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
-  const approved={
-    'JÁN NOVÁK':[830,380,495,500,395,385,475,970,470,430,395,360],
-    'PETER HORVÁTH':[720,650,810,750,780,740,860,910,470,430,395,360],
-    'LUCIA KOVÁČOVÁ':[640,580,710,660,670,640,740,770,470,430,395,360],
-    'TOMÁŠ ANDRÁŠ':[420,370,450,410,440,420,480,510,470,430,395,360],
-    'MARTIN KOVÁČ':[320,290,330,310,345,320,370,390,470,430,395,360]
-  };
+  const approved={};
   const vals=approved[trainerName]||[];
   const total=vals.reduce((a,v)=>a+v,0);
   app.innerHTML=`

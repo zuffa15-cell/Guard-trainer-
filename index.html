@@ -5110,8 +5110,16 @@ function saveNewTrainerDirect(){
    if(typeof pushToCloud==='function') pushToCloud(true);
  }catch(e){}
 
- toast('Tréner bol vytvorený');
- setTimeout(()=>renderTrainers(),700);
+ const saveBtn=document.getElementById('saveNewTrainerDirectBtn');
+ if(saveBtn){
+   saveBtn.disabled=true;
+   saveBtn.style.background='#22c55e';
+   saveBtn.style.borderColor='#22c55e';
+   saveBtn.style.color='#fff';
+   saveBtn.innerHTML='✓ ULOŽENÉ';
+ }
+ toast('Tréner bol uložený');
+ setTimeout(()=>renderTrainers(),900);
  return false;
 }
 

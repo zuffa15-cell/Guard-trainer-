@@ -3178,27 +3178,38 @@ html,body{color-scheme:dark!important;}
 </style>
 <style>
 .home-topbar .brand.home-brand{
-  white-space:nowrap!important;
+  width:100%!important;
+  min-width:0!important;
+  box-sizing:border-box!important;
   display:flex!important;
+  flex-direction:column!important;
   align-items:center!important;
   justify-content:center!important;
-  gap:10px!important;
-  width:100%!important;
-  font-size:clamp(18px,5.2vw,30px)!important;
+  gap:2px!important;
+  white-space:normal!important;
+  overflow:visible!important;
+  text-align:center!important;
+  line-height:1.05!important;
+}
+.home-topbar .home-brand-title{
+  display:block!important;
+  white-space:nowrap!important;
+  font-size:clamp(20px,6.2vw,30px)!important;
+  font-weight:800!important;
 }
 .home-topbar .logged-trainer-name{
-  display:inline-block!important;
-  font-size:.48em!important;
-  font-weight:600!important;
+  display:block!important;
   white-space:nowrap!important;
   overflow:hidden!important;
   text-overflow:ellipsis!important;
-  max-width:42vw!important;
-  opacity:.9;
+  max-width:80vw!important;
+  font-size:clamp(11px,3.4vw,15px)!important;
+  font-weight:600!important;
+  opacity:.9!important;
 }
 @media(max-width:420px){
- .home-topbar .brand.home-brand{font-size:22px!important;gap:7px!important}
- .home-topbar .logged-trainer-name{font-size:11px!important;max-width:40vw!important}
+  .home-topbar .home-brand-title{font-size:22px!important}
+  .home-topbar .logged-trainer-name{font-size:12px!important;max-width:78vw!important}
 }
 </style></head>
 <body class="gtSplashV323Active">
@@ -4199,7 +4210,7 @@ function renderHome(){
   const items=filterHomeItemsForCurrentRole(allHomeItems).sort((a,b)=>{const ta=String(a.time||'').match(/(\d{1,2}):(\d{2})/);const tb=String(b.time||'').match(/(\d{1,2}):(\d{2})/);const ma=ta ? Number(ta[1])*60+Number(ta[2]) : 9999;const mb=tb ? Number(tb[1])*60+Number(tb[2]) : 9999;return ma-mb || String(a.code||'').localeCompare(String(b.code||''),'sk',{numeric:true,sensitivity:'base'}) || String(a.name||'').localeCompare(String(b.name||''),'sk');});
   let html=HOME_HTML;
   html=html.replace('<div class="brand">GUARD TRAINER</div>',
-    `<div class="brand home-brand">GUARD TRAINER<span class="logged-trainer-name">${getLoggedTrainerDisplayName()}</span></div>`);
+    `<div class="brand home-brand"><span class="home-brand-title">GUARD TRAINER</span><span class="logged-trainer-name">${getLoggedTrainerDisplayName()}</span></div>`);
   html=html.replace(/<button class="menu"[^>]*>☰<\/button>/, '');
   html=html.replace(/<div class="date">[\s\S]*?<\/div>/,`<div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>`);
   const listHtml=items.length ? items.map(g=>{const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};const homeDate=appToday().iso;const cancelled=isTrainingCancelled(homeDate,g.code,g.time,g.name);const headInactive = isHeadTrainer();return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:'${g.code}',name:'${String(g.name||'').replace(/'/g,"\\'")}',substitutionInactive:${!!g.substitutionInactive},substitutionBy:'${String(g.substitutionBy||'').replace(/'/g,"\\'")}',scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`}" data-group-code="${g.code}" data-group-name="${g.name}"><div class="badge ${g.code.toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}${g.substitutionLabel?`<small class="sub-home-label">${g.substitutionLabel}${g.substitutionBy?` · ${g.substitutionBy}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${g.time}<br><i>⌖</i>${g.location||'Watsonova 4'}${g.trainer?`<br><i>♟</i>${g.trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;}).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;

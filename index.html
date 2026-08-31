@@ -4327,30 +4327,15 @@ function renderHeadHomeList(title,rows,kind){
 
 function headHomeRealPaymentTotals(year,month){
   const result={membership:0,registration:0};
-  const y=Number(year), m=Number(month);
   try{
-    // Authoritative member payment histories.
-    (typeof paymentHistory!=='undefined' && Array.isArray(paymentHistory)?paymentHistory:[]).forEach(p=>{
-      const d=String(p.date||'');
-      const mm=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if(!mm || Number(mm[1])!==y || Number(mm[2])!==m) return;
-      const amount=Number(p.amount||0);
-      const type=String(p.type||'').toLowerCase();
-      if(type.includes('registra')) result.registration+=amount;
-      else if(type.includes('člensk')) result.membership+=amount;
-    });
-    // Registration payments may also live in the dedicated array.
-    (typeof registrationPayments!=='undefined' && Array.isArray(registrationPayments)?registrationPayments:[]).forEach(p=>{
-      const d=String(p.date||''); const mm=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if(!mm || Number(mm[1])!==y || Number(mm[2])!==m) return;
-      const amount=Number(p.amount||0);
-      // Avoid double-counting records already mirrored into paymentHistory.
-      const already=(typeof paymentHistory!=='undefined' && Array.isArray(paymentHistory)) &&
-        paymentHistory.some(h=>String(h.date||'')===d && Number(h.memberId||0)===Number(p.memberId||0) &&
-          String(h.type||'').toLowerCase().includes('registra') && Number(h.amount||0)===amount);
-      if(!already) result.registration+=amount;
-    });
-  }catch(e){ console.warn('head home payment totals',e); }
+    // ZDROJ PRAVDY pre bežné (nie „ÚČET“) platby:
+    // presne tie isté mesačné riadky, ktoré vidí hlavný tréner vo Vyúčtovaní.
+    const rows=getHeadTrainerRowsForMonth(Number(month),Number(year))||[];
+    result.membership=rows.reduce((sum,r)=>sum+Number(r.membership||0),0);
+    result.registration=rows.reduce((sum,r)=>sum+Number(r.registration||0),0);
+  }catch(e){
+    console.warn('head home payment totals',e);
+  }
   return result;
 }
 
@@ -4396,7 +4381,7 @@ function renderHeadHome(){
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
-  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa skutočne zapísaných platieb</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa skutočne zapísaných platieb</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
+  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa mesačného vyúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa mesačného vyúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }

@@ -2,7 +2,6 @@
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <head>
-<!-- Guard Trainer v813: odstránené zobrazenie statusu NOVÝ -->
 
 <!-- FIREBASE SYNC v2 - FIXED (no reload loop) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -148,13 +147,7 @@ function initCloudSync(){
         }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
-        try{
-      const ar=window.gtAttendanceRoute&&window.gtAttendanceRoute.get();
-      const attendanceVisible=!!document.querySelector(
-        '.attendance-screen,.attendance-page,[data-screen="attendance"],#attendanceScreen'
-      );
-      if(!ar && !attendanceVisible && typeof renderHome==='function') renderHome();
-    }catch(e){}
+        try{if(typeof renderHome==='function') renderHome();}catch(e){}
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
         // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
         console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
@@ -3296,60 +3289,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer{animation:gtSubstitutionGreenPulseV681 1.25s ease-in-out infinite!important;color:#fff!important}
 .substitution-q.accepted-offer .qtext{color:#72ff8b!important}
 .substitution-q.accepted-offer small{color:#fff!important}
-</style>
-<script id="gt-attendance-isolation-v814">
-(function(){
-  const K='gt-active-attendance-route-v814';
-  window.gtAttendanceRoute={
-    set:function(v){try{sessionStorage.setItem(K,JSON.stringify(v||{}));}catch(e){}},
-    get:function(){try{return JSON.parse(sessionStorage.getItem(K)||'null')}catch(e){return null}},
-    clear:function(){try{sessionStorage.removeItem(K)}catch(e){}}
-  };
-})();
-</script>
-
-<style id="gt-two-trainers-same-group-v817">
-.gt-group-trainer-names-v817{white-space:normal!important;line-height:1.2!important}
-</style>
-<script id="gt-two-trainers-same-group-v817">
-(function(){
-  function namesFor(code){
-    const wanted=String(code||'').trim().toUpperCase();
-    const names=[];
-    try{
-      const profiles=typeof getTestTrainerProfiles==='function'?getTestTrainerProfiles():[];
-      profiles.forEach(p=>{
-        const groups=Array.isArray(p.groups)?p.groups:[];
-        if(!groups.some(g=>String(g||'').trim().toUpperCase()===wanted)) return;
-        const n=String(p.name||p.fullName||p.displayName||'').trim();
-        if(n&&!names.includes(n)) names.push(n);
-      });
-    }catch(e){}
-    return names;
-  }
-  function apply(){
-    try{
-      document.querySelectorAll('[data-group-code]').forEach(card=>{
-        const code=card.getAttribute('data-group-code');
-        const names=namesFor(code);
-        if(names.length<2) return;
-        const candidates=card.querySelectorAll('.trainer-name,.training-trainer,.trainer,[data-trainer-label]');
-        candidates.forEach(el=>{
-          if(!el.dataset.gt817Done){
-            el.textContent=names.join(', ');
-            el.classList.add('gt-group-trainer-names-v817');
-            el.dataset.gt817Done='1';
-          }
-        });
-      });
-    }catch(e){}
-  }
-  window.gtShowAllGroupTrainersV817=apply;
-  document.addEventListener('DOMContentLoaded',()=>setTimeout(apply,200));
-  setInterval(apply,1200);
-})();
-</script>
-</head>
+</style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
@@ -4583,9 +4523,7 @@ function scheduleItemsForDate(iso){
       code:x.groupCode||'',
       name:x.name,
       time:`${x.from} – ${x.to}`,
-      trainer:(Array.isArray(x.trainers)&&x.trainers.length
-        ? x.trainers.filter(Boolean).map(String).filter((v,i,a)=>a.indexOf(v)===i).join(', ')
-        : (x.trainer||'')),
+      trainer:x.trainer||'',
       location:x.location||'',
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),
@@ -5746,7 +5684,7 @@ function memberRows(arr){
      <span class="${secondHalfMembershipVisual(m)} membership-period-icon" title="Členské 2. polrok">Č</span>
      <span class="${memberHasRegistration(m)?'icon-ok':'icon-no'}" title="Registrácia">R</span>
    </div>
-   <div class="member-flags"></div>
+   <div class="member-flags">${m.newMember?'<b class="new-flag">NOVÝ</b>':''}</div>
    <div class="member-arrow">›</div>
  </article>`).join('');
 }
@@ -7396,7 +7334,7 @@ function renderAttendanceRows(){
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
-   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(${i})" ondblclick="attendanceEditGuard()&&handleTrainingDoubleClick(event,${i})">${m.trainingAccount?'ÚČET':'TRÉNING'}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
+   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(${i})" ondblclick="attendanceEditGuard()&&handleTrainingDoubleClick(event,${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
    <button ${locked?'disabled':''} class="pay-btn ${m.debt>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${m.debt>0?'<strong>'+m.debt+' €</strong>':''}</button>
@@ -7922,7 +7860,7 @@ function toggleTraining(i){
  if(!attendanceEditGuard()) return;
  const m=attendanceState.members[i];
  if(!m)return;
- if(m.newMember){ m.training=true; m.trainingAccount=false; saveCurrentTrainingAttendance(); toast('Tréning zdarma – nový člen'); refreshAttendance(); return; }
+ if(m.newMember){ m.training=true; m.trainingAccount=false; saveCurrentTrainingAttendance(); toast('NOVÝ – tréning zdarma'); refreshAttendance(); return; }
  m.training=!m.training;
  if(!m.training) m.trainingAccount=false;
  saveCurrentTrainingAttendance();

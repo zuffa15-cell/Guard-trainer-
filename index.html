@@ -148,7 +148,13 @@ function initCloudSync(){
         }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
-        try{if(typeof renderHome==='function') renderHome();}catch(e){}
+        try{
+      const ar=window.gtAttendanceRoute&&window.gtAttendanceRoute.get();
+      const attendanceVisible=!!document.querySelector(
+        '.attendance-screen,.attendance-page,[data-screen="attendance"],#attendanceScreen'
+      );
+      if(!ar && !attendanceVisible && typeof renderHome==='function') renderHome();
+    }catch(e){}
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
         // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
         console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
@@ -3290,6 +3296,43 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer{animation:gtSubstitutionGreenPulseV681 1.25s ease-in-out infinite!important;color:#fff!important}
 .substitution-q.accepted-offer .qtext{color:#72ff8b!important}
 .substitution-q.accepted-offer small{color:#fff!important}
+</style>
+<script id="gt-attendance-isolation-v814">
+(function(){
+  const K='gt-active-attendance-route-v814';
+  window.gtAttendanceRoute={
+    set:function(v){try{sessionStorage.setItem(K,JSON.stringify(v||{}));}catch(e){}},
+    get:function(){try{return JSON.parse(sessionStorage.getItem(K)||'null')}catch(e){return null}},
+    clear:function(){try{sessionStorage.removeItem(K)}catch(e){}}
+  };
+})();
+</script>
+
+<script id="gt-group-trainers-v815">
+(function(){
+  window.gtGetAllGroupTrainerNames=function(groupCode){
+    const code=String(groupCode||'').trim().toUpperCase();
+    if(!code) return [];
+    const names=[];
+    try{
+      const profiles=(typeof getTestTrainerProfiles==='function'?getTestTrainerProfiles():[]);
+      profiles.forEach(p=>{
+        const groups=(p.groups||[]).map(x=>String(x).trim().toUpperCase());
+        const name=String(p.name||p.fullName||p.displayName||'').trim();
+        if(name && groups.includes(code) && !names.includes(name)) names.push(name);
+      });
+    }catch(e){}
+    // Keep the currently stored trainer as fallback.
+    try{
+      const current=String(arguments?.[1]||'').trim();
+      if(current && !names.includes(current)) names.push(current);
+    }catch(e){}
+    return names;
+  };
+})();
+</script>
+<style id="gt-group-trainers-css-v815">
+[data-trainer-label]{white-space:normal;line-height:1.25}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -10100,6 +10143,22 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+
+<script id="gt-group-trainers-render-v815">
+(function(){
+  window.gtRefreshGroupTrainerLabels=function(root){
+    try{
+      const scope=root||document;
+      const nodes=scope.querySelectorAll('[data-group-code][data-trainer-label]');
+      nodes.forEach(n=>{
+        const code=n.getAttribute('data-group-code');
+        const names=window.gtGetAllGroupTrainerNames(code);
+        if(names.length) n.textContent=names.join(', ');
+      });
+    }catch(e){}
+  };
+})();
+</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

@@ -4326,16 +4326,33 @@ function renderHeadHomeList(title,rows,kind){
 }
 
 function headHomeRealPaymentTotals(year,month){
-  const result={membership:0,registration:0};
+  const result={membership:0,registration:0,membershipAccount:0,registrationAccount:0};
+  const inMonth=(value)=>{
+    const d=parsePaymentDate(value);
+    return !!(d && d.year===Number(year) && d.month===Number(month));
+  };
   try{
-    // ZDROJ PRAVDY pre bežné (nie „ÚČET“) platby:
-    // presne tie isté mesačné riadky, ktoré vidí hlavný tréner vo Vyúčtovaní.
-    const rows=getHeadTrainerRowsForMonth(Number(month),Number(year))||[];
-    result.membership=rows.reduce((sum,r)=>sum+Number(r.membership||0),0);
-    result.registration=rows.reduce((sum,r)=>sum+Number(r.registration||0),0);
-  }catch(e){
-    console.warn('head home payment totals',e);
-  }
+    // BEZNE PLATBY: výhradne skutočne zapísané platby v dochádzke/profile.
+    // Toto je zdroj pre „ČLENSKÉ“ a „REGISTRAČNÉ“, nie vyúčtovanie tréningov.
+    result.membership=(membershipPayments||[])
+      .filter(p=>inMonth(p.date))
+      .reduce((sum,p)=>sum+Number(p.amount||0),0);
+    result.registration=(registrationPayments||[])
+      .filter(p=>inMonth(p.date))
+      .reduce((sum,p)=>sum+Number(p.amount||0),0);
+
+    // PLATBY NA ÚČET: samostatná evidencia člena. Nikdy ich nepripočítavaj
+    // k bežným platbám.
+    (membersData||[]).forEach(m=>{
+      ensureMemberAccountHistory(m).forEach(p=>{
+        if(!inMonth(p.date)) return;
+        const amount=Number(p.amount||0);
+        if(amount<=0) return;
+        if(p.type==='membership') result.membershipAccount+=amount;
+        if(p.type==='registration') result.registrationAccount+=amount;
+      });
+    });
+  }catch(e){ console.warn('headHomeRealPaymentTotals',e); }
   return result;
 }
 
@@ -4343,35 +4360,13 @@ function renderHeadHome(){
   const app=document.querySelector('.app'), t=appToday(), now=new Date(), greeting=now.getHours()<12?'DOBRÉ RÁNO':(now.getHours()<18?'DOBRÝ DEŇ':'DOBRÝ VEČER');
   const week=headHomeWeekStart(), days=['PO','UT','ST','ŠT','PI','SO','NE'];
   const active=membersData.length, newMembers=headHomeNewMembers(), noVisit=headHomeNoVisitMembers(), att=headHomeMonthAttendance(), birthdays=headHomeBirthdays();
-  // Hlavný tréner: zobrazuj skutočne zapísané platby v danom mesiaci.
-  // Priamo zapísané evidenčné platby na účet sa zobrazujú osobitne nižšie.
+  // HLAVNÝ TRÉNER – platby na Domove musia byť presným súčtom
+  // skutočne zapísaných platieb, oddelene od platieb NA ÚČET.
   const realHeadPayments=headHomeRealPaymentTotals(t.year,t.month);
-  const headBillingRowsForPayments=(()=>{
-    try{
-      return (getHeadTrainerRowsForMonth(t.month,t.year)||[]).filter(r=>{
-        const d=parsePaymentDate(r?.date);
-        if(!d)return false;
-        const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-        return iso>=TRAINING_DATA_START_DATE;
-      });
-    }catch(e){return [];}
-  })();
-  const membershipSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.membership||0),0);
-  const registrationSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.registration||0),0);
   const membershipSettledTotalReal=realHeadPayments.membership;
   const registrationSettledTotalReal=realHeadPayments.registration;
-  const membership=membershipPayments.filter(p=>{const d=parsePaymentDate(p.date);return d&&d.year===t.year&&d.month===t.month;});
-  const registration=registrationPayments.filter(p=>{const d=parsePaymentDate(p.date);return d&&d.year===t.year&&d.month===t.month;});
-  // Platby označené ako ÚČET sa do bežných platieb nezapočítavajú,
-  // ale hlavný tréner ich má v prehľade vidieť samostatne.
-  const accountPaymentsForMonth=(type)=>membersData.flatMap(m=>{
-    try{return ensureMemberAccountHistory(m).filter(x=>x.type===type&&x.date).map(x=>({...x,memberId:m.id}));}
-    catch(e){return [];}
-  }).filter(x=>{const d=parsePaymentDate(x.date);return d&&d.year===t.year&&d.month===t.month&&Number(x.amount||0)>0;});
-  const membershipAccount=accountPaymentsForMonth('membership');
-  const registrationAccount=accountPaymentsForMonth('registration');
-  const membershipAccountTotal=membershipAccount.reduce((a,p)=>a+Number(p.amount||0),0);
-  const registrationAccountTotal=registrationAccount.reduce((a,p)=>a+Number(p.amount||0),0);
+  const membershipAccountTotal=realHeadPayments.membershipAccount;
+  const registrationAccountTotal=realHeadPayments.registrationAccount;
   const memberCard=`<section class="head-home-card"><div class="head-card-title">👥 ČLENOVIA</div><div class="member-stats"><div class="member-stat" onclick="return nav('members')"><strong>${active}</strong><span>Aktívnych členov</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat new" onclick="renderHeadHomeList('NOVÍ ČLENOVIA – POSLEDNÝCH 30 DNÍ',headHomeNewMembers(),'new')"><strong>${newMembers.length}</strong><span>Noví členovia<br>za posledných 30 dní</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat warning" onclick="renderHeadHomeList('ČLENOVIA BEZ NÁVŠTEVY 30+ DNÍ',headHomeNoVisitMembers(),'old')"><strong>${noVisit.length}</strong><span>Členovia bez návštevy<br>30+ dní</span><small>kliknutím zobraz zoznam</small></div></div></section>`;
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
@@ -4381,7 +4376,7 @@ function renderHeadHome(){
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
-  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa mesačného vyúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa mesačného vyúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
+  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa skutočne zapísaných platieb</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa skutočne zapísaných platieb</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }

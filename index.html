@@ -4583,7 +4583,9 @@ function scheduleItemsForDate(iso){
       code:x.groupCode||'',
       name:x.name,
       time:`${x.from} – ${x.to}`,
-      trainer:x.trainer||'',
+      trainer:(Array.isArray(x.trainers)&&x.trainers.length
+        ? x.trainers.filter(Boolean).map(String).filter((v,i,a)=>a.indexOf(v)===i).join(', ')
+        : (x.trainer||'')),
       location:x.location||'',
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),

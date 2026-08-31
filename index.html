@@ -6417,11 +6417,17 @@ function saveNewMemberFromForm(id){
  m.name=name;
  m.dob=(document.getElementById('mpDob')?.value||'').trim();
  const memberSinceInput=(document.getElementById('mpMemberSince')?.value||'').trim();
- if(m.application && m.applicationDate){
-   if(memberSinceInput && memberSinceInput!==m.applicationDate){ m.memberSince=memberSinceInput; m.memberSinceManual=true; }
-   else if(!m.memberSinceManual) m.memberSince=m.applicationDate;
- } else if(memberSinceInput){ m.memberSince=memberSinceInput; m.memberSinceManual=true; }
- else if(!m.memberSince){ const t=appToday(); m.memberSince=`${String(t.day).padStart(2,'0')}. ${String(t.month).padStart(2,'0')}. ${t.year}`; }
+ if(memberSinceInput){
+   m.memberSince=memberSinceInput;
+   m.memberSinceManual=!!(m.application && m.applicationDate && memberSinceInput!==m.applicationDate) || !m.application;
+ }else if(m.application && m.applicationDate){
+   m.memberSince=m.applicationDate;
+   m.memberSinceManual=false;
+ }else if(!m.memberSince){
+   const t=appToday();
+   m.memberSince=`${String(t.day).padStart(2,'0')}. ${String(t.month).padStart(2,'0')}. ${t.year}`;
+   m.memberSinceManual=false;
+ }
  m.phone=(document.getElementById('mpPhone')?.value||'').trim();
  m.groups=(document.getElementById('mpGroup')?.value||'').split(',').filter(Boolean);
  m.group=m.groups[0]||'';
@@ -6434,7 +6440,16 @@ function saveNewMemberFromForm(id){
 try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
    m.applicationDate=formatPaymentDate(appToday().iso);
-   m.memberSince=m.applicationDate;
+   // Ak tréner v tom istom formulári zadal vlastný dátum vstupu,
+   // prihláška ho nesmie prepísať.
+   const savedMemberSinceInput=(document.getElementById('mpMemberSince')?.value||'').trim();
+   if(savedMemberSinceInput){
+     m.memberSince=savedMemberSinceInput;
+     m.memberSinceManual=savedMemberSinceInput!==m.applicationDate;
+   }else{
+     m.memberSince=m.applicationDate;
+     m.memberSinceManual=false;
+   }
    if(preview && preview.dataset.fileData){
      m.applicationFile=preview.dataset.fileData;
      m.applicationFileName=preview.dataset.fileName||appFile.files[0].name;
@@ -6494,8 +6509,16 @@ function saveMemberProfile(id,isNew=false){
 
  m.dob=document.getElementById('mpDob').value;
  const msInput=(document.getElementById('mpMemberSince')?.value||'').trim();
- if(m.application && m.applicationDate) m.memberSince=m.applicationDate;
- else if(msInput) m.memberSince=msInput;
+
+ // Tréner môže dátum „Členom klubu od“ ručne vložiť alebo prepísať.
+ // Uložený ručný dátum má prednosť pred dátumom prihlášky.
+ if(msInput){
+   m.memberSince=msInput;
+   m.memberSinceManual=!!(m.application && m.applicationDate && msInput!==m.applicationDate) || !m.application;
+ }else if(m.application && m.applicationDate){
+   m.memberSince=m.applicationDate;
+   m.memberSinceManual=false;
+ }
  m.phone=document.getElementById('mpPhone').value;
  m.groups=document.getElementById('mpGroup').value.split(',').filter(Boolean);
  if(!m.groups.length) m.groups=[m.group];

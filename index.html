@@ -5583,6 +5583,7 @@ const membersData=[
 
 normalizeAllMembers();
 
+/* v826 – member list shows paid membership/registration in green even when paid to account. */
 /* v466 – persist members added/edited by the user across app reloads. */
 const MEMBERS_STORAGE_KEY='gt-members-v466';
 function persistMembersData(){
@@ -5683,7 +5684,12 @@ function membershipAccountForPeriod(memberId,period,year=appToday().year){
   const found=candidates.find(x=>Number(membershipPeriodForDate(x.date)||0)===Number(period) && Number(String(x.date).slice(0,4))===Number(year));
   return found || null;
 }
-function membershipPaidForPeriod(member,period){ return !!(member && membershipPaymentForPeriod(member.id,period)); }
+function membershipPaidForPeriod(member,period){
+  // A membership is considered paid in the member list and attendance
+  // regardless of whether it was paid normally or recorded as paid to the
+  // club account.  Keep the period/year logic in one place.
+  return !!(member && membershipProfilePaymentForPeriod(member,period,appToday().year));
+}
 function attendanceDateKey(){
   return attendanceState.date || appToday().iso;
 }
@@ -7535,7 +7541,11 @@ function membershipPaidHereToday(m){
 function memberHasRegistration(m){
   if(!m)return false;
   const id=attendanceMemberId(m);
-  return registrationPayments.some(p=>Number(p.memberId)===Number(id));
+  if(registrationPayments.some(p=>Number(p.memberId)===Number(id))) return true;
+  // Registration paid to the club account is also a paid registration.
+  if(Number(m.registrationAccountAmount||0)>0 && m.registrationAccountDate) return true;
+  if(Array.isArray(m.accountPaymentHistory) && m.accountPaymentHistory.some(h=>h.type==='registration' && Number(h.amount)>0 && h.date)) return true;
+  return !!m.registration;
 }
 function savedRegistrationForMember(m){
   if(!m)return null;

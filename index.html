@@ -7739,7 +7739,16 @@ function renderMembershipPaymentCell(m,i){
   // 1. polrok = január–jún, 2. polrok = júl–december.
   const currentPeriod=currentMembershipPeriod();
   const currentYear=appToday().year;
-  const paidCurrentPeriod=membershipProfilePaymentForPeriod(m,currentPeriod,currentYear);
+  // attendanceState.members sú záznamy pre dochádzku bez vlastného `id`.
+  // Preto sa člen musí prepojiť na membersData cez attendanceMemberId().
+  // Inak sa zaplatené členské z profilu v Dochádzke nikdy nenašlo.
+  const attendanceId=attendanceMemberId(m);
+  const paidCurrentPeriod=membershipPayments.find(p=>{
+    const py=Number(p.year||String(p.date||'').slice(0,4));
+    return Number(p.memberId)===Number(attendanceId) &&
+           Number(p.period)===Number(currentPeriod) &&
+           py===Number(currentYear);
+  });
 
   if(paidCurrentPeriod){
     const amount=Number(paidCurrentPeriod.amount||30);

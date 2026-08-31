@@ -3623,21 +3623,67 @@ function getCurrentTrainerGroups(){
         const p=getCurrentTestTrainerProfile();
         trainer=p; trainerName=String(p?.full||p?.name||account.display_name||'').trim();
       }
+    }else if(account){
+      trainerName=String(account.display_name||account.name||'').trim();
+      trainer=(trainersData||[]).find(t=>{
+        const n=String(t.full||t.name||'').trim().toLowerCase();
+        return n && n===trainerName.toLowerCase();
+      })||null;
+      if(trainer) trainerId=Number(trainer.id);
     }
   }catch(e){}
   if(!trainer){
-    trainerName=String(CURRENT_TRAINER_NAME||'').trim();
-    trainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim()===trainerName)||null;
-    trainerId=trainer?.id ?? null;
+    const p=getCurrentTestTrainerProfile();
+    if(p){
+      trainer=p;
+      trainerId=Number(p.id);
+      trainerName=String(p.full||p.name||trainerName||'').trim();
+    }
   }
+  if(!trainer){
+    trainerName=String(trainerName||CURRENT_TRAINER_NAME||'').trim();
+    trainer=(trainersData||[]).find(t=>{
+      const n=String(t.full||t.name||'').trim().toLowerCase();
+      return n && n===trainerName.toLowerCase();
+    })||null;
+    if(trainer) trainerId=Number(trainer.id);
+  }
+
   const groups=new Set();
-  (trainer?.groups||[]).forEach(g=>{const v=String(g).trim().toUpperCase();if(v)groups.add(v);});
+  (trainer?.groups||[]).forEach(g=>{
+    const v=String(g).trim().toUpperCase();
+    if(v) groups.add(v);
+  });
+
+  // Active schedule assignments are authoritative as a second source.
   schedules.forEach(x=>{
     const active=(!x.startDate||today>=x.startDate)&&(!x.until||today<=x.until);
-    const assigned=Array.isArray(x.trainerIds)?x.trainerIds.map(Number).includes(Number(trainerId)):
-      (x.trainerId!=null?Number(x.trainerId)===Number(trainerId):String(x.trainer||'').trim()===trainerName);
-    if(active&&assigned&&x.groupCode) groups.add(String(x.groupCode).trim().toUpperCase());
+    if(!active || !x.groupCode) return;
+
+    let assigned=false;
+    const ids=Array.isArray(x.trainerIds)?x.trainerIds.map(Number):[];
+    if(x.trainerId!=null) ids.push(Number(x.trainerId));
+    if(trainerId!=null && ids.includes(Number(trainerId))) assigned=true;
+
+    // Also accept an exact trainer name match. This covers older schedule
+    // rows which contain the trainer name but no usable trainer ID.
+    if(!assigned && trainerName){
+      const wanted=trainerName.trim().toLowerCase();
+      const candidates=[];
+      if(Array.isArray(x.trainers)) candidates.push(...x.trainers);
+      if(x.trainer) candidates.push(x.trainer);
+      try{
+        ids.forEach(id=>{
+          const tt=(trainersData||[]).find(z=>Number(z.id)===Number(id));
+          if(tt) candidates.push(tt.full||tt.name);
+        });
+      }catch(e){}
+      assigned=candidates.some(v=>String(v||'').trim().toLowerCase()===wanted);
+    }
+
+    if(assigned) groups.add(String(x.groupCode).trim().toUpperCase());
   });
+
   return [...groups];
 }
 function getAdminCreatedGroups(){

@@ -3293,6 +3293,13 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer .qtext{color:#72ff8b!important}
 .substitution-q.accepted-offer small{color:#fff!important}
 </style><!-- Guard Trainer v831: isolated member delete, based directly on v820. -->
+
+<style id="gt-member-list-clean-v832">
+.member-new-badge,.member-status-new,.new-member-badge,.status-new,.badge-new,
+.member-row .new-badge,.member-list .new-badge,[data-member-new-badge]{
+  display:none!important;
+}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -10103,6 +10110,58 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+
+<script id="gt-member-delete-ui-v832">
+(function(){
+  function ok(){return (typeof isAdmin==='function'&&isAdmin())||(typeof isHeadTrainer==='function'&&isHeadTrainer());}
+  function apply(){
+    document.querySelectorAll('button,[role="button"]').forEach(b=>{
+      const t=(b.textContent||'').trim().toLowerCase();
+      if(t!=='vymazať člena' && t!=='vymazat člena') return;
+      b.style.display=ok()?'':'none';
+    });
+  }
+  document.addEventListener('DOMContentLoaded',apply);
+  setInterval(apply,1000);
+})();
+</script>
+
+<style id="gt-group-trainers-v832">
+.gt-group-trainers-v832{white-space:normal!important;line-height:1.2!important}
+</style>
+<script id="gt-group-trainers-v832-script">
+(function(){
+  function surname(v){
+    const x=String(v||'').trim().replace(/\s+/g,' ');
+    return x?x.split(' ').pop():'';
+  }
+  function getNames(code,fallback){
+    const wanted=String(code||'').trim().toUpperCase(), out=[];
+    try{
+      const profiles=typeof getTestTrainerProfiles==='function'?getTestTrainerProfiles():[];
+      (profiles||[]).forEach(p=>{
+        const groups=Array.isArray(p.groups)?p.groups:[];
+        if(!groups.some(g=>String(g||'').trim().toUpperCase()===wanted)) return;
+        const n=surname(p.surname||p.lastName||p.name||p.fullName||p.displayName);
+        if(n&&!out.includes(n)) out.push(n);
+      });
+    }catch(e){}
+    const fb=surname(fallback);
+    if(fb&&!out.includes(fb)) out.push(fb);
+    return out.join(', ');
+  }
+  function apply(){
+    document.querySelectorAll('[data-group-code]').forEach(card=>{
+      const nodes=card.querySelectorAll('.trainer-name,.training-trainer,.trainer,[data-trainer-label]');
+      if(!nodes.length) return;
+      const text=getNames(card.getAttribute('data-group-code'),card.getAttribute('data-trainer')||'');
+      if(text) nodes.forEach(n=>{n.textContent=text;n.classList.add('gt-group-trainers-v832');});
+    });
+  }
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(apply,100));
+  setInterval(apply,1200);
+})();
+</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

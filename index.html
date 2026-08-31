@@ -4235,75 +4235,37 @@ window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
 
 function openHomeTodayTraining(g){
   if(!isAdmin() && !isHeadTrainer()){
-    const p=getCurrentTestTrainerProfile();
-    const myGroups=new Set((p?.groups||[]).map(x=>String(x).trim().toUpperCase()));
     const code=String(g?.code||g?.group||'').trim().toUpperCase();
+    const p=getCurrentTestTrainerProfile();
+    const accountId=currentTrainerAccountId();
+    let allowed=false;
+    try{
+      const groups=[];
+      if(Array.isArray(p?.groups)) groups.push(...p.groups);
+      const real=Array.isArray(trainersData) ? trainersData.find(t=>Number(t.id)===Number(accountId)) : null;
+      if(Array.isArray(real?.groups)) groups.push(...real.groups);
+      allowed=groups.map(x=>String(x).trim().toUpperCase()).includes(code);
+    }catch(e){}
     const today=appToday().iso;
     const wantedTime=String(g?.time||'').trim();
-    const acceptedSubstitution=hasAcceptedSubstitutionAccess(code,today,wantedTime);
-
-    let directAssignment=false;
-    try{
-      const myId=currentTrainerAccountId();
-      const norm=s=>String(s||'')
-        .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-        .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-      const my=norm(getCurrentTrainerDisplayName());
-      const mySurname=my.split(' ').filter(Boolean).pop();
-      const displayedTrainer=norm(g?.trainer||'');
-      const displayedParts=displayedTrainer.split(' ').filter(Boolean);
-
-      // Najsilnejší fallback: Home karta už obsahuje meno/priezvisko
-      // trénera, ktorému bol tento konkrétny tréning pridelený.
-      if(displayedTrainer && (
-        displayedTrainer===my ||
-        (!!mySurname && displayedParts.includes(mySurname))
-      )){
-        directAssignment=true;
-      }
-      const myName=getCurrentTrainerDisplayName();
-
-      // Kontroluj priamo uložený rozvrh pre dnešný deň. Toto je zámerne
-      // nezávislé od toho, či sa v profile trénera stihla zosynchronizovať
-      // skupina alebo či scheduleItemsForDate() zobrazuje iba priezvisko.
-      directAssignment=getSavedSchedules().some(x=>{
-        const dow=(new Date(today+'T12:00:00').getDay()+6)%7;
-        if(scheduleDayIndex(x.day)!==dow) return false;
-        const start=x.startDate||x.date||null;
-        if(start && today<start) return false;
-        if(x.until && today>x.until) return false;
-        if(String(x.groupCode||'').trim().toUpperCase()!==code) return false;
-        const xtime=`${x.from} – ${x.to}`;
-        if(wantedTime && xtime!==wantedTime) return false;
-
-        const ids=Array.isArray(x.trainerIds)?x.trainerIds.map(Number):[];
-        if(x.trainerId!=null) ids.push(Number(x.trainerId));
-        if(myId!=null && ids.includes(Number(myId))) return true;
-
-        const names=[];
-        if(Array.isArray(x.trainers)) names.push(...x.trainers);
-        if(x.trainer) names.push(x.trainer);
-        return names.some(v=>{
-          const n=norm(v);
-          if(!n) return false;
-          const parts=n.split(' ').filter(Boolean);
-          return n===my || (!!mySurname && parts.includes(mySurname));
+    const substitution=hasAcceptedSubstitutionAccess(code,today,wantedTime);
+    if(!allowed && !substitution){
+      // Pri priamom pridelení konkrétneho tréningu povoľ otvorenie aj bez skupiny v profile.
+      try{
+        const myId=accountId;
+        const my=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+        const surname=my.split(/\s+/).pop();
+        allowed=getSavedSchedules().some(x=>{
+          if(String(x?.groupCode||'').trim().toUpperCase()!==code) return false;
+          const xt=`${x?.from||''} – ${x?.to||''}`;
+          if(wantedTime && xt!==wantedTime) return false;
+          const ids=Array.isArray(x?.trainerIds)?x.trainerIds.map(Number):[]; if(x?.trainerId!=null) ids.push(Number(x.trainerId));
+          if(myId!=null && ids.includes(Number(myId))) return true;
+          return [x?.trainer,...(Array.isArray(x?.trainers)?x.trainers:[])].some(v=>{ const n=String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); return n===my || (!!surname && n.split(/\s+/).includes(surname)); });
         });
-      });
-    }catch(e){ directAssignment=false; }
-
-    if(code && myGroups.has(code)){
-      // Tréner má skupinu pridelenú.
-    }else if(directAssignment){
-      // Tréner je priamo pridelený na tento konkrétny dnešný tréning.
-    }else if(acceptedSubstitution){
-      // PRIJATÝ ZÁSTUP: dočasný prístup.
-    }else if(trainerOwnsTraining(g)){
-      // Skupina je pridelená trénerovi v jeho profile – môže ju otvoriť.
-    }else{
-      toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
-      return false;
+      }catch(e){}
     }
+    if(!allowed){ toast('Tento tréning/skupina nepatrí tomuto trénerovi.'); return false; }
   }
   // HARD SEPARATION: Home has its own entry context. It must never read the
   // last date selected in Calendar, even if the Calendar was opened moments ago.
@@ -4639,20 +4601,14 @@ function scheduleDayIndex(day){
   return ['Pondelok','Utorok','Streda','Štvrtok','Piatok','Sobota','Nedeľa'].indexOf(day);
 }
 
-function displayTrainerSurnamesForGroup(x){
+function displayTrainerNamesForGroup(x){
   const out=[];
-  const add=v=>{
-    const raw=String(v||'').trim().replace(/\s+/g,' ');
-    if(!raw)return;
-    const surname=raw.split(' ').pop();
-    if(surname && !out.some(n=>n.toLocaleLowerCase('sk-SK')===surname.toLocaleLowerCase('sk-SK'))) out.push(surname);
-  };
+  const add=v=>{ const raw=String(v||'').trim().replace(/\s+/g,' '); if(raw&&!out.some(n=>n.toLocaleLowerCase('sk-SK')===raw.toLocaleLowerCase('sk-SK'))) out.push(raw); };
   try{
     const ids=Array.isArray(x.trainerIds)?x.trainerIds:[];
     ids.forEach(id=>{
-      const t=(typeof trainersData!=='undefined'&&Array.isArray(trainersData))
-        ? trainersData.find(z=>Number(z.id)===Number(id)) : null;
-      if(t) add(t.surname||t.lastName||t.name||t.fullName||t.displayName);
+      const tr=(typeof trainersData!=='undefined'&&Array.isArray(trainersData)) ? trainersData.find(z=>Number(z.id)===Number(id)) : null;
+      if(tr) add(tr.full||tr.fullName||tr.display_name||tr.displayName||[tr.name,tr.surname||tr.lastName].filter(Boolean).join(' '));
     });
   }catch(e){}
   if(Array.isArray(x.trainers)) x.trainers.forEach(add);
@@ -4677,7 +4633,7 @@ function scheduleItemsForDate(iso){
       code:x.groupCode||'',
       name:x.name,
       time:`${x.from} – ${x.to}`,
-      trainer:displayTrainerSurnamesForGroup(x),
+      trainer:displayTrainerNamesForGroup(x),
       location:x.location||'',
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),

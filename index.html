@@ -3394,12 +3394,18 @@ html,body{color-scheme:dark!important;}
  }
  button.addEventListener('click',login);
  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});
- // Pri otvorení aplikácie vždy zobraz prihlasovaciu obrazovku.
- // Neobchádzaj ju podľa starého localStorage flagu.
+ // Prihlásenie si aplikácia pamätá. Heslo sa nikdy neukladá.
+ // Po obnovení stránky sa použije iba uložený účet/rola.
  try{
-   localStorage.removeItem(KEY);
-   localStorage.removeItem('gt-simple-login-account');
- }catch(e){}
+   const saved=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+   if(saved && (saved.role || saved.trainer_id!=null)){
+     openApp(saved);
+   }else{
+     overlay.style.display='flex';
+   }
+ }catch(e){
+   overlay.style.display='flex';
+ }
 })();
 </script>
 
@@ -6313,6 +6319,49 @@ function setUserRole(role){
   setTimeout(()=>renderMore(),250);
 }
 function isHeadTrainer(){ return activeUserRole==='head'; }
+
+function logoutGuardTrainer(){
+  try{
+    // Clear only authentication/session state. Club data, trainers, members,
+    // schedules and billing remain untouched.
+    localStorage.removeItem('gt-simple-login-account');
+    localStorage.removeItem('gt-simple-login-step1');
+    localStorage.removeItem('gt-current-trainer-id');
+    localStorage.removeItem('gt-current-trainer-snapshot');
+    localStorage.removeItem('gt-user-role');
+    localStorage.removeItem('gt-is-admin');
+    localStorage.removeItem('gt-admin-testing');
+    localStorage.removeItem('gt-test-trainer');
+    localStorage.removeItem('gt-head-trainer-access');
+    localStorage.removeItem('gt-auth-initialized');
+    activeUserRole='trainer';
+    isAdminUser=false;
+    window.GT_TEST_ROLE=null;
+  }catch(e){ console.warn('Odhlásenie:',e); }
+
+  // Restore the login screen without reloading the page.
+  try{
+    const simple=document.getElementById('gtSimpleLoginStep1');
+    const input=document.getElementById('gtSimpleLoginPassword');
+    const err=document.getElementById('gtSimpleLoginError');
+    if(err){ err.textContent='Nesprávne heslo.'; err.style.display='none'; }
+    if(input) input.value='';
+    if(simple){
+      simple.style.display='flex';
+      simple.style.visibility='visible';
+      simple.style.opacity='1';
+      simple.style.zIndex='2147483647';
+    }
+    const oldLogin=document.getElementById('gtLoginOverlayV329');
+    if(oldLogin) oldLogin.style.display='none';
+    document.body.classList.remove('gtAppMode','head-readonly','gtLoginMode');
+    try{ history.replaceState({gtRoute:'login'},'',location.pathname+'#login'); }catch(e){}
+    try{ window.scrollTo(0,0); }catch(e){}
+    if(input) setTimeout(()=>{try{input.focus()}catch(e){}},50);
+  }catch(e){ console.warn('Zobrazenie prihlasenia po odhlásení:',e); }
+  return false;
+}
+window.logoutGuardTrainer=logoutGuardTrainer;
 function openAdminMode(){ setUserRole('admin'); }
 function openHeadTrainerMode(){ setUserRole('head'); }
 function openTrainerMode(){ setUserRole('trainer'); }
@@ -6635,8 +6684,8 @@ function renderMore(){
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
        <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
-<button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
-
+       <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
+       <button type="button" class="more-menu-item" onclick="return logoutGuardTrainer()">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>
      </div>
    </main>
    <nav class="bottom">
@@ -11588,17 +11637,33 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     try{history.replaceState({gtRoute:'home'},'',location.pathname+'#home')}catch(e){}
   }
   function init(){
-    // skry login overlay hneď
     var o=document.getElementById('gtLoginOverlayV329');
     if(o){ o.style.display='none'; o.classList.remove('gt-show'); }
+    var saved=null;
+    try{ saved=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
+    var hasSession=!!(saved && (saved.role || saved.trainer_id!=null));
     var v=document.getElementById('gtSplashExactVideo');
-    if(v){
-      v.addEventListener('ended', showApp, {once:true});
-      // fallback ak video nenabehne
-      setTimeout(showApp, 2800);
-      try{ v.playbackRate=1.8; v.play(); }catch(e){}
-    } else {
-      setTimeout(showApp, 800);
+    if(hasSession){
+      if(v){
+        v.addEventListener('ended', showApp, {once:true});
+        setTimeout(showApp, 2800);
+        try{ v.playbackRate=1.8; v.play(); }catch(e){}
+      } else {
+        setTimeout(showApp, 300);
+      }
+    }else{
+      // No remembered session: the simple login screen is the only screen
+      // that should be usable.
+      if(v){
+        try{ v.pause(); }catch(e){}
+        v.style.display='none';
+      }
+      var simple=document.getElementById('gtSimpleLoginStep1');
+      if(simple){
+        simple.style.display='flex';
+        simple.style.visibility='visible';
+        simple.style.opacity='1';
+      }
     }
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init); else init();

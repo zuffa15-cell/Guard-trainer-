@@ -7368,16 +7368,17 @@ function attendance(){
       const wantedGroup=String(attendanceState.group||'').toUpperCase();
       const wantedTime=String(attendanceState.trainingTime||'');
       const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-      const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
+      const own=(typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
         String(x.code||'').toUpperCase()===wantedGroup &&
         (!wantedTime || String(x.time||'')===wantedTime) &&
         trainerOwnsTraining(x)
       );
-      if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
+      if(!own && !acceptedSubstitution){
+        toast('Tento tréning patrí inému trénerovi.');
+        return;
+      }
     }
   }
-
-  // Jednorazové oprávnenie z Domova je spotrebované až po úspešnom vstupe.
   window.__gtHomeTrainingAuthorized=false;
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -11109,6 +11110,7 @@ function openGroup(code,name,time='',source='calendar'){
   const fromHome = String(source||'').toLowerCase()==='home';
   window.__attendanceOpenedFromCalendar = !fromHome;
   window.__attendanceOpenSource=fromHome?'home':'calendar';
+  window.__gtHomeTrainingAuthorized = !!fromHome;
   // Home cards have already been filtered to the current trainer's groups.
   // Authorize this exact Home click so attendance() cannot reject it because
   // of a stale/mismatched trainerId in the schedule record.

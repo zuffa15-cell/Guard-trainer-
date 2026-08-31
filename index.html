@@ -4144,23 +4144,36 @@ function filterHomeItemsForCurrentRole(items){
     return incoming ? {...g,substitutionActive:false,substitutionLabel:'',substitutionBy:''} : g;
   });
 }
+
+function hasAcceptedSubstitutionAccess(code,date,time=''){
+  try{
+    const me=String(getCurrentTrainerDisplayName()||'').trim();
+    const wantedCode=String(code||'').trim().toUpperCase();
+    const wantedDate=String(date||'');
+    const wantedTime=String(time||'').trim();
+    if(!me || !wantedCode || !wantedDate) return false;
+    return substitutionOffers.some(o=>{
+      if(String(o.acceptedBy||'').trim()!==me) return false;
+      if(String(o.date||'')!==wantedDate) return false;
+      if(String(o.code||'').trim().toUpperCase()!==wantedCode) return false;
+      return !wantedTime || !String(o.time||'').trim() || String(o.time||'').trim()===wantedTime;
+    });
+  }catch(e){ return false; }
+}
+window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
+
 function openHomeTodayTraining(g){
   if(!isAdmin() && !isHeadTrainer()){
     const p=getCurrentTestTrainerProfile();
     const myGroups=new Set((p?.groups||[]).map(x=>String(x).toUpperCase()));
     const code=String(g?.code||g?.group||'').toUpperCase();
     const today=appToday().iso;
-    const me=getCurrentTrainerDisplayName();
-    const acceptedSubstitution=substitutionOffers.some(o=>
-      o.acceptedBy===me &&
-      String(o.date)===today &&
-      String(o.code||'').toUpperCase()===code &&
-      (!o.time || String(o.time||'')===String(g?.time||''))
-    );
+    const acceptedSubstitution=hasAcceptedSubstitutionAccess(code,today,String(g?.time||''));
     if(code && myGroups.has(code)){
-      // Assigned group.
+      // Tréner má skupinu pridelenú.
     }else if(acceptedSubstitution){
-      // Accepted substitution grants temporary access to this exact training.
+      // PRIJATÝ ZÁSTUP: dočasný prístup k tomuto konkrétnemu tréningu,
+      // aj keď skupina nie je v profile trénera.
     }else if(!trainerOwnsTraining(g)){
       toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
       return false;
@@ -4579,13 +4592,7 @@ function dayRows(){
     const testAllowed = typeof getCurrentTestTrainerGroupCodes==='function' ? getCurrentTestTrainerGroupCodes() : null;
     const trainerGroups = testAllowed instanceof Set ? testAllowed : new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
     const trainerAssigned=isAdmin() || isHeadTrainer() || trainerGroups.has(String(g.code||'').trim().toUpperCase());
-    const me=getCurrentTrainerDisplayName();
-    const acceptedSubstitution=substitutionOffers.some(o=>
-      o.acceptedBy===me &&
-      String(o.date)===String(dateLabel) &&
-      String(o.code||'').toUpperCase()===String(g.code||'').toUpperCase() &&
-      (!o.time || String(o.time||'')===String(g.time||''))
-    );
+    const acceptedSubstitution=hasAcceptedSubstitutionAccess(g.code,dateLabel,g.time);
     const canOpen=trainerAssigned || acceptedSubstitution;
     const groupInactive=(!isHeadTrainer() && !isAdmin() && !canOpen);
     return `<article class="training ${cancelled?'cancelled-training':''} ${groupInactive?'group-inactive':''}" data-group-code="${g.code}" data-group-name="${g.name}"
@@ -7214,13 +7221,7 @@ function attendance(){
     const wantedDate=attendanceState.date||appToday().iso;
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
-    const me=getCurrentTrainerDisplayName();
-    const acceptedSubstitution=substitutionOffers.some(o=>
-      o.acceptedBy===me &&
-      String(o.date)===String(wantedDate) &&
-      String(o.code||'').toUpperCase()===wantedGroup &&
-      (!wantedTime || !o.time || String(o.time||'')===wantedTime)
-    );
+    const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
     const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
       String(x.code||'').toUpperCase()===wantedGroup &&
       (!wantedTime || String(x.time||'')===wantedTime) &&

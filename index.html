@@ -147,7 +147,10 @@ function initCloudSync(){
         }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
-        try{if(typeof renderHome==='function') renderHome();}catch(e){}
+        try{
+  const attOpen=!!document.querySelector('.attendance-screen,.attendance-page,[data-screen="attendance"]');
+  if(!attOpen && typeof renderHome==='function') renderHome();
+}catch(e){}
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
         // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
         console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
@@ -3289,6 +3292,10 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer{animation:gtSubstitutionGreenPulseV681 1.25s ease-in-out infinite!important;color:#fff!important}
 .substitution-q.accepted-offer .qtext{color:#72ff8b!important}
 .substitution-q.accepted-offer small{color:#fff!important}
+</style><style id="gt-delete-red-v685">
+.admin-delete-billing-btn:active,.admin-delete-billing-btn.gt-delete-pressed{
+background:#dc2626!important;color:#fff!important;border-color:#ff5b5b!important;transform:scale(.97)
+}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -10099,7 +10106,16 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
-</body>
+<script id="gt-delete-button-feedback-v685">
+document.addEventListener('pointerdown',function(e){
+ const b=e.target.closest&&e.target.closest('.admin-delete-billing-btn');
+ if(b)b.classList.add('gt-delete-pressed');
+},true);
+document.addEventListener('pointerup',function(e){
+ const b=e.target.closest&&e.target.closest('.admin-delete-billing-btn');
+ if(b)setTimeout(()=>b.classList.remove('gt-delete-pressed'),500);
+},true);
+</script></body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
 .member-profile-training-count{

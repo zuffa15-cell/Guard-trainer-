@@ -4327,29 +4327,54 @@ function renderHeadHomeList(title,rows,kind){
 
 function headHomeRealPaymentTotals(year,month){
   const result={membership:0,registration:0,membershipAccount:0,registrationAccount:0};
-  const inMonth=(value)=>{
+  const Y=Number(year), M=Number(month);
+  const inMonth=value=>{
     const d=parsePaymentDate(value);
-    return !!(d && d.year===Number(year) && d.month===Number(month));
+    return !!(d && d.year===Y && d.month===M);
   };
   try{
-    // BEZNE PLATBY: výhradne skutočne zapísané platby v dochádzke/profile.
-    // Toto je zdroj pre „ČLENSKÉ“ a „REGISTRAČNÉ“, nie vyúčtovanie tréningov.
-    result.membership=(membershipPayments||[])
-      .filter(p=>inMonth(p.date))
-      .reduce((sum,p)=>sum+Number(p.amount||0),0);
-    result.registration=(registrationPayments||[])
-      .filter(p=>inMonth(p.date))
-      .reduce((sum,p)=>sum+Number(p.amount||0),0);
+    /*
+      DOMOV HLAVNÉHO TRÉNERA = údaje z DOCHÁDZKY.
+      Nepoužívame globálne membershipPayments/registrationPayments, pretože
+      tie obsahujú aj staré/historické evidenčné zápisy a pri testovaní mohli
+      nafúknuť sumy (napr. 270/330 €).
 
-    // PLATBY NA ÚČET: samostatná evidencia člena. Nikdy ich nepripočítavaj
-    // k bežným platbám.
-    (membersData||[]).forEach(m=>{
-      ensureMemberAccountHistory(m).forEach(p=>{
-        if(!inMonth(p.date)) return;
-        const amount=Number(p.amount||0);
-        if(amount<=0) return;
-        if(p.type==='membership') result.membershipAccount+=amount;
-        if(p.type==='registration') result.registrationAccount+=amount;
+      Normálne členské a registračné: berieme z paymentSnapshot uloženého
+      priamo pri konkrétnej dochádzke/vyúčtovaní tréningu.
+      „NA ÚČET“: berieme z údajov na konkrétnej uloženej dochádzke.
+    */
+    const seenBilling=new Set();
+    (monthlyBillingRecords||[]).forEach(r=>{
+      if(!r || r.cancelled || r.substituteReference) return;
+      const d=parsePaymentDate(r.date);
+      if(!d || d.year!==Y || d.month!==M) return;
+      const uniqueKey=String(r.key||`${r.date}|${r.group||''}|${r.trainer||''}`);
+      if(seenBilling.has(uniqueKey)) return;
+      seenBilling.add(uniqueKey);
+      if(Array.isArray(r.paymentSnapshot)){
+        r.paymentSnapshot.forEach(p=>{
+          result.membership += Number(p.membership||0);
+          result.registration += Number(p.registration||0);
+        });
+      }
+    });
+
+    // Účetné platby sú uložené v dochádzke ako konkrétna suma + dátum.
+    Object.keys(trainingAttendanceByGroup||{}).forEach(key=>{
+      const parts=String(key).split('|');
+      const date=parts[0];
+      const d=parsePaymentDate(date);
+      if(!d || d.year!==Y || d.month!==M) return;
+      const rows=trainingAttendanceByGroup[key];
+      if(!rows || typeof rows!=='object') return;
+      Object.keys(rows).forEach(memberKey=>{
+        const row=rows[memberKey]||{};
+        const md=row.membershipAccountDate||date;
+        const rd=row.registrationAccountDate||date;
+        if(Number(row.membershipAccountAmount||0)>0 && inMonth(md))
+          result.membershipAccount += Number(row.membershipAccountAmount||0);
+        if(Number(row.registrationAccountAmount||0)>0 && inMonth(rd))
+          result.registrationAccount += Number(row.registrationAccountAmount||0);
       });
     });
   }catch(e){ console.warn('headHomeRealPaymentTotals',e); }

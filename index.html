@@ -3308,29 +3308,48 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 })();
 </script>
 
-<script id="gt-all-group-trainers-v816">
+<style id="gt-two-trainers-same-group-v817">
+.gt-group-trainer-names-v817{white-space:normal!important;line-height:1.2!important}
+</style>
+<script id="gt-two-trainers-same-group-v817">
 (function(){
-  window.gtAllAssignedTrainerNames=function(groupCode, fallback){
-    const code=String(groupCode||'').trim().toUpperCase();
-    const out=[];
+  function namesFor(code){
+    const wanted=String(code||'').trim().toUpperCase();
+    const names=[];
     try{
-      const profiles=(typeof getTestTrainerProfiles==='function') ? getTestTrainerProfiles() : [];
+      const profiles=typeof getTestTrainerProfiles==='function'?getTestTrainerProfiles():[];
       profiles.forEach(p=>{
         const groups=Array.isArray(p.groups)?p.groups:[];
-        const has=groups.some(g=>String(g||'').trim().toUpperCase()===code);
-        const name=String(p.name||p.fullName||p.displayName||'').trim();
-        if(has && name && !out.includes(name)) out.push(name);
+        if(!groups.some(g=>String(g||'').trim().toUpperCase()===wanted)) return;
+        const n=String(p.name||p.fullName||p.displayName||'').trim();
+        if(n&&!names.includes(n)) names.push(n);
       });
     }catch(e){}
-    const fb=String(fallback||'').trim();
-    if(fb && !out.includes(fb)) out.push(fb);
-    return out;
-  };
+    return names;
+  }
+  function apply(){
+    try{
+      document.querySelectorAll('[data-group-code]').forEach(card=>{
+        const code=card.getAttribute('data-group-code');
+        const names=namesFor(code);
+        if(names.length<2) return;
+        const candidates=card.querySelectorAll('.trainer-name,.training-trainer,.trainer,[data-trainer-label]');
+        candidates.forEach(el=>{
+          if(!el.dataset.gt817Done){
+            el.textContent=names.join(', ');
+            el.classList.add('gt-group-trainer-names-v817');
+            el.dataset.gt817Done='1';
+          }
+        });
+      });
+    }catch(e){}
+  }
+  window.gtShowAllGroupTrainersV817=apply;
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(apply,200));
+  setInterval(apply,1200);
 })();
 </script>
-<style id="gt-all-group-trainers-css-v816">
-.trainer-name,.training-trainer,.trainer,[data-trainer-label]{white-space:normal;line-height:1.25}
-</style></head>
+</head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
@@ -10140,28 +10159,6 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
-
-<script id="gt-all-group-trainers-postrender-v816">
-(function(){
-  function apply(){
-    try{
-      const root=document;
-      const candidates=root.querySelectorAll('[data-group-code], [data-group], .training-card, .schedule-card');
-      candidates.forEach(card=>{
-        const code=card.getAttribute('data-group-code')||card.getAttribute('data-group')||'';
-        if(!code) return;
-        const fallback=(card.getAttribute('data-trainer')||'').trim();
-        const names=window.gtAllAssignedTrainerNames(code,fallback);
-        if(!names.length) return;
-        const nodes=card.querySelectorAll('[data-trainer-label], .trainer-name, .training-trainer, .trainer');
-        nodes.forEach(n=>{ n.textContent=names.join(', '); });
-      });
-    }catch(e){}
-  }
-  window.gtApplyAllGroupTrainers=apply;
-  document.addEventListener('DOMContentLoaded',apply);
-})();
-</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

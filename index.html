@@ -318,6 +318,17 @@ body{overflow-x:hidden}
 .q strong{font-size:19px;font-weight:700}
 .q .go{font-size:23px;color:var(--gold);text-align:right}
 .q.red{color:#ff222b}.q.blue{color:#2487e9}.q.gold{color:var(--gold)}.q.green{color:#57c747}
+/* Dnešné narodeniny: pri aspoň jednom narodeninovom členovi bliká celý riadok na zlato. */
+.q.birthday-today{
+  color:var(--gold);
+  border-color:var(--gold);
+  animation:birthdayGoldBlink 1.15s ease-in-out infinite;
+}
+.q.birthday-today .qicon,.q.birthday-today .qtext,.q.birthday-today strong,.q.birthday-today .go{color:var(--gold);}
+@keyframes birthdayGoldBlink{
+  0%,100%{box-shadow:0 0 0 rgba(255,199,44,0),inset 0 1px 0 rgba(255,255,255,.04);background:rgba(7,7,7,.94);}
+  50%{box-shadow:0 0 14px rgba(255,199,44,.72),inset 0 0 18px rgba(255,199,44,.20);background:rgba(72,52,5,.48);}
+}
 
 .actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
 .action{
@@ -3551,7 +3562,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
     <button type="button" class="q gold" onclick="showQuickMembers('debt')">
       <span class="qicon">💰</span><span class="qtext">Odložené platby (dlžoby)</span><strong id="quickDebtCount">0</strong><span class="go">›</span>
     </button>
-    <button type="button" class="q green" onclick="showQuickMembers('birthday')">
+    <button type="button" id="quickBirthdayRow" class="q green" onclick="showQuickMembers('birthday')">
       <span class="qicon">🎁</span><span class="qtext">Dnešné narodeniny</span><strong id="quickBirthdayCount">0</strong><span class="go">›</span>
     </button>
   </section>
@@ -3848,6 +3859,13 @@ function acceptSubstitution(id){
  toast('Zástup prijatý – ponúkol: '+o.from+' • prijal: '+o.acceptedBy);
 }
 
+function updateBirthdayQuickBlink(){
+ const row=document.getElementById('quickBirthdayRow');
+ const count=document.getElementById('quickBirthdayCount');
+ if(!row||!count)return;
+ const n=Number(String(count.textContent||'0').replace(/[^0-9-]/g,''))||0;
+ row.classList.toggle('birthday-today',n>0);
+}
 function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
@@ -4336,57 +4354,55 @@ function renderHeadHomeList(title,rows,kind){
 
 function getHeadHomeAttendancePaymentTotals(month,year){
   const out={membership:0,registration:0,membershipAccount:0,registrationAccount:0};
+  const targetMonth=Number(month), targetYear=Number(year);
+  const inMonth=(value)=>{
+    const d=parsePaymentDate(value);
+    return !!d && d.month===targetMonth && d.year===targetYear;
+  };
   try{
-    // Normal membership/registration = exactly the sums saved with each
-    // attendance billing record. Do not read member profile totals here.
-    const rows=(monthlyBillingRecords||[]).filter(r=>{
-      const d=parsePaymentDate(r?.date);
-      return d&&d.month===Number(month)&&d.year===Number(year)
-        && !r.cancelled && !r.substituteReference;
+    /*
+      The home screen must show the real payments recorded in attendance.
+      Normal payments live in membershipPayments / registrationPayments.
+      "NA ÚČET" payments are deliberately stored separately in each member's
+      accountPaymentHistory. Never derive one bucket from the other and never
+      use billingSum, because that can contain an old snapshot of the row.
+    */
+    const normalMembershipSeen=new Set();
+    (membershipPayments||[]).forEach(p=>{
+      const amount=Number(p.amount||30);
+      if(amount<=0 || !inMonth(p.date)) return;
+      const key=`${p.memberId}|${p.period||''}|${p.paidGroup||''}|${p.date}|${amount}`;
+      if(normalMembershipSeen.has(key)) return;
+      normalMembershipSeen.add(key);
+      out.membership+=amount;
     });
 
-    // A billing key identifies one trainer's attendance for one date/group.
-    // Keep only the latest saved record for that exact attendance.
-    const latest=new Map();
-    rows.forEach(r=>{
-      const d=parsePaymentDate(r.date);
-      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-      const trainer=String(r.trainer||r.name||'').trim().toUpperCase();
-      const group=String(r.group||'').trim().toUpperCase();
-      const key=`${trainer}|${dk}|${group}`;
-      const old=latest.get(key);
-      const stamp=Number(r.savedAt||r.updatedAt||r.createdAt||0);
-      const oldStamp=Number(old?.savedAt||old?.updatedAt||old?.createdAt||0);
-      if(!old || stamp>=oldStamp) latest.set(key,r);
+    const normalRegistrationSeen=new Set();
+    (registrationPayments||[]).forEach(p=>{
+      const amount=Number(p.amount||30);
+      if(amount<=0 || !inMonth(p.date)) return;
+      const key=`${p.memberId}|${p.paidGroup||''}|${p.date}|${amount}`;
+      if(normalRegistrationSeen.has(key)) return;
+      normalRegistrationSeen.add(key);
+      out.registration+=amount;
     });
 
-    latest.forEach(r=>{
-      // These fields are already calculated by the attendance screen and
-      // intentionally contain only normal (cash/regular) payments.
-      out.membership+=Number(r.membershipSum||0);
-      out.registration+=Number(r.registrationSum||0);
-    });
-
-    // "NA ÚČET" is a separate bucket. It is written when the ACCOUNT
-    // payment is made in Dochádzka. Deduplicate identical history entries.
-    const seen=new Set();
+    const accountSeen=new Set();
     (membersData||[]).forEach(m=>{
       try{
-        ensureMemberAccountHistory(m).forEach(p=>{
-          const d=parsePaymentDate(p.date);
-          const amount=Number(p.amount||0);
-          if(!d||d.month!==Number(month)||d.year!==Number(year)||amount<=0)return;
-          const type=String(p.type||'');
-          if(type!=='membership' && type!=='registration')return;
+        const history=ensureMemberAccountHistory(m)||[];
+        history.forEach(p=>{
+          const amount=Number(p.amount||0), type=String(p.type||'');
+          if(amount<=0 || !inMonth(p.date) || (type!=='membership' && type!=='registration')) return;
           const key=`${m.id}|${type}|${p.date}|${amount}`;
-          if(seen.has(key))return;
-          seen.add(key);
+          if(accountSeen.has(key)) return;
+          accountSeen.add(key);
           if(type==='membership') out.membershipAccount+=amount;
           else out.registrationAccount+=amount;
         });
       }catch(e){}
     });
-  }catch(e){console.warn('head home attendance payment totals',e)}
+  }catch(e){ console.warn('head home payment totals',e); }
   return out;
 }
 
@@ -4394,6 +4410,12 @@ function renderHeadHome(){
   const app=document.querySelector('.app'), t=appToday(), now=new Date(), greeting=now.getHours()<12?'DOBRÉ RÁNO':(now.getHours()<18?'DOBRÝ DEŇ':'DOBRÝ VEČER');
   const week=headHomeWeekStart(), days=['PO','UT','ST','ŠT','PI','SO','NE'];
   const active=membersData.length, newMembers=headHomeNewMembers(), noVisit=headHomeNoVisitMembers(), att=headHomeMonthAttendance(), birthdays=headHomeBirthdays();
+  // Platby hlavného trénera sú zdrojované priamo z uložených dochádzok.
+  const headAttendancePayments=getHeadHomeAttendancePaymentTotals(t.month,t.year);
+  const membershipSettledTotal=headAttendancePayments.membership;
+  const registrationSettledTotal=headAttendancePayments.registration;
+  const membershipAccountTotal=headAttendancePayments.membershipAccount;
+  const registrationAccountTotal=headAttendancePayments.registrationAccount;
   const memberCard=`<section class="head-home-card"><div class="head-card-title">👥 ČLENOVIA</div><div class="member-stats"><div class="member-stat" onclick="return nav('members')"><strong>${active}</strong><span>Aktívnych členov</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat new" onclick="renderHeadHomeList('NOVÍ ČLENOVIA – POSLEDNÝCH 30 DNÍ',headHomeNewMembers(),'new')"><strong>${newMembers.length}</strong><span>Noví členovia<br>za posledných 30 dní</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat warning" onclick="renderHeadHomeList('ČLENOVIA BEZ NÁVŠTEVY 30+ DNÍ',headHomeNoVisitMembers(),'old')"><strong>${noVisit.length}</strong><span>Členovia bez návštevy<br>30+ dní</span><small>kliknutím zobraz zoznam</small></div></div></section>`;
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
@@ -4403,6 +4425,7 @@ function renderHeadHome(){
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
+  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
@@ -7786,6 +7809,7 @@ function confirmMembershipAccount(i){
   m.membershipAccountAmount=n; m.membershipAccountDate=attendanceDateKey();
   a.membershipAccountAmount=n; a.membershipAccountDate=attendanceDateKey();
   addMemberAccountHistory(m,'membership',n,attendanceDateKey());
+  saveCurrentTrainingAttendance();
   persistPaymentHistory();
   persistMembersData();
   const modal=document.getElementById('membershipAccountPrompt'); if(modal)modal.remove();
@@ -7808,6 +7832,7 @@ function enterRegistrationAccount(i){
   m.registrationAccountAmount=n; m.registrationAccountDate=attendanceDateKey();
   a.registrationAccountAmount=n; a.registrationAccountDate=attendanceDateKey();
   addMemberAccountHistory(m,'registration',n,attendanceDateKey());
+  saveCurrentTrainingAttendance();
   persistPaymentHistory();
   persistMembersData();
   refreshAttendance(); toast('Registračné na účet klubu – nezapočítava sa do platieb');
@@ -12777,3 +12802,5 @@ body.head-readonly .bottom.head-billing-nav .nav-attendance { display: none !imp
   .photo-btn{left:51px!important;right:auto!important;}
 }
 </style>
+
+<script>setInterval(updateBirthdayQuickBlink, 700);</script>

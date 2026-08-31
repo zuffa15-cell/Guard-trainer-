@@ -4157,11 +4157,27 @@ function filterHomeItemsForCurrentRole(items){
     const allowed=new Set((p?.groups||[]).map(x=>String(x).trim().toUpperCase()).filter(Boolean));
     const iso=appToday().iso;
     const me=getCurrentTrainerDisplayName();
+    const myId=accountId;
     const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
     return (items||[]).filter(g=>{
       const code=String(g?.code||'').trim().toUpperCase();
       const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
-      return allowed.has(code) || incoming;
+
+      // Pri reálnom trénerovi musí fungovať aj priame pridelenie konkrétneho
+      // dnešného tréningu. Doteraz sa v tejto vetve kontrolovali iba skupiny
+      // z profilu, takže ak bol tréner priradený cez trainerId/trainerIds v
+      // kalendári, ale jeho profil ešte nemal skupinu, tréning sa skryl.
+      const schedule=getSavedSchedules().find(x=>{
+        const sameCode=String(x?.groupCode||'').trim().toUpperCase()===code;
+        const sameTime=!g.time || `${x?.from||''} – ${x?.to||''}`===String(g.time||'');
+        if(!sameCode || !sameTime) return false;
+        const ids=Array.isArray(x?.trainerIds)?x.trainerIds.map(Number):[];
+        if(x?.trainerId!=null) ids.push(Number(x.trainerId));
+        if(ids.includes(Number(myId))) return true;
+        return String(x?.trainer||'').trim().toLowerCase()===String(me||'').trim().toLowerCase();
+      });
+
+      return allowed.has(code) || !!schedule || incoming;
     });
   }
   const allowed=getCurrentTestTrainerGroupCodes();

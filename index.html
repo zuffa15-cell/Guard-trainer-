@@ -3279,7 +3279,17 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 </style><style id="gt-substitution-cancel-style">
 .sub-reject{margin-top:8px;width:100%;padding:10px 12px;border:1px solid #e33;border-radius:7px;background:#160606;color:#ff6b6b;font-weight:800;cursor:pointer}
 .sub-reject:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
-</style></head>
+</style>
+<style id="gt-substitution-accepted-blink">
+@keyframes gtSubAcceptedBlink{
+  0%,100%{background:#20b957!important;color:#fff!important;border-color:#59df80!important;box-shadow:0 0 0 0 rgba(32,185,87,0)}
+  50%{background:#72e69a!important;color:#062b12!important;border-color:#b1f4c5!important;box-shadow:0 0 0 5px rgba(32,185,87,.16)}
+}
+.gt-substitution-accepted{
+  animation:gtSubAcceptedBlink 1s ease-in-out infinite!important;
+}
+</style>
+</head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
@@ -10011,6 +10021,8 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+
+
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
@@ -11937,6 +11949,34 @@ setTimeout(set,80);setTimeout(set,300)})();
   }
   document.addEventListener('DOMContentLoaded',fixStats);
   setTimeout(fixStats,300); setTimeout(fixStats,1000);
+})();
+</script>
+<script id="gt-substitution-accepted-ui">
+(function(){
+  function markAcceptedSubstitutions(){
+    try{
+      const offers=Array.isArray(window.substitutionOffers)?window.substitutionOffers:[];
+      const acceptedIds=new Set(offers.filter(o=>{
+        const st=String(o?.status||o?.state||'').toLowerCase();
+        return ['accepted','prijat','prijaté','prijate','accepted_by_trainer'].includes(st);
+      }).map(o=>String(o?.id||o?.offerId||'')));
+      document.querySelectorAll('[data-substitution-id]').forEach(el=>{
+        const id=String(el.getAttribute('data-substitution-id')||'');
+        el.classList.toggle('gt-substitution-accepted',acceptedIds.has(id));
+      });
+      // Fallback for cards/buttons that expose the offer id through an id/data key.
+      document.querySelectorAll('[id*="substitution"],[id*="zastup"],button').forEach(el=>{
+        const txt=(el.textContent||'').toLowerCase();
+        if(!txt.includes('zastup') && !txt.includes('prijat')) return;
+        const id=String(el.dataset?.substitutionId||el.dataset?.offerId||'');
+        if(id && acceptedIds.has(id)) el.classList.add('gt-substitution-accepted');
+      });
+    }catch(e){}
+  }
+  window.markAcceptedSubstitutions=markAcceptedSubstitutions;
+  window.addEventListener('cloud-sync-update',markAcceptedSubstitutions);
+  window.addEventListener('load',()=>setTimeout(markAcceptedSubstitutions,250));
+  setInterval(markAcceptedSubstitutions,1500);
 })();
 </script>
 </body>

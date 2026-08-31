@@ -6785,7 +6785,9 @@ function applyBillingSnapshotToAttendance(){
 }
 
 function attendance(){
-  if(!isAdmin() && !isHeadTrainer()){
+  const cardAuthorized=window.__gtCardAttendanceAuthorized===true;
+
+  if(!cardAuthorized && !isAdmin() && !isHeadTrainer()){
     const accountId=currentTrainerAccountId();
     if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
     const wantedDate=attendanceState.date||appToday().iso;
@@ -6799,6 +6801,8 @@ function attendance(){
     if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
   }
 
+  // Consume only after the attendance screen has been entered.
+  window.__gtCardAttendanceAuthorized=false;
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
   if(window.__attendanceOpenSource==='home' || window.__attendanceHomeDate){
@@ -10307,27 +10311,21 @@ function toast(t){
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),1800);
 }
 function openGroup(code,name,time='',source='calendar'){
-  // Opening attendance normally must not inherit a financial snapshot from
-  // a previously opened billing row.
+  // HOME and CALENDAR must enter attendance through the same path as the
+  // Attendance tab. Do not perform a separate role/owner rejection here.
+  // The old early isHeadTrainer() return was also blocking Admin/Head Trainer
+  // from opening a training from these cards.
+  const fromHome = String(source||'').toLowerCase()==='home';
+  const entry = fromHome ? 'home' : 'calendar';
+
   attendanceState.billingPaymentSnapshot=null;
   attendanceState.billingAttendanceSnapshot=null;
   attendanceState.billingRecordSnapshot=null;
-  if(isHeadTrainer()){
-    toast('Hlavný tréner nemôže zapisovať dochádzku');
-    return false;
-  }
-  // Home -> group must ALWAYS open today's attendance. Calendar -> group
-  // must open the date selected in the calendar. These two entry points are
-  // intentionally independent so a previously selected calendar day cannot
-  // leak into Home.
-  const fromHome = String(source||'').toLowerCase()==='home';
-  window.__attendanceOpenedFromCalendar = !fromHome;
-  window.__attendanceOpenSource=fromHome?'home':'calendar';
+
   const openDate = fromHome
     ? appToday().iso
     : `${selectedCalendarYear}-${String(selectedCalendarMonth+1).padStart(2,'0')}-${String(selectedCalendarDay).padStart(2,'0')}`;
-  // Attendance is only writable for today or a past date. Future calendar
-  // trainings remain visible as schedule information, but cannot open attendance.
+
   const todayIso=appToday().iso;
   if(openDate > todayIso){
     toast('Budúci tréning – dochádzku zatiaľ nie je možné zapisovať');
@@ -10337,14 +10335,24 @@ function openGroup(code,name,time='',source='calendar'){
     toast('Tento tréning je zrušený');
     return false;
   }
+
   saveCurrentTrainingAttendance();
   attendanceState.date=openDate;
-  attendanceState.group=code;
-  attendanceState.name=name;
+  attendanceState.group=String(code||'');
+  attendanceState.name=String(name||'');
   attendanceState.trainingTime=String(time||'');
-  applyTrainingSettingsForAttendance();
+  window.__attendanceOpenedFromCalendar = !fromHome;
+  window.__attendanceOpenSource = entry;
+  window.__attendanceHomeDate = fromHome ? openDate : null;
+
+  // This is the key: Home/Calendar cards are already rendered from the
+  // relevant training list. Enter attendance exactly like the Attendance
+  // tab instead of running a second ownership check.
+  window.__gtCardAttendanceAuthorized=true;
+
   location.hash='attendance';
   attendance();
+  return false;
 }
 function appBack(){
   // Universal one-step back: the top-left arrow follows the real in-app

@@ -3294,19 +3294,11 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer small{color:#fff!important}
 </style><!-- Guard Trainer v831: isolated member delete, based directly on v820. -->
 
-<style id="gt-v836-hide-new-member">
+<style id="gt-v837-hide-new">
 .member-new-badge,.member-status-new,.new-member-badge,.status-new,.badge-new,
 .member-row .new-badge,.member-list .new-badge,[data-member-new-badge]{
 display:none!important;
 }
-</style>
-
-<style id="gt-v836-delete-member-css">
-.gt-v836-delete-member{
-width:100%;margin-top:8px;padding:9px 12px;border-radius:10px;
-border:1px solid #b42318;background:transparent;color:#f04438;font-weight:700;
-}
-.gt-v836-delete-member:active{background:#dc2626;color:#fff;border-color:#dc2626}
 </style>
 </head>
 <body class="gtSplashV323Active">
@@ -4525,6 +4517,28 @@ function getSavedSchedules(){
 function scheduleDayIndex(day){
   return ['Pondelok','Utorok','Streda','Štvrtok','Piatok','Sobota','Nedeľa'].indexOf(day);
 }
+
+function displayTrainerSurnamesForGroup(x){
+  const out=[];
+  const add=v=>{
+    const raw=String(v||'').trim().replace(/\s+/g,' ');
+    if(!raw)return;
+    const surname=raw.split(' ').pop();
+    if(surname && !out.some(n=>n.toLocaleLowerCase('sk-SK')===surname.toLocaleLowerCase('sk-SK'))) out.push(surname);
+  };
+  try{
+    const ids=Array.isArray(x.trainerIds)?x.trainerIds:[];
+    ids.forEach(id=>{
+      const t=(typeof trainersData!=='undefined'&&Array.isArray(trainersData))
+        ? trainersData.find(z=>Number(z.id)===Number(id)) : null;
+      if(t) add(t.surname||t.lastName||t.name||t.fullName||t.displayName);
+    });
+  }catch(e){}
+  if(Array.isArray(x.trainers)) x.trainers.forEach(add);
+  if(!out.length) add(x.trainer);
+  return out.join(', ');
+}
+
 function scheduleItemsForDate(iso){
   const out=[];
   const d=new Date(iso+'T12:00:00');
@@ -4542,7 +4556,7 @@ function scheduleItemsForDate(iso){
       code:x.groupCode||'',
       name:x.name,
       time:`${x.from} – ${x.to}`,
-      trainer:x.trainer||'',
+      trainer:displayTrainerSurnamesForGroup(x),
       location:x.location||'',
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),
@@ -10119,51 +10133,54 @@ html,body{color-scheme:dark!important;}
 </style>
 
 
-<script id="gt-v836-delete-member">
+<script id="gt-v837-delete-member">
 (function(){
-  function allowed(){
-    return (typeof isAdmin==='function' && isAdmin()) ||
-           (typeof isHeadTrainer==='function' && isHeadTrainer());
-  }
-  function persist(){
-    try{ if(typeof saveMembers==='function') return saveMembers(); }catch(e){}
-    try{ if(typeof saveData==='function') return saveData(); }catch(e){}
-    try{ if(typeof saveAllData==='function') return saveAllData(); }catch(e){}
-    try{ if(typeof persistData==='function') return persistData(); }catch(e){}
-    return null;
-  }
-  window.gtDeleteMemberV836=function(id){
-    if(!allowed()) return false;
-    if(typeof membersData==='undefined'||!Array.isArray(membersData)) return false;
-    const sid=String(id);
-    const idx=membersData.findIndex(m=>String(m.id)===sid);
-    if(idx<0) return false;
+  window.deleteMember=function(id){
+    const ok=(typeof isAdmin==='function'&&isAdmin())||
+             (typeof isHeadTrainer==='function'&&isHeadTrainer());
+    if(!ok || typeof membersData==='undefined' || !Array.isArray(membersData)) return false;
+    const idx=membersData.findIndex(m=>String(m.id)===String(id));
+    if(idx<0)return false;
     const m=membersData[idx];
-    if(!confirm('Naozaj vymazať člena '+String(m.surname||m.name||'')+'?')) return false;
+    if(!confirm('Naozaj vymazať člena '+String(m.surname||m.name||'')+'?'))return false;
     membersData.splice(idx,1);
-    persist();
+    if(typeof saveData==='function') saveData();
     if(typeof renderMembers==='function') renderMembers();
     return true;
   };
-  function addDeleteButtons(){
-    if(!allowed()) return;
+})();
+</script>
+
+<style id="gt-v837-delete-style">
+.gt-v837-delete{
+width:100%;margin-top:8px;padding:9px 12px;border-radius:10px;
+border:1px solid #b42318;background:transparent;color:#f04438;font-weight:700;
+}
+.gt-v837-delete:active{background:#dc2626;color:#fff;border-color:#dc2626}
+</style>
+<script id="gt-v837-delete-ui">
+(function(){
+  function allowed(){
+    return (typeof isAdmin==='function'&&isAdmin())||
+           (typeof isHeadTrainer==='function'&&isHeadTrainer());
+  }
+  function add(){
+    if(!allowed())return;
     document.querySelectorAll('[data-member-id]').forEach(card=>{
-      if(card.querySelector('.gt-v836-delete-member')) return;
+      if(card.querySelector('.gt-v837-delete'))return;
       const id=card.getAttribute('data-member-id');
-      if(!id) return;
+      if(!id)return;
       const b=document.createElement('button');
-      b.type='button';
-      b.className='gt-v836-delete-member';
-      b.textContent='VYMAZAŤ ČLENA';
+      b.type='button';b.className='gt-v837-delete';b.textContent='VYMAZAŤ ČLENA';
       b.onclick=function(e){
-        e.preventDefault(); e.stopPropagation();
-        window.gtDeleteMemberV836(id);
+        e.preventDefault();e.stopPropagation();
+        if(typeof window.deleteMember==='function')window.deleteMember(id);
       };
       card.appendChild(b);
     });
   }
-  document.addEventListener('DOMContentLoaded',addDeleteButtons);
-  setInterval(addDeleteButtons,1200);
+  document.addEventListener('DOMContentLoaded',add);
+  setInterval(add,1000);
 })();
 </script>
 </body>

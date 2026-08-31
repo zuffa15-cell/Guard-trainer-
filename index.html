@@ -4394,12 +4394,6 @@ function renderHeadHome(){
   const app=document.querySelector('.app'), t=appToday(), now=new Date(), greeting=now.getHours()<12?'DOBRÉ RÁNO':(now.getHours()<18?'DOBRÝ DEŇ':'DOBRÝ VEČER');
   const week=headHomeWeekStart(), days=['PO','UT','ST','ŠT','PI','SO','NE'];
   const active=membersData.length, newMembers=headHomeNewMembers(), noVisit=headHomeNoVisitMembers(), att=headHomeMonthAttendance(), birthdays=headHomeBirthdays();
-  // Platby hlavného trénera sú zdrojované priamo z uložených dochádzok.
-  const headAttendancePayments=getHeadHomeAttendancePaymentTotals(t.month,t.year);
-  const membershipSettledTotal=headAttendancePayments.membership;
-  const registrationSettledTotal=headAttendancePayments.registration;
-  const membershipAccountTotal=headAttendancePayments.membershipAccount;
-  const registrationAccountTotal=headAttendancePayments.registrationAccount;
   const memberCard=`<section class="head-home-card"><div class="head-card-title">👥 ČLENOVIA</div><div class="member-stats"><div class="member-stat" onclick="return nav('members')"><strong>${active}</strong><span>Aktívnych členov</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat new" onclick="renderHeadHomeList('NOVÍ ČLENOVIA – POSLEDNÝCH 30 DNÍ',headHomeNewMembers(),'new')"><strong>${newMembers.length}</strong><span>Noví členovia<br>za posledných 30 dní</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat warning" onclick="renderHeadHomeList('ČLENOVIA BEZ NÁVŠTEVY 30+ DNÍ',headHomeNoVisitMembers(),'old')"><strong>${noVisit.length}</strong><span>Členovia bez návštevy<br>30+ dní</span><small>kliknutím zobraz zoznam</small></div></div></section>`;
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
@@ -4409,7 +4403,6 @@ function renderHeadHome(){
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
-  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }

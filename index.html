@@ -41,6 +41,27 @@ const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550'
 const originalSetItem = localStorage.setItem.bind(localStorage);
 const originalGetItem = localStorage.getItem.bind(localStorage);
 
+// AUTH/SESSION DATA IS DEVICE-LOCAL and must NEVER be synchronized through
+// the shared club database. Otherwise logging in as Viktor on one device can
+// overwrite the remembered account on another device.
+const GT_LOCAL_AUTH_KEYS = new Set([
+  'gt-simple-login-account',
+  'gt-simple-login-step1',
+  'gt-current-trainer-id',
+  'gt-current-trainer-snapshot',
+  'gt-user-role',
+  'gt-is-admin',
+  'gt-admin-testing',
+  'gt-test-trainer',
+  'gt-head-trainer-access',
+  'gt-auth-initialized',
+  'gt-supabase-access-token',
+  'gt-supabase-refresh-token',
+  'gt-supabase-session-json'
+]);
+function isGTLocalAuthKey(key){ return GT_LOCAL_AUTH_KEYS.has(String(key||'')); }
+
+
 function initCloudSync(){
   if(!db) return;
   
@@ -64,13 +85,14 @@ function initCloudSync(){
     isApplyingRemote = true;
     try {
       SYNC_KEYS.forEach(k=>{
+        if(isGTLocalAuthKey(k)) return;
         if(data[k] && originalGetItem(k) !== data[k]) {
           originalSetItem(k, data[k]);
           changed = true;
         }
       });
       Object.keys(data).forEach(k=>{
-        if(k.startsWith('_')) return;
+        if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -149,6 +171,7 @@ function pushToCloud(force = false){
     if(v) payload[k] = v;
   });
   Object.keys(localStorage).forEach(k=>{
+    if(isGTLocalAuthKey(k)) return;
     if(k.startsWith('gt-') && !payload[k]) {
       const v = originalGetItem(k);
       if(v) payload[k] = v;
@@ -162,7 +185,7 @@ function pushToCloud(force = false){
 localStorage.setItem = function(key, value){
   originalSetItem(key, value);
   if(isApplyingRemote) return; // ignoruj zmeny ktoré prišli z cloudu
-  if(syncEnabled && cloudEnabled && key.startsWith('gt-')){
+  if(syncEnabled && cloudEnabled && key.startsWith('gt-') && !isGTLocalAuthKey(key)){
     clearTimeout(window._cloudPushTimeout);
     const delay = (key==='gt-members-v466' || key==='gt-members') ? 400 : 1500;
     window._cloudPushTimeout = setTimeout(()=>pushToCloud(), delay);
@@ -4008,6 +4031,21 @@ function trainerOwnsTraining(item){
   if(isAdmin() || isHeadTrainer()) return true;
   const myId=currentTrainerAccountId();
   if(myId==null || !item) return false;
+
+  // The trainer's profile assignment is the primary group permission.
+  // Multiple trainers may legitimately be assigned to the same group.
+  // Therefore a training in one of my assigned groups is mine to open,
+  // even when an older schedule row still contains another/legacy trainerId.
+  try{
+    const profile=getCurrentTestTrainerProfile();
+    const myGroups=new Set((profile?.groups||[])
+      .map(x=>String(x).trim().toUpperCase()).filter(Boolean));
+    const code=String(item.groupCode||item.code||item.group||'').trim().toUpperCase();
+    if(code && myGroups.has(code)) return true;
+  }catch(e){}
+
+  // Backward-compatible ownership for schedules that are not represented in
+  // the trainer profile yet: use explicit trainer IDs, then trainer name.
   const ids=Array.isArray(item.trainerIds)?item.trainerIds.map(Number):[];
   if(item.trainerId!=null) ids.push(Number(item.trainerId));
   if(ids.includes(myId)) return true;

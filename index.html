@@ -5685,7 +5685,9 @@ function membershipAccountForPeriod(memberId,period,year=appToday().year){
   const found=candidates.find(x=>Number(membershipPeriodForDate(x.date)||0)===Number(period) && Number(String(x.date).slice(0,4))===Number(year));
   return found || null;
 }
-function membershipPaidForPeriod(member,period){ return !!(member && membershipPaymentForPeriod(member.id,period)); }
+function membershipPaidForPeriod(member,period,year=appToday().year){
+  return !!(member && membershipPaymentForPeriod(member.id,period,year));
+}
 function attendanceDateKey(){
   return attendanceState.date || appToday().iso;
 }
@@ -7722,15 +7724,30 @@ function renderMembershipPaymentCell(m,i){
   const key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
   const draft=attendanceState.membershipDrafts?.[key];
   const here=membershipPaidHereToday(m);
+
   if(memberAccountDateMatches(m,m.membershipAccountDate) && Number(m.membershipAccountAmount||0)>0){
     const cls='pay-btn member-account-on';
     return `<button ${dis} class="${cls}" title="${isAdmin()?'Dlhé podržanie zruší účet':'Kliknutie zruší účet'}" onclick="accountClickGuard()&&clearMemberAccount('membership',${i})" onpointerdown="${isAdmin()?`adminAccountLongPressStart(event,'membership',${i})`:''}" onpointerup="${isAdmin()?'adminAccountLongPressEnd(event)':''}" onpointerleave="${isAdmin()?'adminAccountLongPressEnd(event)':''}">ÚČET<strong>${Number(m.membershipAccountAmount)} €</strong></button>`;
   }
+
   if(draft?.action==='remove') return `<button ${dis} class="pay-btn" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">ČLENSKÉ</button>`;
+
   if(here) return `<button ${dis} class="pay-btn on membership-on" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">ČLENSKÉ<strong>${here} €</strong></button>`;
-  const id=attendanceMemberId(m);
-  const paidAnywhere=membershipPayments.some(p=>p.memberId===id);
-  if(paidAnywhere || memberHasMembership(m)) return `<button ${dis} class="pay-btn membership-paid-elsewhere account-readonly" title="Členské už bolo zaplatené – dvojklik vytvorí evidenčný účet" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">✓</button>`;
+
+  // Dôležité: stav členského sa posudzuje podľa AKTUÁLNEHO polroka.
+  // To, že člen zaplatil 1. polrok, nesmie robiť fajku aj v 2. polroku.
+  // 1. polrok = január–jún, 2. polrok = júl–december.
+  const currentPeriod=currentMembershipPeriod();
+  const currentYear=appToday().year;
+  const paidCurrentPeriod=membershipProfilePaymentForPeriod(m,currentPeriod,currentYear);
+
+  if(paidCurrentPeriod){
+    const amount=Number(paidCurrentPeriod.amount||30);
+    return `<button ${dis} class="pay-btn membership-paid-elsewhere account-readonly" title="Členské za aktuálny polrok už bolo zaplatené – dvojklik vytvorí evidenčný účet" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">✓<strong>${amount} €</strong></button>`;
+  }
+
+  // Predchádzajúce polročné členské nie je platba za aktuálny polrok.
+  // Preto musí tréner v aktuálnom polroku vidieť tlačidlo ČLENSKÉ = čaká na úhradu.
   return `<button ${dis} class="pay-btn" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">ČLENSKÉ</button>`;
 }
 function renderRegistrationPaymentCell(m,i){

@@ -3292,49 +3292,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer{animation:gtSubstitutionGreenPulseV681 1.25s ease-in-out infinite!important;color:#fff!important}
 .substitution-q.accepted-offer .qtext{color:#72ff8b!important}
 .substitution-q.accepted-offer small{color:#fff!important}
-</style>
-<style id="gt-hide-new-v830">
-.member-new-badge,.member-status-new,.new-member-badge,.status-new,.badge-new,
-.member-row .new-badge,.member-list .new-badge,[data-member-new-badge]{display:none!important}
-</style>
-
-<style id="gt-group-trainer-surnames-v830">
-.gt-group-trainer-surnames-v830{white-space:normal!important;line-height:1.2!important}
-</style>
-<script id="gt-group-trainer-surnames-v830">
-(function(){
-  function surname(v){
-    const x=String(v||'').trim().replace(/\s+/g,' ');
-    if(!x)return '';
-    return x.split(' ').pop();
-  }
-  function all(code,fallback){
-    const wanted=String(code||'').trim().toUpperCase(), out=[];
-    try{
-      const profiles=typeof getTestTrainerProfiles==='function'?getTestTrainerProfiles():[];
-      (profiles||[]).forEach(p=>{
-        const groups=Array.isArray(p.groups)?p.groups:[];
-        if(!groups.some(g=>String(g||'').trim().toUpperCase()===wanted))return;
-        const n=surname(p.surname||p.lastName||p.name||p.fullName||p.displayName);
-        if(n&&!out.includes(n))out.push(n);
-      });
-    }catch(e){}
-    const fb=surname(fallback);
-    if(fb&&!out.includes(fb))out.push(fb);
-    return out.join(', ');
-  }
-  function apply(){
-    document.querySelectorAll('[data-group-code]').forEach(card=>{
-      const els=card.querySelectorAll('.trainer-name,.training-trainer,.trainer,[data-trainer-label]');
-      if(!els.length)return;
-      const text=all(card.getAttribute('data-group-code'),card.getAttribute('data-trainer')||'');
-      if(text)els.forEach(el=>{el.textContent=text;el.classList.add('gt-group-trainer-surnames-v830');});
-    });
-  }
-  document.addEventListener('DOMContentLoaded',()=>setTimeout(apply,150));
-  setInterval(apply,1200);
-})();
-</script>
+</style><!-- Guard Trainer v831: isolated member delete, based directly on v820. -->
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -10145,47 +10103,6 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
-
-<style id="gt-delete-member-v830">
-.gt-delete-member-v830{width:100%;margin-top:8px;padding:10px 12px;border-radius:10px;
-border:1px solid #b42318;background:transparent;color:#f04438;font-weight:700}
-.gt-delete-member-v830:active{background:#dc2626;color:#fff}
-</style>
-<script id="gt-delete-member-v830-script">
-(function(){
-  function allowed(){
-    return (typeof isAdmin==='function'&&isAdmin()) ||
-           (typeof isHeadTrainer==='function'&&isHeadTrainer());
-  }
-  function remove(id){
-    if(!allowed())return;
-    if(typeof membersData==='undefined'||!Array.isArray(membersData))return;
-    const i=membersData.findIndex(m=>String(m.id)===String(id));
-    if(i<0)return;
-    const m=membersData[i];
-    if(!confirm('Naozaj vymazať člena '+String(m.surname||m.name||'')+'?'))return;
-    membersData.splice(i,1);
-    if(typeof saveMembers==='function')saveMembers();
-    else if(typeof saveAllData==='function')saveAllData();
-    if(typeof renderMembers==='function')renderMembers();
-  }
-  function add(){
-    if(!allowed())return;
-    document.querySelectorAll('[data-member-id]').forEach(card=>{
-      if(card.querySelector('.gt-delete-member-v830'))return;
-      const id=card.getAttribute('data-member-id');
-      if(!id)return;
-      const b=document.createElement('button');
-      b.type='button'; b.className='gt-delete-member-v830';
-      b.textContent='VYMAZAŤ ČLENA';
-      b.onclick=()=>remove(id);
-      card.appendChild(b);
-    });
-  }
-  document.addEventListener('DOMContentLoaded',add);
-  setInterval(add,1200);
-})();
-</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

@@ -35,7 +35,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-members-v466','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members','gt-members-v466','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance','gt-substitution-offers'];
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -137,8 +137,16 @@ function initCloudSync(){
             }
           }
         }catch(e){}
+        try{
+          const rawOffers=originalGetItem('gt-substitution-offers');
+          if(rawOffers){
+            const parsedOffers=JSON.parse(rawOffers);
+            if(Array.isArray(parsedOffers) && typeof substitutionOffers!=='undefined') substitutionOffers=parsedOffers;
+          }
+        }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
+        try{if(typeof renderHome==='function') renderHome();}catch(e){}
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
         // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
         console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
@@ -3268,6 +3276,9 @@ body.gtLoginMode .app{visibility:hidden!important;opacity:0!important;pointer-ev
 body.gtLoginMode #gtSplashV319,
 body.gtLoginMode #gtSplash,
 body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important}
+</style><style id="gt-substitution-cancel-style">
+.sub-reject{margin-top:8px;width:100%;padding:10px 12px;border:1px solid #e33;border-radius:7px;background:#160606;color:#ff6b6b;font-weight:800;cursor:pointer}
+.sub-reject:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -3622,6 +3633,14 @@ function getAdminGroupName(code){
 let MY_TRAINER_GROUPS=[];
 const GROUP_NAMES={A:'A – TOP TÍM',B:'B – NÁBOR BUDOKAN',C:'C – NÁBOR GRUNT',D:'D – DETI','D+':'D+ – TOP DETI'};
 let substitutionOffers = [];
+try{
+  const savedOffers=JSON.parse(localStorage.getItem('gt-substitution-offers')||'null');
+  if(Array.isArray(savedOffers)) substitutionOffers=savedOffers;
+}catch(e){ console.warn('Načítanie ponúk zastupovania sa nepodarilo',e); }
+function persistSubstitutionOffers(){
+  try{ localStorage.setItem('gt-substitution-offers', JSON.stringify(Array.isArray(substitutionOffers)?substitutionOffers:[])); }
+  catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
+}
 const ALL_TRAINERS = ['JÁN NOVÁK','MATEJ KOVÁČ','LUCIA ŠIMKOVÁ','PETER TÓTH','ZUZANA MIHÁLOVÁ'];
 let CURRENT_TRAINER_NAME = 'TRÉNER 1';
 MY_TRAINER_GROUPS=[];
@@ -3686,6 +3705,7 @@ function openSubstitutionOffer(code,name){
      acceptedBy:null,
      status:'ČAKÁ NA PRIJATIE'
    });
+   persistSubstitutionOffers();
    modal.remove();
    updateHomeQuickOverview();
    toast('Ponuka zastupovania odoslaná');
@@ -3721,6 +3741,7 @@ function showSubstitutionOffers(){
    <span>🕐 ${o.time||'—'} &nbsp; 📍 ${o.place||'—'}</span>
    <span>Ponuka pre: ${o.trainers.join(', ')}</span>
    <strong>${o.acceptedBy ? '✓ PRIJAL: '+o.acceptedBy : 'ČAKÁ NA PRIJATIE'}</strong>
+   ${!o.acceptedBy && o.from===getCurrentTrainerDisplayName()?`<button type="button" class="sub-reject" onclick="cancelSubstitution(${o.id})">✕ ZRUŠIŤ PONUKU</button>`:''}
  </div>`).join('');
  modal.innerHTML=`<div class="sub-modal-card">
   <div class="sub-modal-title">ZASTUPOVANIE</div>
@@ -3729,11 +3750,28 @@ function showSubstitutionOffers(){
  </div>`;
  document.body.appendChild(modal);
 }
+function cancelSubstitution(id){
+ const o=substitutionOffers.find(x=>x.id===id);
+ if(!o) return false;
+ if(o.acceptedBy){ toast('Tento zástup už bol prijatý – ponuku nemožno zrušiť.'); return false; }
+ if(o.from!==getCurrentTrainerDisplayName()){ toast('Túto ponuku môže zrušiť iba tréner, ktorý ju vytvoril.'); return false; }
+ substitutionOffers=substitutionOffers.filter(x=>x.id!==id);
+ persistSubstitutionOffers();
+ const modal=document.getElementById('substitutionOffersModal');
+ if(modal) modal.remove();
+ updateHomeQuickOverview();
+ renderHome();
+ toast('Ponuka zastupovania bola zrušená');
+ return false;
+}
+window.cancelSubstitution=cancelSubstitution;
+
 function acceptSubstitution(id){
  const o=substitutionOffers.find(x=>x.id===id);
  if(!o)return;
  o.acceptedBy=getCurrentTrainerDisplayName();
  o.status='PRIJATÉ';
+ persistSubstitutionOffers();
 
  // Create the original trainer's informational zero-value entry immediately.
  // The actual substitute will later save the real billing record.
@@ -8104,6 +8142,17 @@ function normalizeMonthlyBillingRecords(){
   monthlyBillingRecords=Array.from(map.values());
 }
 normalizeMonthlyBillingRecords();
+(function removeErroneousViktorGroupABilling(){
+  try{
+    const marker='gt-migration-v679-viktor-group-a-removed';
+    if(localStorage.getItem(marker)==='1') return;
+    const isViktor=n=>{const x=String(n||'').trim().toUpperCase(); return x==='VIKTOR ŽUFFA'||x==='VIKTOR ZUFFA';};
+    const before=monthlyBillingRecords.length;
+    monthlyBillingRecords=monthlyBillingRecords.filter(r=>!(isViktor(r?.trainer) && String(r?.group||'').trim().toUpperCase()==='A'));
+    localStorage.setItem(marker,'1');
+    if(monthlyBillingRecords.length!==before) persistMonthlyBillingRecords();
+  }catch(e){ console.warn('Migrácia Viktor/A vyúčtovania sa nepodarila',e); }
+})();
 function persistMonthlyBillingRecords(){
   try{
     normalizeMonthlyBillingRecords();

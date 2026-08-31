@@ -3238,6 +3238,9 @@ html,body{color-scheme:dark!important;}
 </style><style id="gt-logout-pressed-style">
 .more-menu-item.gt-logout-button:active,.more-menu-item.gt-logout-button.gt-pressed{background:#20a45a!important;border-color:#20a45a!important;color:#fff!important;transform:scale(.985)}
 .more-menu-item.gt-logout-button:active b,.more-menu-item.gt-logout-button:active small,.more-menu-item.gt-logout-button.gt-pressed b,.more-menu-item.gt-logout-button.gt-pressed small{color:#fff!important}
+</style><style id="gt-login-hard-gate">
+body.gtLoginMode #gtSimpleLoginStep1{display:flex!important;visibility:visible!important;opacity:1!important;z-index:2147483647!important}
+body.gtLoginMode .app{visibility:hidden!important;opacity:0!important;pointer-events:none!important}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -6331,6 +6334,7 @@ function logoutGuardTrainer(btn){
       btn.style.pointerEvents='none';
     }
   }catch(e){}
+
   setTimeout(()=>{
     try{
       [
@@ -6342,14 +6346,15 @@ function logoutGuardTrainer(btn){
       activeUserRole='trainer';
       isAdminUser=false;
       window.GT_TEST_ROLE=null;
-    }catch(e){ console.warn('Odhlásenie:',e); }
-    try{
-      history.replaceState(null,'',location.pathname+location.search);
     }catch(e){}
-    // openApp() removes the login overlay from the DOM. Reload recreates it;
-    // without the saved account the login screen is shown.
-    location.reload();
-  },180);
+
+    // Force a clean application start. A cache-busting query guarantees that
+    // the login gate is evaluated again instead of leaving the current app DOM.
+    try{
+      history.replaceState(null,'',location.pathname+'?gtlogout='+Date.now());
+    }catch(e){}
+    window.location.href=location.pathname+'?gtlogout='+Date.now()+'#login';
+  },220);
   return false;
 }
 window.logoutGuardTrainer=logoutGuardTrainer;
@@ -11633,6 +11638,22 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     var saved=null;
     try{ saved=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
     var hasSession=!!(saved && (saved.role || saved.trainer_id!=null));
+
+    // Hard authentication gate: without a remembered account the application
+    // itself must stay hidden, regardless of any old role/session variables.
+    if(!hasSession){
+      try{
+        ['gt-user-role','gt-is-admin','gt-admin-testing','gt-test-trainer',
+         'gt-current-trainer-id','gt-current-trainer-snapshot',
+         'gt-head-trainer-access','gt-auth-initialized'].forEach(function(k){
+          localStorage.removeItem(k);
+        });
+        if(typeof activeUserRole!=='undefined') activeUserRole='trainer';
+        document.body.classList.remove('gtAppMode','head-readonly');
+        document.body.classList.add('gtLoginMode');
+      }catch(e){}
+    }
+
     var v=document.getElementById('gtSplashExactVideo');
     if(hasSession){
       if(v){

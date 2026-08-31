@@ -3279,6 +3279,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 </style><style id="gt-substitution-cancel-style">
 .sub-reject{margin-top:8px;width:100%;padding:10px 12px;border:1px solid #e33;border-radius:7px;background:#160606;color:#ff6b6b;font-weight:800;cursor:pointer}
 .sub-reject:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
+.gt-sub-clear-btn{border-color:#b51f1f!important;background:#160606!important;color:#ff6b6b!important}.gt-sub-clear-btn:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
 </style><style id="gtSubstitutionAcceptedGreenV681">
 @keyframes gtSubstitutionGreenPulseV681{
 0%,100%{border-color:#35bd4d!important;background:rgba(20,125,45,.16)!important;box-shadow:0 0 0 1px rgba(55,210,85,.28) inset,0 0 5px rgba(55,210,85,.18)}
@@ -3773,6 +3774,28 @@ function cancelSubstitution(id){
  return false;
 }
 window.cancelSubstitution=cancelSubstitution;
+
+function clearTodaySubstitutionTests(){
+ if(!isAdmin()){ toast('Túto akciu môže vykonať iba administrátor.'); return false; }
+ const today=appToday().iso;
+ const todaysOffers=substitutionOffers.filter(o=>String(o.date||'')===String(today));
+ const todayKeys=new Set(todaysOffers.map(o=>`${today}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from||''}`));
+ if(!todaysOffers.length){ toast('Dnes nie sú uložené žiadne zastupovania.'); return false; }
+ if(!confirm(`Vymazať všetky dnešné testovacie zastupovania (${todaysOffers.length})?`)) return false;
+ substitutionOffers=substitutionOffers.filter(o=>String(o.date||'')!==String(today));
+ persistSubstitutionOffers();
+ try{
+   if(Array.isArray(monthlyBillingRecords)){
+     monthlyBillingRecords=monthlyBillingRecords.filter(r=>!(r && r.substituteReference && todayKeys.has(String(r.key||''))));
+     persistMonthlyBillingRecords();
+   }
+ }catch(e){ console.warn('Vyčistenie referencií zastupovania sa nepodarilo',e); }
+ updateHomeQuickOverview();
+ renderMore();
+ toast('Dnešné zastupovania boli vymazané z cloudu.');
+ return false;
+}
+window.clearTodaySubstitutionTests=clearTodaySubstitutionTests;
 
 function acceptSubstitution(id){
  const o=substitutionOffers.find(x=>x.id===id);
@@ -6790,7 +6813,8 @@ function renderMore(){
        <small>Nastavenia a správa aplikácie</small>
      </div>
      ${isAdmin()?`<button class="more-menu-item admin-schedule-btn" onclick="openCreateSchedule()">📅 <span><b>VYTVORIŤ ROZVRH</b><small>Vytvorenie a opakovanie tréningov</small></span>›</button>
-     <button class="more-menu-item admin-schedule-btn" onclick="openScheduleManager()">🗓️ <span><b>SPRAVOVAŤ ROZVRH</b><small>Upraviť alebo vymazať tréning</small></span>›</button>`:''}
+     <button class="more-menu-item admin-schedule-btn" onclick="openScheduleManager()">🗓️ <span><b>SPRAVOVAŤ ROZVRH</b><small>Upraviť alebo vymazať tréning</small></span>›</button>
+     <button type="button" class="more-menu-item gt-sub-clear-btn" onclick="clearTodaySubstitutionTests()">🧹 <span><b>VYMAZAŤ DNEŠNÉ ZASTUPOVANIA</b><small>Vyčistí dnešné testovacie ponuky z cloudu</small></span>›</button>`:''}
      ${isAdmin()||isAdminTesting()?`<button class="more-menu-item admin-schedule-btn" onclick="openRoleTesting()">🧪 <span><b>TESTOVANIE APLIKÁCIE</b><small>Vyskúšať pohľad Admin, Hlavný tréner, Tréner 1 alebo Tréner 2</small></span>›</button>`:''}
      
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}

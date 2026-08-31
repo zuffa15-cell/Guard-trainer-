@@ -4234,96 +4234,15 @@ function hasAcceptedSubstitutionAccess(code,date,time=''){
 window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
 
 function openHomeTodayTraining(g){
-  if(!isAdmin() && !isHeadTrainer()){
-    const code=String(g?.code||g?.group||'').trim().toUpperCase();
-    const today=appToday().iso;
-    const wantedTime=String(g?.time||'').trim();
-    let allowed=false;
-
-    // 1. Skupina pridelená v profile trénera je hlavné oprávnenie.
-    try{
-      const p=getCurrentTestTrainerProfile();
-      const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-      const accountId=currentTrainerAccountId();
-      const groups=[];
-      if(Array.isArray(p?.groups)) groups.push(...p.groups);
-      const real=Array.isArray(trainersData)
-        ? trainersData.find(t=>Number(t.id)===Number(accountId))
-        : null;
-      if(Array.isArray(real?.groups)) groups.push(...real.groups);
-      if(Array.isArray(account?.groups)) groups.push(...account.groups);
-      allowed=groups.map(x=>String(x).trim().toUpperCase()).includes(code);
-    }catch(e){}
-
-    // 2. Ak je na karte uvedené meno/priezvisko aktuálneho trénera,
-    // tento konkrétny tréning je jeho. Nezávisí to od starého trainerId.
-    if(!allowed){
-      try{
-        const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-        const snap=JSON.parse(localStorage.getItem('gt-current-trainer-snapshot')||'null');
-        const accountId=currentTrainerAccountId();
-        const real=Array.isArray(trainersData)
-          ? trainersData.find(t=>Number(t.id)===Number(accountId))
-          : null;
-
-        const norm=s=>String(s||'')
-          .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-          .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-
-        const identities=[
-          account?.display_name, account?.name, account?.full,
-          snap?.display_name, snap?.name, snap?.full,
-          real?.name, real?.full
-        ].map(norm).filter(Boolean);
-
-        const card=norm(g?.trainer||'');
-        const cardParts=card.split(' ').filter(Boolean);
-
-        const identityParts=identities.flatMap(x=>x.split(' ').filter(Boolean));
-        const surnames=identities.map(x=>x.split(' ').filter(Boolean).pop()).filter(Boolean);
-
-        allowed=!!card && (
-          identities.includes(card) ||
-          surnames.some(s=>cardParts.includes(s)) ||
-          cardParts.some(part=>identityParts.includes(part) && part.length>=4)
-        );
-      }catch(e){}
-    }
-
-    // 3. Pri priamom pridelení v rozvrhu kontroluj ID aj meno.
-    if(!allowed){
-      try{
-        const accountId=currentTrainerAccountId();
-        const me=getCurrentTrainerDisplayName();
-        const norm=s=>String(s||'')
-          .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-          .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-        const my=norm(me);
-        const surname=my.split(' ').filter(Boolean).pop();
-
-        allowed=getSavedSchedules().some(x=>{
-          if(String(x?.groupCode||'').trim().toUpperCase()!==code) return false;
-          const xt=`${x?.from||''} – ${x?.to||''}`;
-          if(wantedTime && xt!==wantedTime) return false;
-          const ids=Array.isArray(x?.trainerIds)?x.trainerIds.map(Number):[];
-          if(x?.trainerId!=null) ids.push(Number(x.trainerId));
-          if(accountId!=null && ids.includes(Number(accountId))) return true;
-
-          return [x?.trainer,...(Array.isArray(x?.trainers)?x.trainers:[])].some(v=>{
-            const n=norm(v);
-            const parts=n.split(' ').filter(Boolean);
-            return n===my || (!!surname && parts.includes(surname));
-          });
-        });
-      }catch(e){}
-    }
-
-    if(!allowed){
-      toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
-      return false;
-    }
-  }
-
+  // HOME už zobrazuje trénerovi iba jeho povolené dnešné tréningy.
+  // Preto pri kliknutí na kartu DOMOV NEOPAKUJEME ďalšiu kontrolu podľa
+  // trainerId/mena. Práve táto druhá kontrola spôsobovala hlášku
+  // „Tento tréning/skupina nepatrí tomuto trénerovi“, hoci bola karta
+  // trénerovi správne zobrazená.
+  //
+  // Oprávnenie na DOMOVE je teda:
+  // 1. karta sa trénerovi zobrazila cez filterHomeItemsForCurrentRole()
+  // 2. karta nie je označená ako zastupovaný tréning.
   if(g && g.substitutionInactive){
     toast('Tento tréning je zastupovaný trénerom '+(g.substitutionBy||'iným trénerom')+'.');
     return false;
@@ -4333,7 +4252,9 @@ function openHomeTodayTraining(g){
   window.__attendanceOpenedFromCalendar=false;
   window.__attendanceOpenSource='home';
   window.__attendanceHomeDate=todayIso;
+
   saveCurrentTrainingAttendance();
+
   attendanceState.date=todayIso;
   attendanceState.group=g && g.code ? g.code : '';
   attendanceState.name=g && g.name ? g.name : '';
@@ -4342,6 +4263,7 @@ function openHomeTodayTraining(g){
   attendanceState.billingPaymentSnapshot=null;
   attendanceState.billingAttendanceSnapshot=null;
   attendanceState.billingRecordSnapshot=null;
+
   applyTrainingSettingsForAttendance();
   location.hash='attendance';
   attendance();

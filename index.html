@@ -3235,6 +3235,9 @@ html,body{color-scheme:dark!important;}
  .home-topbar .brand.home-brand{font-size:21px!important;gap:5px!important}
  .home-topbar .logged-trainer-name{font-size:10px!important;max-width:37vw!important}
 }
+</style><style id="gt-logout-pressed-style">
+.more-menu-item.gt-logout-button:active,.more-menu-item.gt-logout-button.gt-pressed{background:#20a45a!important;border-color:#20a45a!important;color:#fff!important;transform:scale(.985)}
+.more-menu-item.gt-logout-button:active b,.more-menu-item.gt-logout-button:active small,.more-menu-item.gt-logout-button.gt-pressed b,.more-menu-item.gt-logout-button.gt-pressed small{color:#fff!important}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -6320,45 +6323,33 @@ function setUserRole(role){
 }
 function isHeadTrainer(){ return activeUserRole==='head'; }
 
-function logoutGuardTrainer(){
+function logoutGuardTrainer(btn){
   try{
-    // Clear only authentication/session state. Club data, trainers, members,
-    // schedules and billing remain untouched.
-    localStorage.removeItem('gt-simple-login-account');
-    localStorage.removeItem('gt-simple-login-step1');
-    localStorage.removeItem('gt-current-trainer-id');
-    localStorage.removeItem('gt-current-trainer-snapshot');
-    localStorage.removeItem('gt-user-role');
-    localStorage.removeItem('gt-is-admin');
-    localStorage.removeItem('gt-admin-testing');
-    localStorage.removeItem('gt-test-trainer');
-    localStorage.removeItem('gt-head-trainer-access');
-    localStorage.removeItem('gt-auth-initialized');
-    activeUserRole='trainer';
-    isAdminUser=false;
-    window.GT_TEST_ROLE=null;
-  }catch(e){ console.warn('Odhlásenie:',e); }
-
-  // Restore the login screen without reloading the page.
-  try{
-    const simple=document.getElementById('gtSimpleLoginStep1');
-    const input=document.getElementById('gtSimpleLoginPassword');
-    const err=document.getElementById('gtSimpleLoginError');
-    if(err){ err.textContent='Nesprávne heslo.'; err.style.display='none'; }
-    if(input) input.value='';
-    if(simple){
-      simple.style.display='flex';
-      simple.style.visibility='visible';
-      simple.style.opacity='1';
-      simple.style.zIndex='2147483647';
+    if(btn){
+      btn.classList.add('gt-pressed');
+      btn.setAttribute('aria-disabled','true');
+      btn.style.pointerEvents='none';
     }
-    const oldLogin=document.getElementById('gtLoginOverlayV329');
-    if(oldLogin) oldLogin.style.display='none';
-    document.body.classList.remove('gtAppMode','head-readonly','gtLoginMode');
-    try{ history.replaceState({gtRoute:'login'},'',location.pathname+'#login'); }catch(e){}
-    try{ window.scrollTo(0,0); }catch(e){}
-    if(input) setTimeout(()=>{try{input.focus()}catch(e){}},50);
-  }catch(e){ console.warn('Zobrazenie prihlasenia po odhlásení:',e); }
+  }catch(e){}
+  setTimeout(()=>{
+    try{
+      [
+        'gt-simple-login-account','gt-simple-login-step1',
+        'gt-current-trainer-id','gt-current-trainer-snapshot',
+        'gt-user-role','gt-is-admin','gt-admin-testing',
+        'gt-test-trainer','gt-head-trainer-access','gt-auth-initialized'
+      ].forEach(k=>localStorage.removeItem(k));
+      activeUserRole='trainer';
+      isAdminUser=false;
+      window.GT_TEST_ROLE=null;
+    }catch(e){ console.warn('Odhlásenie:',e); }
+    try{
+      history.replaceState(null,'',location.pathname+location.search);
+    }catch(e){}
+    // openApp() removes the login overlay from the DOM. Reload recreates it;
+    // without the saved account the login screen is shown.
+    location.reload();
+  },180);
   return false;
 }
 window.logoutGuardTrainer=logoutGuardTrainer;
@@ -6685,7 +6676,7 @@ function renderMore(){
      <div class="more-buttons">
        <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
        <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
-       <button type="button" class="more-menu-item" onclick="return logoutGuardTrainer()">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>
+       <button type="button" class="more-menu-item gt-logout-button" onclick="return logoutGuardTrainer(this)">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>
      </div>
    </main>
    <nav class="bottom">

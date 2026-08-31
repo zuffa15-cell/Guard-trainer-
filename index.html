@@ -1002,6 +1002,8 @@ body{padding-bottom:92px!important}
 .membership-paid-empty{padding:30px 16px;text-align:center;color:#aaa}
 @media(max-width:700px){.membership-paid-table-head,.membership-paid-row{grid-template-columns:1.5fr .65fr 1fr .6fr;font-size:12px;padding:10px 10px}}
 
+.membership-paid-current{color:#38d46a!important;opacity:1!important;background:transparent!important;font-size:30px!important;font-weight:900!important;display:flex!important;align-items:center;justify-content:center}
+
 .membership-paid-elsewhere{height:38px;min-width:0;display:flex;align-items:center;justify-content:center;color:#43d05a;font-size:20px;font-weight:900}
 
 .membership-paid-elsewhere{height:38px;min-width:0;display:flex;align-items:center;justify-content:center;color:#43d05a;font-size:22px;font-weight:900}
@@ -7751,9 +7753,9 @@ function renderMembershipPaymentCell(m,i){
   });
 
   if(paidCurrentPeriod){
-    const amount=Number(paidCurrentPeriod.amount||30);
-    // Zaplatený AKTUÁLNY polrok = zelená fajka v dochádzke.
-    return `<button ${dis} class="pay-btn on membership-on membership-paid-current account-readonly" title="Členské za aktuálny polrok je zaplatené" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">✓<strong>${amount} €</strong></button>`;
+    // Aktuálny polrok je zaplatený: v Dochádzke zobraz iba veľkú zelenú
+    // fajku rovnakým vizuálom ako ostatné potvrdené platby.
+    return `<button ${dis} class="pay-btn membership-paid-elsewhere membership-paid-current account-readonly" title="Členské za aktuálny polrok je zaplatené" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">✓</button>`;
   }
 
   // Predchádzajúce polročné členské nie je platba za aktuálny polrok.

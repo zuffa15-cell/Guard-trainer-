@@ -1,6 +1,7 @@
 <!doctype html>
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
+<!-- Guard Trainer v821: pri skupine sa zobrazujú priezviská všetkých pridelených trénerov. -->
 <!-- Guard Trainer v820: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
 <head>
 
@@ -4509,6 +4510,31 @@ function getSavedSchedules(){
 function scheduleDayIndex(day){
   return ['Pondelok','Utorok','Streda','Štvrtok','Piatok','Sobota','Nedeľa'].indexOf(day);
 }
+/* v821 – pri skupine zobraz všetkých pridelených trénerov, iba priezviská. */
+function trainerSurnameOnly(value){
+  const raw=String(value||'').trim();
+  if(!raw) return '';
+  const cleaned=raw.replace(/\s+/g,' ');
+  const parts=cleaned.split(' ');
+  return parts.length ? parts[parts.length-1] : cleaned;
+}
+function getScheduleTrainerSurnames(x){
+  const names=[];
+  const addName=(name)=>{
+    const surname=trainerSurnameOnly(name);
+    if(surname && !names.some(n=>n.toLocaleLowerCase('sk-SK')===surname.toLocaleLowerCase('sk-SK'))) names.push(surname);
+  };
+  const ids=Array.isArray(x.trainerIds)
+    ? x.trainerIds.map(Number).filter(Number.isFinite)
+    : (x.trainerId!=null && Number.isFinite(Number(x.trainerId)) ? [Number(x.trainerId)] : []);
+  ids.forEach(id=>{
+    const t=(trainersData||[]).find(t=>Number(t.id)===id);
+    if(t) addName(t.surname||t.lastName||t.full||t.name);
+  });
+  if(!names.length && Array.isArray(x.trainers)) x.trainers.forEach(addName);
+  if(!names.length && x.trainer) addName(x.trainer);
+  return names.join(', ');
+}
 function scheduleItemsForDate(iso){
   const out=[];
   const d=new Date(iso+'T12:00:00');
@@ -4526,7 +4552,7 @@ function scheduleItemsForDate(iso){
       code:x.groupCode||'',
       name:x.name,
       time:`${x.from} – ${x.to}`,
-      trainer:x.trainer||'',
+      trainer:getScheduleTrainerSurnames(x),
       location:x.location||'',
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),

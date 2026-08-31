@@ -3241,6 +3241,10 @@ html,body{color-scheme:dark!important;}
 </style><style id="gt-login-hard-gate">
 body.gtLoginMode #gtSimpleLoginStep1{display:flex!important;visibility:visible!important;opacity:1!important;z-index:2147483647!important}
 body.gtLoginMode .app{visibility:hidden!important;opacity:0!important;pointer-events:none!important}
+</style><style id="gt-logged-out-splash-fix">
+body.gtLoginMode #gtSplashV319,
+body.gtLoginMode #gtSplash,
+body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -11664,17 +11668,31 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
         setTimeout(showApp, 300);
       }
     }else{
-      // No remembered session: the simple login screen is the only screen
-      // that should be usable.
+      // No remembered session: completely remove the splash layer.
+      // The previous version hid only the video, leaving #gtSplashV319
+      // (a full-screen fixed layer) above the login form.
       if(v){
         try{ v.pause(); }catch(e){}
         v.style.display='none';
       }
+      var sp=splash();
+      if(sp){
+        try{ sp.pause && sp.pause(); }catch(e){}
+        sp.classList.remove('hide');
+        sp.style.setProperty('display','none','important');
+        sp.style.setProperty('visibility','hidden','important');
+        sp.style.setProperty('opacity','0','important');
+        sp.style.setProperty('pointer-events','none','important');
+      }
+      document.body.classList.remove('gtSplashV323Active','gtSplashActive','splash-active','splashVisible','gtSplashV323Doc','gtAppMode');
+      document.body.classList.add('gtLoginMode');
       var simple=document.getElementById('gtSimpleLoginStep1');
       if(simple){
-        simple.style.display='flex';
-        simple.style.visibility='visible';
-        simple.style.opacity='1';
+        simple.style.setProperty('display','flex','important');
+        simple.style.setProperty('visibility','visible','important');
+        simple.style.setProperty('opacity','1','important');
+        simple.style.setProperty('pointer-events','auto','important');
+        simple.style.setProperty('z-index','2147483647','important');
       }
     }
   }
@@ -11683,7 +11701,16 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 })();
 </script>
 <script id="gtSplashSpeedV335">
-(function(){function set(){var v=document.getElementById('gtSplashExactVideo');if(!v)return;try{v.playbackRate=2}catch(e){}v.muted=true;v.setAttribute('playsinline','');var p=v.play();if(p&&p.catch)p.catch(function(){})}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',set);else set();setTimeout(set,80);setTimeout(set,300)})();
+(function(){function set(){
+  var has=false;
+  try{var a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');has=!!(a&&(a.role||a.trainer_id!=null));}catch(e){}
+  if(!has)return;
+  var v=document.getElementById('gtSplashExactVideo');if(!v)return;
+  try{v.playbackRate=2}catch(e){}v.muted=true;v.setAttribute('playsinline','');
+  var p=v.play();if(p&&p.catch)p.catch(function(){})
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',set);else set();
+setTimeout(set,80);setTimeout(set,300)})();
 </script>
 
 

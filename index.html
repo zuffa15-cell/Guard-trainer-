@@ -4261,7 +4261,6 @@ function openHomeTodayTraining(g){
       )){
         directAssignment=true;
       }
-      const myId=currentTrainerAccountId();
       const myName=getCurrentTrainerDisplayName();
 
       // Kontroluj priamo uložený rozvrh pre dnešný deň. Toto je zámerne
@@ -4299,7 +4298,9 @@ function openHomeTodayTraining(g){
       // Tréner je priamo pridelený na tento konkrétny dnešný tréning.
     }else if(acceptedSubstitution){
       // PRIJATÝ ZÁSTUP: dočasný prístup.
-    }else if(!trainerOwnsTraining(g)){
+    }else if(trainerOwnsTraining(g)){
+      // Skupina je pridelená trénerovi v jeho profile – môže ju otvoriť.
+    }else{
       toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
       return false;
     }

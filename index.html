@@ -4236,15 +4236,57 @@ window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
 function openHomeTodayTraining(g){
   if(!isAdmin() && !isHeadTrainer()){
     const p=getCurrentTestTrainerProfile();
-    const myGroups=new Set((p?.groups||[]).map(x=>String(x).toUpperCase()));
-    const code=String(g?.code||g?.group||'').toUpperCase();
+    const myGroups=new Set((p?.groups||[]).map(x=>String(x).trim().toUpperCase()));
+    const code=String(g?.code||g?.group||'').trim().toUpperCase();
     const today=appToday().iso;
-    const acceptedSubstitution=hasAcceptedSubstitutionAccess(code,today,String(g?.time||''));
+    const wantedTime=String(g?.time||'').trim();
+    const acceptedSubstitution=hasAcceptedSubstitutionAccess(code,today,wantedTime);
+
+    let directAssignment=false;
+    try{
+      const myId=currentTrainerAccountId();
+      const myName=getCurrentTrainerDisplayName();
+      const norm=s=>String(s||'')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+        .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+      const my=norm(myName);
+      const mySurname=my.split(' ').filter(Boolean).pop();
+
+      // Kontroluj priamo uložený rozvrh pre dnešný deň. Toto je zámerne
+      // nezávislé od toho, či sa v profile trénera stihla zosynchronizovať
+      // skupina alebo či scheduleItemsForDate() zobrazuje iba priezvisko.
+      directAssignment=getSavedSchedules().some(x=>{
+        const dow=(new Date(today+'T12:00:00').getDay()+6)%7;
+        if(scheduleDayIndex(x.day)!==dow) return false;
+        const start=x.startDate||x.date||null;
+        if(start && today<start) return false;
+        if(x.until && today>x.until) return false;
+        if(String(x.groupCode||'').trim().toUpperCase()!==code) return false;
+        const xtime=`${x.from} – ${x.to}`;
+        if(wantedTime && xtime!==wantedTime) return false;
+
+        const ids=Array.isArray(x.trainerIds)?x.trainerIds.map(Number):[];
+        if(x.trainerId!=null) ids.push(Number(x.trainerId));
+        if(myId!=null && ids.includes(Number(myId))) return true;
+
+        const names=[];
+        if(Array.isArray(x.trainers)) names.push(...x.trainers);
+        if(x.trainer) names.push(x.trainer);
+        return names.some(v=>{
+          const n=norm(v);
+          if(!n) return false;
+          const parts=n.split(' ').filter(Boolean);
+          return n===my || (!!mySurname && parts.includes(mySurname));
+        });
+      });
+    }catch(e){ directAssignment=false; }
+
     if(code && myGroups.has(code)){
       // Tréner má skupinu pridelenú.
+    }else if(directAssignment){
+      // Tréner je priamo pridelený na tento konkrétny dnešný tréning.
     }else if(acceptedSubstitution){
-      // PRIJATÝ ZÁSTUP: dočasný prístup k tomuto konkrétnemu tréningu,
-      // aj keď skupina nie je v profile trénera.
+      // PRIJATÝ ZÁSTUP: dočasný prístup.
     }else if(!trainerOwnsTraining(g)){
       toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
       return false;

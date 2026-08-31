@@ -1,7 +1,6 @@
 <!doctype html>
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
-<!-- Guard Trainer v821: pri skupine sa zobrazujú priezviská všetkých pridelených trénerov. -->
 <!-- Guard Trainer v820: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
 <head>
 
@@ -4325,13 +4324,43 @@ function renderHeadHomeList(title,rows,kind){
   const body=kind==='new'?rows.map(m=>`<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${m.memberSince||m.newMemberDate||'—'}</span></div>`).join(''):rows.map(m=>{const d=headHomeLastVisit(m);return `<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${d?d.toLocaleDateString('sk-SK'):'Žiadna návšteva'}</span></div>`}).join('');
   app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
+
+function headHomeRealPaymentTotals(year,month){
+  const result={membership:0,registration:0};
+  const y=Number(year), m=Number(month);
+  try{
+    // Authoritative member payment histories.
+    (typeof paymentHistory!=='undefined' && Array.isArray(paymentHistory)?paymentHistory:[]).forEach(p=>{
+      const d=String(p.date||'');
+      const mm=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if(!mm || Number(mm[1])!==y || Number(mm[2])!==m) return;
+      const amount=Number(p.amount||0);
+      const type=String(p.type||'').toLowerCase();
+      if(type.includes('registra')) result.registration+=amount;
+      else if(type.includes('člensk')) result.membership+=amount;
+    });
+    // Registration payments may also live in the dedicated array.
+    (typeof registrationPayments!=='undefined' && Array.isArray(registrationPayments)?registrationPayments:[]).forEach(p=>{
+      const d=String(p.date||''); const mm=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if(!mm || Number(mm[1])!==y || Number(mm[2])!==m) return;
+      const amount=Number(p.amount||0);
+      // Avoid double-counting records already mirrored into paymentHistory.
+      const already=(typeof paymentHistory!=='undefined' && Array.isArray(paymentHistory)) &&
+        paymentHistory.some(h=>String(h.date||'')===d && Number(h.memberId||0)===Number(p.memberId||0) &&
+          String(h.type||'').toLowerCase().includes('registra') && Number(h.amount||0)===amount);
+      if(!already) result.registration+=amount;
+    });
+  }catch(e){ console.warn('head home payment totals',e); }
+  return result;
+}
+
 function renderHeadHome(){
   const app=document.querySelector('.app'), t=appToday(), now=new Date(), greeting=now.getHours()<12?'DOBRÉ RÁNO':(now.getHours()<18?'DOBRÝ DEŇ':'DOBRÝ VEČER');
   const week=headHomeWeekStart(), days=['PO','UT','ST','ŠT','PI','SO','NE'];
   const active=membersData.length, newMembers=headHomeNewMembers(), noVisit=headHomeNoVisitMembers(), att=headHomeMonthAttendance(), birthdays=headHomeBirthdays();
-  // Hlavný tréner: sumy členského a registračného v karte PLATBY
-  // musia byť totožné so sumami v mesačnom zúčtovaní trénerov.
+  // Hlavný tréner: zobrazuj skutočne zapísané platby v danom mesiaci.
   // Priamo zapísané evidenčné platby na účet sa zobrazujú osobitne nižšie.
+  const realHeadPayments=headHomeRealPaymentTotals(t.year,t.month);
   const headBillingRowsForPayments=(()=>{
     try{
       return (getHeadTrainerRowsForMonth(t.month,t.year)||[]).filter(r=>{
@@ -4344,6 +4373,8 @@ function renderHeadHome(){
   })();
   const membershipSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.membership||0),0);
   const registrationSettledTotal=headBillingRowsForPayments.reduce((a,r)=>a+Number(r.registration||0),0);
+  const membershipSettledTotalReal=realHeadPayments.membership;
+  const registrationSettledTotalReal=realHeadPayments.registration;
   const membership=membershipPayments.filter(p=>{const d=parsePaymentDate(p.date);return d&&d.year===t.year&&d.month===t.month;});
   const registration=registrationPayments.filter(p=>{const d=parsePaymentDate(p.date);return d&&d.year===t.year&&d.month===t.month;});
   // Platby označené ako ÚČET sa do bežných platieb nezapočítavajú,
@@ -4365,7 +4396,7 @@ function renderHeadHome(){
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
-  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
+  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa skutočne zapísaných platieb</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotalReal.toFixed(0)} €</div><div class="payment-count">podľa skutočne zapísaných platieb</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
@@ -4510,31 +4541,6 @@ function getSavedSchedules(){
 function scheduleDayIndex(day){
   return ['Pondelok','Utorok','Streda','Štvrtok','Piatok','Sobota','Nedeľa'].indexOf(day);
 }
-/* v821 – pri skupine zobraz všetkých pridelených trénerov, iba priezviská. */
-function trainerSurnameOnly(value){
-  const raw=String(value||'').trim();
-  if(!raw) return '';
-  const cleaned=raw.replace(/\s+/g,' ');
-  const parts=cleaned.split(' ');
-  return parts.length ? parts[parts.length-1] : cleaned;
-}
-function getScheduleTrainerSurnames(x){
-  const names=[];
-  const addName=(name)=>{
-    const surname=trainerSurnameOnly(name);
-    if(surname && !names.some(n=>n.toLocaleLowerCase('sk-SK')===surname.toLocaleLowerCase('sk-SK'))) names.push(surname);
-  };
-  const ids=Array.isArray(x.trainerIds)
-    ? x.trainerIds.map(Number).filter(Number.isFinite)
-    : (x.trainerId!=null && Number.isFinite(Number(x.trainerId)) ? [Number(x.trainerId)] : []);
-  ids.forEach(id=>{
-    const t=(trainersData||[]).find(t=>Number(t.id)===id);
-    if(t) addName(t.surname||t.lastName||t.full||t.name);
-  });
-  if(!names.length && Array.isArray(x.trainers)) x.trainers.forEach(addName);
-  if(!names.length && x.trainer) addName(x.trainer);
-  return names.join(', ');
-}
 function scheduleItemsForDate(iso){
   const out=[];
   const d=new Date(iso+'T12:00:00');
@@ -4552,7 +4558,7 @@ function scheduleItemsForDate(iso){
       code:x.groupCode||'',
       name:x.name,
       time:`${x.from} – ${x.to}`,
-      trainer:getScheduleTrainerSurnames(x),
+      trainer:x.trainer||'',
       location:x.location||'',
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),

@@ -2,6 +2,7 @@
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <head>
+<!-- Guard Trainer v813: odstránené zobrazenie statusu NOVÝ -->
 
 <!-- FIREBASE SYNC v2 - FIXED (no reload loop) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -147,10 +148,7 @@ function initCloudSync(){
         }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
-        try{
-  const attOpen=!!document.querySelector('.attendance-screen,.attendance-page,[data-screen="attendance"]');
-  if(!attOpen && typeof renderHome==='function') renderHome();
-}catch(e){}
+        try{if(typeof renderHome==='function') renderHome();}catch(e){}
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
         // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
         console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
@@ -3292,10 +3290,6 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer{animation:gtSubstitutionGreenPulseV681 1.25s ease-in-out infinite!important;color:#fff!important}
 .substitution-q.accepted-offer .qtext{color:#72ff8b!important}
 .substitution-q.accepted-offer small{color:#fff!important}
-</style><style id="gt-delete-red-v685">
-.admin-delete-billing-btn:active,.admin-delete-billing-btn.gt-delete-pressed{
-background:#dc2626!important;color:#fff!important;border-color:#ff5b5b!important;transform:scale(.97)
-}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -5691,7 +5685,7 @@ function memberRows(arr){
      <span class="${secondHalfMembershipVisual(m)} membership-period-icon" title="Členské 2. polrok">Č</span>
      <span class="${memberHasRegistration(m)?'icon-ok':'icon-no'}" title="Registrácia">R</span>
    </div>
-   <div class="member-flags">${m.newMember?'<b class="new-flag">NOVÝ</b>':''}</div>
+   <div class="member-flags"></div>
    <div class="member-arrow">›</div>
  </article>`).join('');
 }
@@ -7341,7 +7335,7 @@ function renderAttendanceRows(){
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
-   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(${i})" ondblclick="attendanceEditGuard()&&handleTrainingDoubleClick(event,${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
+   <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(${i})" ondblclick="attendanceEditGuard()&&handleTrainingDoubleClick(event,${i})">${m.trainingAccount?'ÚČET':'TRÉNING'}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
    <button ${locked?'disabled':''} class="pay-btn ${m.debt>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${m.debt>0?'<strong>'+m.debt+' €</strong>':''}</button>
@@ -7867,7 +7861,7 @@ function toggleTraining(i){
  if(!attendanceEditGuard()) return;
  const m=attendanceState.members[i];
  if(!m)return;
- if(m.newMember){ m.training=true; m.trainingAccount=false; saveCurrentTrainingAttendance(); toast('NOVÝ – tréning zdarma'); refreshAttendance(); return; }
+ if(m.newMember){ m.training=true; m.trainingAccount=false; saveCurrentTrainingAttendance(); toast('Tréning zdarma – nový člen'); refreshAttendance(); return; }
  m.training=!m.training;
  if(!m.training) m.trainingAccount=false;
  saveCurrentTrainingAttendance();
@@ -10106,16 +10100,7 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
-<script id="gt-delete-button-feedback-v685">
-document.addEventListener('pointerdown',function(e){
- const b=e.target.closest&&e.target.closest('.admin-delete-billing-btn');
- if(b)b.classList.add('gt-delete-pressed');
-},true);
-document.addEventListener('pointerup',function(e){
- const b=e.target.closest&&e.target.closest('.admin-delete-billing-btn');
- if(b)setTimeout(()=>b.classList.remove('gt-delete-pressed'),500);
-},true);
-</script></body>
+</body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
 .member-profile-training-count{

@@ -3279,17 +3279,15 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 </style><style id="gt-substitution-cancel-style">
 .sub-reject{margin-top:8px;width:100%;padding:10px 12px;border:1px solid #e33;border-radius:7px;background:#160606;color:#ff6b6b;font-weight:800;cursor:pointer}
 .sub-reject:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
-</style>
-<style id="gt-substitution-accepted-blink">
-@keyframes gtSubAcceptedBlink{
-  0%,100%{background:#20b957!important;color:#fff!important;border-color:#59df80!important;box-shadow:0 0 0 0 rgba(32,185,87,0)}
-  50%{background:#72e69a!important;color:#062b12!important;border-color:#b1f4c5!important;box-shadow:0 0 0 5px rgba(32,185,87,.16)}
+</style><style id="gtSubstitutionAcceptedGreenV681">
+@keyframes gtSubstitutionGreenPulseV681{
+0%,100%{border-color:#35bd4d!important;background:rgba(20,125,45,.16)!important;box-shadow:0 0 0 1px rgba(55,210,85,.28) inset,0 0 5px rgba(55,210,85,.18)}
+50%{border-color:#6dff88!important;background:rgba(40,190,75,.34)!important;box-shadow:0 0 0 2px rgba(90,235,115,.75) inset,0 0 18px rgba(55,210,85,.72)}
 }
-.gt-substitution-accepted{
-  animation:gtSubAcceptedBlink 1s ease-in-out infinite!important;
-}
-</style>
-</head>
+.substitution-q.accepted-offer{animation:gtSubstitutionGreenPulseV681 1.25s ease-in-out infinite!important;color:#fff!important}
+.substitution-q.accepted-offer .qtext{color:#72ff8b!important}
+.substitution-q.accepted-offer small{color:#fff!important}
+</style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
@@ -3817,15 +3815,20 @@ function acceptSubstitution(id){
 function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
- const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(getCurrentTrainerDisplayName())).length;
- const outgoingWaiting=substitutionOffers.filter(o=>o.from===getCurrentTrainerDisplayName() && !o.acceptedBy).length;
- const accepted=substitutionOffers.filter(o=>o.from===getCurrentTrainerDisplayName() && o.acceptedBy).length;
- const count=incoming+outgoingWaiting+accepted;
+ const me=getCurrentTrainerDisplayName();
+ const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
+ const outgoingWaiting=substitutionOffers.filter(o=>o.from===me && !o.acceptedBy).length;
+ const acceptedOutgoing=substitutionOffers.filter(o=>o.from===me && o.acceptedBy).length;
+ const acceptedIncoming=substitutionOffers.filter(o=>o.acceptedBy===me).length;
+ const acceptedTotal=acceptedOutgoing+acceptedIncoming;
+ const pendingTotal=incoming+outgoingWaiting;
+ const count=pendingTotal+acceptedTotal;
  if(!count){slot.innerHTML='';return;}
- const text=incoming ? `Ponuka zastupovania (${incoming} nová)` :
-   accepted ? `Zástup prijal ${accepted} tréner` : 'Ponuka zastupovania čaká na prijatie';
- const important=(incoming||outgoingWaiting||accepted)>0;
- slot.innerHTML=`<button type="button" class="q substitution-q ${important?'important-offer':''}" onclick="showSubstitutionOffers()">
+ const accepted=acceptedTotal>0;
+ const text=accepted ? `Zastupovanie prijaté (${acceptedTotal})` :
+   (incoming ? `Ponuka zastupovania (${incoming} nová)` : 'Ponuka zastupovania čaká na prijatie');
+ const cls=accepted ? 'accepted-offer' : (pendingTotal>0 ? 'important-offer' : '');
+ slot.innerHTML=`<button type="button" class="q substitution-q ${cls}" onclick="showSubstitutionOffers()">
    <span class="qicon">⇄</span><span class="qtext"><b>ZASTUPOVANIE</b><small>${text}</small></span><strong>${count}</strong><span class="go">›</span>
  </button>`;
 }
@@ -4118,7 +4121,7 @@ function filterHomeItemsForCurrentRole(items){
     const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
     return (items||[]).filter(g=>{
       const code=String(g?.code||'').trim().toUpperCase();
-      const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && String(o.time||'')===String(g.time||''));
+      const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
       return allowed.has(code) || incoming;
     });
   }
@@ -4146,10 +4149,18 @@ function openHomeTodayTraining(g){
     const p=getCurrentTestTrainerProfile();
     const myGroups=new Set((p?.groups||[]).map(x=>String(x).toUpperCase()));
     const code=String(g?.code||g?.group||'').toUpperCase();
+    const today=appToday().iso;
+    const me=getCurrentTrainerDisplayName();
+    const acceptedSubstitution=substitutionOffers.some(o=>
+      o.acceptedBy===me &&
+      String(o.date)===today &&
+      String(o.code||'').toUpperCase()===code &&
+      (!o.time || String(o.time||'')===String(g?.time||''))
+    );
     if(code && myGroups.has(code)){
-      // Assigned group may be opened even if the schedule row was created
-      // before trainerId was added. The attendance screen still verifies
-      // ownership for concrete training records.
+      // Assigned group.
+    }else if(acceptedSubstitution){
+      // Accepted substitution grants temporary access to this exact training.
     }else if(!trainerOwnsTraining(g)){
       toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
       return false;
@@ -4568,7 +4579,15 @@ function dayRows(){
     const testAllowed = typeof getCurrentTestTrainerGroupCodes==='function' ? getCurrentTestTrainerGroupCodes() : null;
     const trainerGroups = testAllowed instanceof Set ? testAllowed : new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
     const trainerAssigned=isAdmin() || isHeadTrainer() || trainerGroups.has(String(g.code||'').trim().toUpperCase());
-    const groupInactive=(!isHeadTrainer() && !isAdmin() && !trainerAssigned);
+    const me=getCurrentTrainerDisplayName();
+    const acceptedSubstitution=substitutionOffers.some(o=>
+      o.acceptedBy===me &&
+      String(o.date)===String(dateLabel) &&
+      String(o.code||'').toUpperCase()===String(g.code||'').toUpperCase() &&
+      (!o.time || String(o.time||'')===String(g.time||''))
+    );
+    const canOpen=trainerAssigned || acceptedSubstitution;
+    const groupInactive=(!isHeadTrainer() && !isAdmin() && !canOpen);
     return `<article class="training ${cancelled?'cancelled-training':''} ${groupInactive?'group-inactive':''}" data-group-code="${g.code}" data-group-name="${g.name}"
       onclick="${cancelled?'return false;':`openGroup('${safeCode}','${safeName}','${safeTime}','calendar')`}"
       oncontextmenu="event.preventDefault(); ${groupInactive?'return false;':`groupLongPress('${safeCode}','${safeName}','${safeTime}','${dateLabel}'); return false;`}">
@@ -7195,7 +7214,14 @@ function attendance(){
     const wantedDate=attendanceState.date||appToday().iso;
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
-    const own=(typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
+    const me=getCurrentTrainerDisplayName();
+    const acceptedSubstitution=substitutionOffers.some(o=>
+      o.acceptedBy===me &&
+      String(o.date)===String(wantedDate) &&
+      String(o.code||'').toUpperCase()===wantedGroup &&
+      (!wantedTime || !o.time || String(o.time||'')===wantedTime)
+    );
+    const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
       String(x.code||'').toUpperCase()===wantedGroup &&
       (!wantedTime || String(x.time||'')===wantedTime) &&
       trainerOwnsTraining(x)
@@ -10021,8 +10047,6 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
-
-
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
@@ -11949,34 +11973,6 @@ setTimeout(set,80);setTimeout(set,300)})();
   }
   document.addEventListener('DOMContentLoaded',fixStats);
   setTimeout(fixStats,300); setTimeout(fixStats,1000);
-})();
-</script>
-<script id="gt-substitution-accepted-ui">
-(function(){
-  function markAcceptedSubstitutions(){
-    try{
-      const offers=Array.isArray(window.substitutionOffers)?window.substitutionOffers:[];
-      const acceptedIds=new Set(offers.filter(o=>{
-        const st=String(o?.status||o?.state||'').toLowerCase();
-        return ['accepted','prijat','prijaté','prijate','accepted_by_trainer'].includes(st);
-      }).map(o=>String(o?.id||o?.offerId||'')));
-      document.querySelectorAll('[data-substitution-id]').forEach(el=>{
-        const id=String(el.getAttribute('data-substitution-id')||'');
-        el.classList.toggle('gt-substitution-accepted',acceptedIds.has(id));
-      });
-      // Fallback for cards/buttons that expose the offer id through an id/data key.
-      document.querySelectorAll('[id*="substitution"],[id*="zastup"],button').forEach(el=>{
-        const txt=(el.textContent||'').toLowerCase();
-        if(!txt.includes('zastup') && !txt.includes('prijat')) return;
-        const id=String(el.dataset?.substitutionId||el.dataset?.offerId||'');
-        if(id && acceptedIds.has(id)) el.classList.add('gt-substitution-accepted');
-      });
-    }catch(e){}
-  }
-  window.markAcceptedSubstitutions=markAcceptedSubstitutions;
-  window.addEventListener('cloud-sync-update',markAcceptedSubstitutions);
-  window.addEventListener('load',()=>setTimeout(markAcceptedSubstitutions,250));
-  setInterval(markAcceptedSubstitutions,1500);
 })();
 </script>
 </body>

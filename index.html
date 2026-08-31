@@ -4510,6 +4510,28 @@ function getSavedSchedules(){
 function scheduleDayIndex(day){
   return ['Pondelok','Utorok','Streda','Štvrtok','Piatok','Sobota','Nedeľa'].indexOf(day);
 }
+
+function displayTrainerSurnamesForGroup(x){
+  const out=[];
+  const add=v=>{
+    const raw=String(v||'').trim().replace(/\s+/g,' ');
+    if(!raw)return;
+    const surname=raw.split(' ').pop();
+    if(surname && !out.some(n=>n.toLocaleLowerCase('sk-SK')===surname.toLocaleLowerCase('sk-SK'))) out.push(surname);
+  };
+  try{
+    const ids=Array.isArray(x.trainerIds)?x.trainerIds:[];
+    ids.forEach(id=>{
+      const t=(typeof trainersData!=='undefined'&&Array.isArray(trainersData))
+        ? trainersData.find(z=>Number(z.id)===Number(id)) : null;
+      if(t) add(t.surname||t.lastName||t.name||t.fullName||t.displayName);
+    });
+  }catch(e){}
+  if(Array.isArray(x.trainers)) x.trainers.forEach(add);
+  if(!out.length) add(x.trainer);
+  return out.join(', ');
+}
+
 function scheduleItemsForDate(iso){
   const out=[];
   const d=new Date(iso+'T12:00:00');
@@ -4527,7 +4549,7 @@ function scheduleItemsForDate(iso){
       code:x.groupCode||'',
       name:x.name,
       time:`${x.from} – ${x.to}`,
-      trainer:x.trainer||'',
+      trainer:displayTrainerSurnamesForGroup(x),
       location:x.location||'',
       color:getGroupColor(x.groupCode, x.color),
       trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),

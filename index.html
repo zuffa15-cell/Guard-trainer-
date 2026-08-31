@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <head>
 
@@ -567,7 +568,7 @@ body{overflow-x:hidden}
 .monthly-table th{color:#eee;font-weight:700;background:#080808}.monthly-table td{color:#ddd}.monthly-table small{display:block;font-size:8px;color:#999;margin-top:2px}
 .monthly-group{display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:4px;color:#fff;font-weight:800}
 .monthly-group.a{background:#e51b23}.monthly-group.b{background:#1676d2}.monthly-group.c{background:#42a72c}.monthly-group.d{background:#e79a0b}.monthly-group.dp{background:#7835b8}
-.monthly-table tbody .billing-clickable-row{cursor:pointer}.monthly-table tbody .billing-clickable-row:hover{background:rgba(255,209,43,.08)}
+.monthly-table tbody .billing-clickable-row{cursor:pointer}.monthly-table tbody .billing-clickable-row:hover{background:rgba(255,209,43,.08)}.admin-delete-billing-btn{border:1px solid #a52a2a;background:#210707;color:#ff6262;border-radius:6px;padding:6px 8px;font-weight:900;font-size:11px;cursor:pointer;white-space:nowrap}.admin-delete-billing-btn:active{background:#b52a2a;color:#fff;transform:scale(.97)}.admin-delete-billing-cell{text-align:center;min-width:72px}
 .monthly-table .plus{color:#2fcf45}.monthly-table .minus{color:#e52626}.monthly-table .club-amount{color:#ffd12b;font-weight:800}.monthly-table tfoot{background:#090909}.monthly-table tfoot th{color:#ffd12b}
 .empty-monthly{padding:25px!important;color:#999!important}
 .club-total-card{margin-top:12px;border:1px solid #d49b00;border-radius:7px;background:linear-gradient(90deg,#1a1200,#050505);box-shadow:0 0 9px rgba(255,193,7,.25);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;color:#ffd12b;font-weight:800}
@@ -8909,6 +8910,32 @@ window.renderTrainerMonthlyFor=function(trainerName, month, year){
   }
 };
 
+function deleteBillingTrainingAsAdmin(recordKey,trainerName,date,groupCode,month,year){
+  if(!isAdmin()){ toast('Tréning môže z vyúčtovania vymazať iba administrátor.'); return false; }
+  const key=String(recordKey||'');
+  const label=`${date||''} – ${groupCode||''} – ${trainerName||''}`;
+  if(!key){ toast('Záznam tréningu nemá platný kľúč.'); return false; }
+  if(!confirm(`Naozaj vymazať tento tréning z vyúčtovania?\n\n${label}\n\nZáznam sa odstráni aj z vyúčtovania tohto trénera.`)) return false;
+  try{
+    const before=monthlyBillingRecords.length;
+    monthlyBillingRecords=monthlyBillingRecords.filter(r=>String(r?.key||'')!==key);
+    if(monthlyBillingRecords.length===before){
+      const tn=String(trainerName||'').trim().toUpperCase();
+      const gc=String(groupCode||'').trim().toUpperCase();
+      const dd=parsePaymentDate(date);
+      monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
+        const rd=parsePaymentDate(r?.date);
+        return !(String(r?.trainer||r?.name||'').trim().toUpperCase()===tn && String(r?.group||'').trim().toUpperCase()===gc && rd&&dd && rd.year===dd.year&&rd.month===dd.month&&rd.day===dd.day);
+      });
+    }
+    persistMonthlyBillingRecords();
+    toast('Tréning bol vymazaný z vyúčtovania.');
+    renderHeadTrainerDetail(trainerName,Number(month),Number(year));
+  }catch(e){ console.error('ADMIN DELETE BILLING TRAINING:',e); toast('Tréning sa nepodarilo vymazať.'); }
+  return false;
+}
+window.deleteBillingTrainingAsAdmin=deleteBillingTrainingAsAdmin;
+
 function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToday().year){
   const app=document.querySelector('.app');
   const rows=getTrainerMonthlyRecords(trainerName,month,year);
@@ -8934,12 +8961,12 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
     </div>
     <div class="monthly-table-wrap">
       <table class="monthly-table">
-       <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th></tr></thead>
+       <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>${isAdmin()?'<th>ZMAZAŤ</th>':''}</tr></thead>
        <tbody>
-       ${rows.map(r=>`<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(getAdminGroupName(r.group)||r.group||''))})' title="Otvoriť dochádzku tohto dňa"><td>${r.date}</td><td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>${r.substituteLabel?`<small class="sub-label">⇄ ZASTUPOVANÝ TRÉNING<br><b>${r.substituteLabel}</b></small>`:''}</td><td>${r.trainingSum} €<small>${r.paying} platieb</small></td><td>${r.membershipSum} €</td><td>${r.registrationSum} €</td><td class="plus">${r.otherPlus} €</td><td class="minus">−${r.otherMinus} €</td><td>${r.gross} €</td><td class="minus">−${r.trainerReward} €</td><td class="club-amount">${r.clubAmount} €</td></tr>`).join('')}
-       ${!rows.length?`<tr><td colspan="10" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
+       ${rows.map(r=>`<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(getAdminGroupName(r.group)||r.group||''))})' title="Otvoriť dochádzku tohto dňa"><td>${r.date}</td><td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>${r.substituteLabel?`<small class="sub-label">⇄ ZASTUPOVANÝ TRÉNING<br><b>${r.substituteLabel}</b></small>`:''}</td><td>${r.trainingSum} €<small>${r.paying} platieb</small></td><td>${r.membershipSum} €</td><td>${r.registrationSum} €</td><td class="plus">${r.otherPlus} €</td><td class="minus">−${r.otherMinus} €</td><td>${r.gross} €</td><td class="minus">−${r.trainerReward} €</td><td class="club-amount">${r.clubAmount} €</td>${isAdmin()?`<td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.stopPropagation(); return window.deleteBillingTrainingAsAdmin(${JSON.stringify(String(r.key||''))},${JSON.stringify(String(trainerName||''))},${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${Number(month)},${Number(year)});'>🗑 ZMAZAŤ</button></td>`:''}</tr>`).join('')}
+       ${!rows.length?`<tr><td colspan="${isAdmin()?11:10}" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
        </tbody>
-       <tfoot><tr><th>SPOLU<br><small>${mName} ${year}</small></th><th>${rows.length}</th><th>${sum('trainingSum')} €</th><th>${sum('membershipSum')} €</th><th>${sum('registrationSum')} €</th><th>${sum('otherPlus')} €</th><th>−${sum('otherMinus')} €</th><th>${sum('gross')} €</th><th class="minus">−${sum('trainerReward')} €</th><th class="club-amount">${sum('clubAmount')} €</th></tr></tfoot>
+       <tfoot><tr><th>SPOLU<br><small>${mName} ${year}</small></th><th>${rows.length}</th><th>${sum('trainingSum')} €</th><th>${sum('membershipSum')} €</th><th>${sum('registrationSum')} €</th><th>${sum('otherPlus')} €</th><th>−${sum('otherMinus')} €</th><th>${sum('gross')} €</th><th class="minus">−${sum('trainerReward')} €</th><th class="club-amount">${sum('clubAmount')} €</th>${isAdmin()?'<th>—</th>':''}</tr></tfoot>
       </table>
     </div>
     <section class="billing-card head-other-summary">

@@ -3283,8 +3283,6 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 </style><style id="gt-substitution-cancel-style">
 .sub-reject{margin-top:8px;width:100%;padding:10px 12px;border:1px solid #e33;border-radius:7px;background:#160606;color:#ff6b6b;font-weight:800;cursor:pointer}
 .sub-reject:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
-.sub-offer.cancelled{border-color:#b51f1f!important;background:rgba(150,20,20,.10)!important;opacity:.9}
-.sub-offer.cancelled b{color:#ff6b6b!important}
 .gt-sub-clear-btn{border-color:#b51f1f!important;background:#160606!important;color:#ff6b6b!important}.gt-sub-clear-btn:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
 </style><style id="gtSubstitutionAcceptedGreenV681">
 @keyframes gtSubstitutionGreenPulseV681{
@@ -3679,7 +3677,7 @@ function openSubstitutionOffer(code,name){
  const lines0=meta0.split('\n').map(x=>x.trim()).filter(Boolean);
  const time0=(lines0[0]||'').replace('◷','').trim();
  const me0=getCurrentTrainerDisplayName();
- const duplicate=substitutionOffers.some(o=>o.from===me0 && o.date===today && !o.cancelledAt && o.status!=='ZRUŠENÉ' && String(o.code).toUpperCase()===String(code).toUpperCase() && String(o.time||'')===String(time0||''));
+ const duplicate=substitutionOffers.some(o=>o.from===me0 && o.date===today && String(o.code).toUpperCase()===String(code).toUpperCase() && String(o.time||'')===String(time0||''));
  if(duplicate){ toast('Tento tréning už bol ponúknutý na zastupovanie.'); return; }
 
  const card=document.querySelector(`.training[data-group-code="${CSS.escape(code)}"]`);
@@ -3736,89 +3734,14 @@ function openSubstitutionOffer(code,name){
  };
 }
 
-function isSubstitutionAccepted(o){
-  return !!(o && o.acceptedBy && String(o.status||'')==='PRIJATÉ' && !o.cancelledAt);
-}
-
-function isSubstitutionSuperseded(o){
-  if(!o || !isSubstitutionAccepted(o)) return false;
-  const id=String(o.id||'');
-  if(!id) return false;
-  return substitutionOffers.some(child=>
-    String(child.parentOfferId||'')===id && isSubstitutionAccepted(child)
-  );
-}
-function canPassAcceptedSubstitution(o){
-  const me=getCurrentTrainerDisplayName();
-  return !!(o && isSubstitutionAccepted(o) && String(o.acceptedBy||'')===String(me||'') && !isSubstitutionSuperseded(o));
-}
-function passAcceptedSubstitution(id){
-  const parent=substitutionOffers.find(x=>String(x.id)===String(id));
-  if(!canPassAcceptedSubstitution(parent)){
-    toast('Tento prijatý tréning už nie je možné posunúť ďalej.'); return false;
-  }
-  const me=getCurrentTrainerDisplayName();
-  const selected=new Set();
-  const modal=document.createElement('div');
-  modal.id='substitutionModal'; modal.className='sub-modal';
-  const trainers=(visibleTrainerProfiles()||[]).filter(t=>(t.full||t.name)!==me);
-  const groupName=getAdminGroupName(parent.code)||parent.groupName;
-  modal.innerHTML=`<div class="sub-modal-card">
-    <div class="sub-modal-title">ZASTUPOVANIE – POSUNÚŤ ĎALEJ</div>
-    <div class="sub-modal-group-row" style="background:${getGroupColor(parent.code)}!important;background-image:none!important;">
-      <span class="sub-modal-group-code">${String(parent.code||'?')}</span><strong>${groupName}</strong>
-    </div>
-    <div class="sub-modal-sub">📅 ${formatAttendanceDate(parent.date)}<br>🕐 ${parent.time||'—'}<br>📍 ${parent.place||'—'}<br>Od: ${parent.from||'—'}</div>
-    <div class="sub-modal-label">VYBER TRÉNERA, KTORÉMU CHCEŠ ZÁSTUP POSUNÚŤ:</div>
-    <div class="sub-trainer-list">
-      ${trainers.map(t=>{const n=t.full||t.name||'TRÉNER'; return `<button type="button" class="sub-trainer" data-name="${n}"><span class="sub-check">□</span>${n}</button>`}).join('')}
-    </div>
-    <div class="sub-modal-actions"><button type="button" class="sub-cancel">ZRUŠIŤ</button><button type="button" class="sub-send">POSUNÚŤ ZÁSTUP</button></div>
-  </div>`;
-  document.body.appendChild(modal);
-  modal.querySelectorAll('.sub-trainer').forEach(b=>b.onclick=()=>{
-    const n=b.dataset.name;
-    if(selected.has(n)){selected.delete(n);b.classList.remove('selected');b.querySelector('.sub-check').textContent='□';}
-    else{selected.add(n);b.classList.add('selected');b.querySelector('.sub-check').textContent='✓';}
-  });
-  modal.querySelector('.sub-cancel').onclick=()=>modal.remove();
-  modal.querySelector('.sub-send').onclick=()=>{
-    if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
-    const duplicate=substitutionOffers.some(x=>String(x.parentOfferId||'')===String(parent.id) && !x.cancelledAt && x.status!=='ZRUŠENÉ');
-    if(duplicate){toast('Tento prijatý tréning už bol posunutý ďalej.');modal.remove();return;}
-    substitutionOffers.push({
-      id:Date.now(), code:parent.code, groupName:parent.groupName,
-      date:parent.date, time:parent.time, place:parent.place,
-      from:me, trainers:[...selected], acceptedBy:null,
-      status:'ČAKÁ NA PRIJATIE', parentOfferId:parent.id,
-      chainRootOfferId:parent.chainRootOfferId||parent.id
-    });
-    persistSubstitutionOffers(); modal.remove(); updateHomeQuickOverview(); renderHome();
-    toast('Zástup bol posunutý ďalej');
-  };
-  return false;
-}
-window.passAcceptedSubstitution=passAcceptedSubstitution;
-function hasSubstitutionFinancialRecord(o){
-  if(!o || !Array.isArray(monthlyBillingRecords)) return false;
-  const wantedDate=formatBillingDate(String(o.date||''));
-  const wantedGroup=String(o.code||'').trim().toUpperCase();
-  const wantedTrainer=String(o.acceptedBy||'').trim().toUpperCase();
-  return monthlyBillingRecords.some(r=>{
-    if(!r || r.substituteReference || r.cancelled) return false;
-    if(!r.substitute || !r.substituteAcceptedBy) return false;
-    return String(r.date||'')===wantedDate && String(r.group||'').trim().toUpperCase()===wantedGroup &&
-      String(r.substituteAcceptedBy||'').trim().toUpperCase()===wantedTrainer;
-  });
-}
 function showSubstitutionOffers(){
  const existing=document.getElementById('substitutionOffersModal');
  if(existing){existing.remove();return;}
  const modal=document.createElement('div');
  modal.id='substitutionOffersModal';
  modal.className='sub-modal';
- const incoming=substitutionOffers.filter(o=>!o.acceptedBy && !o.cancelledAt && o.status!=='ZRUŠENÉ' && o.trainers.includes(getCurrentTrainerDisplayName()));
- const outgoing=substitutionOffers.filter(o=>o.from===getCurrentTrainerDisplayName() || isSubstitutionAccepted(o));
+ const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(getCurrentTrainerDisplayName()));
+ const outgoing=substitutionOffers.filter(o=>o.from===getCurrentTrainerDisplayName() || (o.acceptedBy===getCurrentTrainerDisplayName()));
  const incomingHtml=incoming.map(o=>`<div class="sub-offer">
    <b>⇄ PONUKA ZASTUPOVANIA</b>
    <div class="sub-group-row">
@@ -3830,8 +3753,8 @@ function showSubstitutionOffers(){
    <span>Od: ${o.from}</span>
    <button class="sub-accept" onclick="acceptSubstitution(${o.id})">✓ PRIJÍMAM ZÁSTUP</button>
  </div>`).join('');
- const outgoingHtml=outgoing.map(o=>`<div class="sub-offer ${isSubstitutionAccepted(o)?'accepted':''} ${o.status==='ZRUŠENÉ'?'cancelled':''}">
-   <b>${o.status==='ZRUŠENÉ'?'✕ ZASTUPOVANIE ZRUŠENÉ':(isSubstitutionAccepted(o)?'✓ PONUKA ZASTUPOVANIA':'PONUKA ZASTUPOVANIA')}</b>
+ const outgoingHtml=outgoing.map(o=>`<div class="sub-offer ${o.acceptedBy?'accepted':''}">
+   <b>${o.acceptedBy?'✓ PONUKA ZASTUPOVANIA':'PONUKA ZASTUPOVANIA'}</b>
    <div class="sub-group-row">
      <span class="sub-group-badge ${({'A':'ga','B':'gb','C':'gc','D':'gd','D+':'gdp','H':'gh','T':'gt'}[o.code]||'gother')}">${o.code||'?'}</span>
      <div><strong>${getAdminGroupName(o.code)||o.groupName}</strong><small>${o.groupName}</small></div>
@@ -3839,8 +3762,8 @@ function showSubstitutionOffers(){
    <span>📅 ${formatAttendanceDate(o.date)}</span>
    <span>🕐 ${o.time||'—'} &nbsp; 📍 ${o.place||'—'}</span>
    <span>Ponuka pre: ${o.trainers.join(', ')}</span>
-   <strong>${o.status==='ZRUŠENÉ' ? 'Zrušil prijatie: '+(o.cancelledBy||'—') : (isSubstitutionAccepted(o) ? '✓ PRIJAL: '+o.acceptedBy : 'ČAKÁ NA PRIJATIE')}</strong>
-   ${canPassAcceptedSubstitution(o)?`<button type="button" class="sub-accept" onclick="passAcceptedSubstitution(${o.id})">⇄ POSUNÚŤ ĎALEJ</button>`:''}${isSubstitutionAccepted(o)&&o.acceptedBy===getCurrentTrainerDisplayName()?`<button type="button" class="sub-reject" onclick="cancelAcceptedSubstitution(${o.id})">✕ ZRUŠIŤ PRIJATIE</button>`:''}${!o.acceptedBy && o.status!=='ZRUŠENÉ' && o.from===getCurrentTrainerDisplayName()?`<button type="button" class="sub-reject" onclick="cancelSubstitution(${o.id})">✕ ZRUŠIŤ PONUKU</button>`:''}
+   <strong>${o.acceptedBy ? '✓ PRIJAL: '+o.acceptedBy : 'ČAKÁ NA PRIJATIE'}</strong>
+   ${!o.acceptedBy && o.from===getCurrentTrainerDisplayName()?`<button type="button" class="sub-reject" onclick="cancelSubstitution(${o.id})">✕ ZRUŠIŤ PONUKU</button>`:''}
  </div>`).join('');
  modal.innerHTML=`<div class="sub-modal-card">
   <div class="sub-modal-title">ZASTUPOVANIE</div>
@@ -3852,7 +3775,7 @@ function showSubstitutionOffers(){
 function cancelSubstitution(id){
  const o=substitutionOffers.find(x=>x.id===id);
  if(!o) return false;
- if(isSubstitutionAccepted(o)){ toast('Tento zástup už bol prijatý – použite ZRUŠIŤ PRIJATIE.'); return false; }
+ if(o.acceptedBy){ toast('Tento zástup už bol prijatý – ponuku nemožno zrušiť.'); return false; }
  if(o.from!==getCurrentTrainerDisplayName()){ toast('Túto ponuku môže zrušiť iba tréner, ktorý ju vytvoril.'); return false; }
  substitutionOffers=substitutionOffers.filter(x=>x.id!==id);
  persistSubstitutionOffers();
@@ -3864,39 +3787,6 @@ function cancelSubstitution(id){
  return false;
 }
 window.cancelSubstitution=cancelSubstitution;
-
-function cancelAcceptedSubstitution(id){
- const o=substitutionOffers.find(x=>x.id===id);
- if(!o) return false;
- const me=getCurrentTrainerDisplayName();
- if(!isSubstitutionAccepted(o) || String(o.acceptedBy||'')!==String(me||'')){
-   toast('Toto prijatie môže zrušiť iba tréner, ktorý ho prijal.'); return false;
- }
- if(hasSubstitutionFinancialRecord(o)){
-   toast('Zástup už má uloženú dochádzku – prijatie nemožno zrušiť.'); return false;
- }
- const previous=o.acceptedBy;
- o.previousAcceptedBy=previous;
- o.cancelledBy=me;
- o.cancelledAt=Date.now();
- o.acceptedBy=null;
- o.status='ZRUŠENÉ';
- // Remove the informational zero row created when the substitution was accepted.
- try{
-   const iso=String(o.date||'');
-   const refKey=`${iso}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from}`;
-   monthlyBillingRecords=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords.filter(r=>String(r?.key||'')!==refKey):monthlyBillingRecords;
-   persistMonthlyBillingRecords();
- }catch(e){ console.warn('Odstránenie referencie zástupu sa nepodarilo',e); }
- persistSubstitutionOffers();
- const modal=document.getElementById('substitutionOffersModal');
- if(modal) modal.remove();
- updateHomeQuickOverview();
- renderHome();
- toast('Prijatie zastupovania bolo zrušené – tréning sa vrátil pôvodnému trénerovi.');
- return false;
-}
-window.cancelAcceptedSubstitution=cancelAcceptedSubstitution;
 
 function clearTodaySubstitutionTests(){
  if(!isAdmin()){ toast('Túto akciu môže vykonať iba administrátor.'); return false; }
@@ -3962,10 +3852,10 @@ function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
  const me=getCurrentTrainerDisplayName();
- const incoming=substitutionOffers.filter(o=>!isSubstitutionAccepted(o) && !o.acceptedBy && !o.cancelledAt && o.status!=='ZRUŠENÉ' && o.trainers.includes(me)).length;
- const outgoingWaiting=substitutionOffers.filter(o=>o.from===me && !o.acceptedBy && o.status!=='ZRUŠENÉ').length;
- const acceptedOutgoing=substitutionOffers.filter(o=>o.from===me && isSubstitutionAccepted(o)).length;
- const acceptedIncoming=substitutionOffers.filter(o=>o.acceptedBy===me && isSubstitutionAccepted(o)).length;
+ const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
+ const outgoingWaiting=substitutionOffers.filter(o=>o.from===me && !o.acceptedBy).length;
+ const acceptedOutgoing=substitutionOffers.filter(o=>o.from===me && o.acceptedBy).length;
+ const acceptedIncoming=substitutionOffers.filter(o=>o.acceptedBy===me).length;
  const acceptedTotal=acceptedOutgoing+acceptedIncoming;
  const pendingTotal=incoming+outgoingWaiting;
  const count=pendingTotal+acceptedTotal;
@@ -4085,7 +3975,7 @@ function todayTrainingGroups(){
   try{
     const me=getCurrentTrainerDisplayName();
     substitutionOffers
-      .filter(o=>o.date===t.iso && o.acceptedBy===me && isSubstitutionAccepted(o))
+      .filter(o=>o.date===t.iso && o.acceptedBy===me)
       .forEach(o=>result.add(String(o.code||'').trim().toUpperCase()));
   }catch(e){}
   return result;
@@ -4264,7 +4154,7 @@ function filterHomeItemsForCurrentRole(items){
     const allowed=new Set((p?.groups||[]).map(x=>String(x).trim().toUpperCase()).filter(Boolean));
     const iso=appToday().iso;
     const me=getCurrentTrainerDisplayName();
-    const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && isSubstitutionAccepted(o) && !isSubstitutionSuperseded(o) && o.date===iso);
+    const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
     return (items||[]).filter(g=>{
       const code=String(g?.code||'').trim().toUpperCase();
       const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
@@ -4276,19 +4166,13 @@ function filterHomeItemsForCurrentRole(items){
   const iso=appToday().iso;
   const me=getCurrentTrainerDisplayName();
 
-  const outgoingAccepted=substitutionOffers.filter(o=>isSubstitutionAccepted(o) && !isSubstitutionSuperseded(o) && o.from===me && o.date===iso);
-  const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && isSubstitutionAccepted(o) && !isSubstitutionSuperseded(o) && o.date===iso);
+  const outgoingAccepted=substitutionOffers.filter(o=>o.acceptedBy && o.from===me && o.date===iso);
+  const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
 
   return items.map(g=>{
     const match=outgoingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
-    return match ? {...g,substitutionInactive:true,substitutionLabel:'ZASTUPOVANÝ TRÉNING',substitutionBy:match.acceptedBy,_substitutionOffer:match} : g;
+    return match ? {...g,substitutionInactive:true,substitutionLabel:'ZASTUPOVANÝ TRÉNING',substitutionBy:match.acceptedBy} : g;
   }).filter(g=>{
-    // A trainer who accepted a substitution and then passed it onward must
-    // lose that training from the daily list once the next trainer accepts it.
-    // The child offer has parentOfferId; the original/root offer remains an
-    // informational "zastupovaný" card for its original owner.
-    if(g && g._substitutionOffer && g._substitutionOffer.parentOfferId &&
-       isSubstitutionAccepted(g._substitutionOffer)) return false;
     const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
     return allowed.has(String(g.code||'').toUpperCase()) || incoming;
   }).map(g=>{
@@ -4305,7 +4189,7 @@ function hasAcceptedSubstitutionAccess(code,date,time=''){
     const wantedTime=String(time||'').trim();
     if(!me || !wantedCode || !wantedDate) return false;
     return substitutionOffers.some(o=>{
-      if(!isSubstitutionAccepted(o) || String(o.acceptedBy||'').trim()!==me) return false;
+      if(String(o.acceptedBy||'').trim()!==me) return false;
       if(String(o.date||'')!==wantedDate) return false;
       if(String(o.code||'').trim().toUpperCase()!==wantedCode) return false;
       return !wantedTime || !String(o.time||'').trim() || String(o.time||'').trim()===wantedTime;
@@ -4511,11 +4395,6 @@ function renderHeadHome(){
   const week=headHomeWeekStart(), days=['PO','UT','ST','ŠT','PI','SO','NE'];
   const active=membersData.length, newMembers=headHomeNewMembers(), noVisit=headHomeNoVisitMembers(), att=headHomeMonthAttendance(), birthdays=headHomeBirthdays();
   // Platby hlavného trénera sú zdrojované priamo z uložených dochádzok.
-  const headAttendancePayments=getHeadHomeAttendancePaymentTotals(t.month,t.year);
-  const membershipSettledTotal=headAttendancePayments.membership;
-  const registrationSettledTotal=headAttendancePayments.registration;
-  const membershipAccountTotal=headAttendancePayments.membershipAccount;
-  const registrationAccountTotal=headAttendancePayments.registrationAccount;
   const memberCard=`<section class="head-home-card"><div class="head-card-title">👥 ČLENOVIA</div><div class="member-stats"><div class="member-stat" onclick="return nav('members')"><strong>${active}</strong><span>Aktívnych členov</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat new" onclick="renderHeadHomeList('NOVÍ ČLENOVIA – POSLEDNÝCH 30 DNÍ',headHomeNewMembers(),'new')"><strong>${newMembers.length}</strong><span>Noví členovia<br>za posledných 30 dní</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat warning" onclick="renderHeadHomeList('ČLENOVIA BEZ NÁVŠTEVY 30+ DNÍ',headHomeNoVisitMembers(),'old')"><strong>${noVisit.length}</strong><span>Členovia bez návštevy<br>30+ dní</span><small>kliknutím zobraz zoznam</small></div></div></section>`;
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
@@ -4525,7 +4404,6 @@ function renderHeadHome(){
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
-  <section class="head-home-card"><div class="head-card-title">💰 PLATBY</div><div class="payments-grid"><div class="payment-box"><div class="payment-label">ČLENSKÉ</div><div class="payment-value">${membershipSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${membershipAccountTotal.toFixed(0)} €</b></div></div><div class="payment-box"><div class="payment-label">REGISTRAČNÉ</div><div class="payment-value">${registrationSettledTotal.toFixed(0)} €</div><div class="payment-count">podľa zúčtovania trénerov</div><div class="payment-account-line">NA ÚČET: <b>${registrationAccountTotal.toFixed(0)} €</b></div></div></div></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
@@ -8822,7 +8700,7 @@ function saveTrainingBilling(saveButton){
   // is excluded from financial totals so the club is not counted twice.
   const normSubName=s=>String(s||'').trim().toUpperCase();
   const substitution=substitutionOffers.find(o =>
-    isSubstitutionAccepted(o) && normSubName(o.acceptedBy)===normSubName(activeTrainer) &&
+    normSubName(o.acceptedBy)===normSubName(activeTrainer) &&
     String(o.date)===String(attendanceState.date) &&
     (
       String(o.groupName||'')===String(attendanceState.name||'') ||
@@ -10608,7 +10486,7 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
   const norm=s=>String(s||'').trim().toUpperCase();
 
   const accepted=substitutionOffers.filter(o=>{
-    if(!isSubstitutionAccepted(o) || isSubstitutionSuperseded(o)) return false;
+    if(!o.acceptedBy) return false;
     const d=parsePaymentDate(formatBillingDate(o.date));
     return d && d.year===Number(shownYear) && d.month===Number(shownMonth);
   });
@@ -10885,7 +10763,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   const meForBilling=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
   const normBilling=s=>String(s||'').trim().toUpperCase();
   const acceptedOffersForMe=substitutionOffers.filter(o=>{
-    if(!isSubstitutionAccepted(o)) return false;
+    if(!o.acceptedBy) return false;
     const d=parsePaymentDate(formatBillingDate(o.date));
     return d && d.year===Number(shownYear) && d.month===Number(shownMonth);
   });

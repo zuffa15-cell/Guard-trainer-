@@ -4234,27 +4234,50 @@ function hasAcceptedSubstitutionAccess(code,date,time=''){
 window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
 
 function openHomeTodayTraining(g){
-  // HOME už zobrazuje trénerovi iba jeho povolené dnešné tréningy.
-  // Preto pri kliknutí na kartu DOMOV NEOPAKUJEME ďalšiu kontrolu podľa
-  // trainerId/mena. Práve táto druhá kontrola spôsobovala hlášku
-  // „Tento tréning/skupina nepatrí tomuto trénerovi“, hoci bola karta
-  // trénerovi správne zobrazená.
-  //
-  // Oprávnenie na DOMOVE je teda:
-  // 1. karta sa trénerovi zobrazila cez filterHomeItemsForCurrentRole()
-  // 2. karta nie je označená ako zastupovaný tréning.
+  if(!isAdmin() && !isHeadTrainer()){
+    const code=String(g?.code||g?.group||'').trim().toUpperCase();
+    const p=getCurrentTestTrainerProfile();
+    const accountId=currentTrainerAccountId();
+    let allowed=false;
+    try{
+      const groups=[];
+      if(Array.isArray(p?.groups)) groups.push(...p.groups);
+      const real=Array.isArray(trainersData) ? trainersData.find(t=>Number(t.id)===Number(accountId)) : null;
+      if(Array.isArray(real?.groups)) groups.push(...real.groups);
+      allowed=groups.map(x=>String(x).trim().toUpperCase()).includes(code);
+    }catch(e){}
+    const today=appToday().iso;
+    const wantedTime=String(g?.time||'').trim();
+    const substitution=hasAcceptedSubstitutionAccess(code,today,wantedTime);
+    if(!allowed && !substitution){
+      // Pri priamom pridelení konkrétneho tréningu povoľ otvorenie aj bez skupiny v profile.
+      try{
+        const myId=accountId;
+        const my=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+        const surname=my.split(/\s+/).pop();
+        allowed=getSavedSchedules().some(x=>{
+          if(String(x?.groupCode||'').trim().toUpperCase()!==code) return false;
+          const xt=`${x?.from||''} – ${x?.to||''}`;
+          if(wantedTime && xt!==wantedTime) return false;
+          const ids=Array.isArray(x?.trainerIds)?x.trainerIds.map(Number):[]; if(x?.trainerId!=null) ids.push(Number(x.trainerId));
+          if(myId!=null && ids.includes(Number(myId))) return true;
+          return [x?.trainer,...(Array.isArray(x?.trainers)?x.trainers:[])].some(v=>{ const n=String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); return n===my || (!!surname && n.split(/\s+/).includes(surname)); });
+        });
+      }catch(e){}
+    }
+    if(!allowed){ toast('Tento tréning/skupina nepatrí tomuto trénerovi.'); return false; }
+  }
+  // HARD SEPARATION: Home has its own entry context. It must never read the
+  // last date selected in Calendar, even if the Calendar was opened moments ago.
   if(g && g.substitutionInactive){
     toast('Tento tréning je zastupovaný trénerom '+(g.substitutionBy||'iným trénerom')+'.');
     return false;
   }
-
   const todayIso=appToday().iso;
   window.__attendanceOpenedFromCalendar=false;
   window.__attendanceOpenSource='home';
   window.__attendanceHomeDate=todayIso;
-
   saveCurrentTrainingAttendance();
-
   attendanceState.date=todayIso;
   attendanceState.group=g && g.code ? g.code : '';
   attendanceState.name=g && g.name ? g.name : '';
@@ -4263,12 +4286,14 @@ function openHomeTodayTraining(g){
   attendanceState.billingPaymentSnapshot=null;
   attendanceState.billingAttendanceSnapshot=null;
   attendanceState.billingRecordSnapshot=null;
-
   applyTrainingSettingsForAttendance();
+  // Render directly as today's attendance. The hashchange handler is only a
+  // routing fallback and is explicitly told to keep this Home context.
   location.hash='attendance';
   attendance();
   return false;
 }
+// Backward-compatible alias for any older stored markup.
 function openHomeTraining(g){ return openHomeTodayTraining(g); }
 function parseSkDateLoose(value){
   if(!value)return null;
@@ -7364,20 +7389,17 @@ function attendance(){
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-
-    // DOMOV už pred otvorením odfiltroval iba tréningy patriace aktuálnemu
-    // trénerovi. Po prechode do Dochádzky preto NESMIEME znovu používať starú
-    // kontrolu trainerId/trainerOwnsTraining(), pretože pri starom zázname môže
-    // byť uložený iný alebo chýbajúci trainerId. To bol dôvod hlášky
-    // „Tento tréning patrí inému trénerovi“ pri Viktorovej vlastnej skupine.
-    const openedFromHome=String(window.__attendanceOpenSource||'').toLowerCase()==='home';
-    const own=openedFromHome || acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
+    const homeAuthorized=window.__gtHomeTrainingAuthorized===true;
+    const own=homeAuthorized || acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
       String(x.code||'').toUpperCase()===wantedGroup &&
       (!wantedTime || String(x.time||'')===wantedTime) &&
       trainerOwnsTraining(x)
     );
     if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
   }
+
+  // One-shot authorization for the Home click has now been consumed.
+  window.__gtHomeTrainingAuthorized=false;
 
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
@@ -11109,6 +11131,10 @@ function openGroup(code,name,time='',source='calendar'){
   const fromHome = String(source||'').toLowerCase()==='home';
   window.__attendanceOpenedFromCalendar = !fromHome;
   window.__attendanceOpenSource=fromHome?'home':'calendar';
+  // Home cards have already been filtered to the current trainer's groups.
+  // Authorize this exact Home click so attendance() cannot reject it because
+  // of a stale/mismatched trainerId in the schedule record.
+  window.__gtHomeTrainingAuthorized = !!fromHome;
   const openDate = fromHome
     ? appToday().iso
     : `${selectedCalendarYear}-${String(selectedCalendarMonth+1).padStart(2,'0')}-${String(selectedCalendarDay).padStart(2,'0')}`;

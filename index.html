@@ -7389,12 +7389,36 @@ function attendance(){
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-    const homeAuthorized=window.__gtHomeTrainingAuthorized===true;
-    const own=homeAuthorized || acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
-      String(x.code||'').toUpperCase()===wantedGroup &&
-      (!wantedTime || String(x.time||'')===wantedTime) &&
-      trainerOwnsTraining(x)
-    );
+
+    // Rovnaké pravidlo ako pri správnom trénerovi (Kuhal):
+    // ak má aktuálny tréner skupinu pridelenú vo svojom profile, je to jeho
+    // skupina a môže otvoriť jej dochádzku. Staré trainerId v rozvrhu nesmie
+    // toto oprávnenie prebiť.
+    let assignedGroup=false;
+    try{
+      const profile=getCurrentTestTrainerProfile();
+      const groups=new Set((profile?.groups||[]).map(x=>String(x).trim().toUpperCase()));
+      assignedGroup=groups.has(wantedGroup);
+
+      // Pre reálne prihlásenie načítaj aj aktuálny záznam trénera podľa ID,
+      // ak sa profilová kópia ešte nestihla synchronizovať.
+      if(!assignedGroup){
+        const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+        const id=Number(account?.trainer_id);
+        const real=(trainersData||[]).find(x=>Number(x.id)===id);
+        const realGroups=new Set((real?.groups||[]).map(x=>String(x).trim().toUpperCase()));
+        assignedGroup=realGroups.has(wantedGroup);
+      }
+    }catch(e){}
+
+    const directScheduleOwner=(typeof scheduleItemsForDate==='function'
+      ? scheduleItemsForDate(wantedDate):[]).some(x=>
+        String(x.code||'').toUpperCase()===wantedGroup &&
+        (!wantedTime || String(x.time||'')===wantedTime) &&
+        trainerOwnsTraining(x)
+      );
+
+    const own=assignedGroup || directScheduleOwner || acceptedSubstitution;
     if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
   }
 

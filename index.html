@@ -3308,31 +3308,28 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 })();
 </script>
 
-<script id="gt-group-trainers-v815">
+<script id="gt-all-group-trainers-v816">
 (function(){
-  window.gtGetAllGroupTrainerNames=function(groupCode){
+  window.gtAllAssignedTrainerNames=function(groupCode, fallback){
     const code=String(groupCode||'').trim().toUpperCase();
-    if(!code) return [];
-    const names=[];
+    const out=[];
     try{
-      const profiles=(typeof getTestTrainerProfiles==='function'?getTestTrainerProfiles():[]);
+      const profiles=(typeof getTestTrainerProfiles==='function') ? getTestTrainerProfiles() : [];
       profiles.forEach(p=>{
-        const groups=(p.groups||[]).map(x=>String(x).trim().toUpperCase());
+        const groups=Array.isArray(p.groups)?p.groups:[];
+        const has=groups.some(g=>String(g||'').trim().toUpperCase()===code);
         const name=String(p.name||p.fullName||p.displayName||'').trim();
-        if(name && groups.includes(code) && !names.includes(name)) names.push(name);
+        if(has && name && !out.includes(name)) out.push(name);
       });
     }catch(e){}
-    // Keep the currently stored trainer as fallback.
-    try{
-      const current=String(arguments?.[1]||'').trim();
-      if(current && !names.includes(current)) names.push(current);
-    }catch(e){}
-    return names;
+    const fb=String(fallback||'').trim();
+    if(fb && !out.includes(fb)) out.push(fb);
+    return out;
   };
 })();
 </script>
-<style id="gt-group-trainers-css-v815">
-[data-trainer-label]{white-space:normal;line-height:1.25}
+<style id="gt-all-group-trainers-css-v816">
+.trainer-name,.training-trainer,.trainer,[data-trainer-label]{white-space:normal;line-height:1.25}
 </style></head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -10144,19 +10141,25 @@ html,body{color-scheme:dark!important;}
 </style>
 
 
-<script id="gt-group-trainers-render-v815">
+<script id="gt-all-group-trainers-postrender-v816">
 (function(){
-  window.gtRefreshGroupTrainerLabels=function(root){
+  function apply(){
     try{
-      const scope=root||document;
-      const nodes=scope.querySelectorAll('[data-group-code][data-trainer-label]');
-      nodes.forEach(n=>{
-        const code=n.getAttribute('data-group-code');
-        const names=window.gtGetAllGroupTrainerNames(code);
-        if(names.length) n.textContent=names.join(', ');
+      const root=document;
+      const candidates=root.querySelectorAll('[data-group-code], [data-group], .training-card, .schedule-card');
+      candidates.forEach(card=>{
+        const code=card.getAttribute('data-group-code')||card.getAttribute('data-group')||'';
+        if(!code) return;
+        const fallback=(card.getAttribute('data-trainer')||'').trim();
+        const names=window.gtAllAssignedTrainerNames(code,fallback);
+        if(!names.length) return;
+        const nodes=card.querySelectorAll('[data-trainer-label], .trainer-name, .training-trainer, .trainer');
+        nodes.forEach(n=>{ n.textContent=names.join(', '); });
       });
     }catch(e){}
-  };
+  }
+  window.gtApplyAllGroupTrainers=apply;
+  document.addEventListener('DOMContentLoaded',apply);
 })();
 </script>
 </body>

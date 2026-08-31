@@ -4234,49 +4234,29 @@ function hasAcceptedSubstitutionAccess(code,date,time=''){
 window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
 
 function openHomeTodayTraining(g){
-  if(!isAdmin() && !isHeadTrainer()){
-    const code=String(g?.code||g?.group||'').trim().toUpperCase();
-    const p=getCurrentTestTrainerProfile();
-    const accountId=currentTrainerAccountId();
-    let allowed=false;
-    try{
-      const groups=[];
-      if(Array.isArray(p?.groups)) groups.push(...p.groups);
-      const real=Array.isArray(trainersData) ? trainersData.find(t=>Number(t.id)===Number(accountId)) : null;
-      if(Array.isArray(real?.groups)) groups.push(...real.groups);
-      allowed=groups.map(x=>String(x).trim().toUpperCase()).includes(code);
-    }catch(e){}
-    const today=appToday().iso;
-    const wantedTime=String(g?.time||'').trim();
-    const substitution=hasAcceptedSubstitutionAccess(code,today,wantedTime);
-    if(!allowed && !substitution){
-      // Pri priamom pridelení konkrétneho tréningu povoľ otvorenie aj bez skupiny v profile.
-      try{
-        const myId=accountId;
-        const my=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
-        const surname=my.split(/\s+/).pop();
-        allowed=getSavedSchedules().some(x=>{
-          if(String(x?.groupCode||'').trim().toUpperCase()!==code) return false;
-          const xt=`${x?.from||''} – ${x?.to||''}`;
-          if(wantedTime && xt!==wantedTime) return false;
-          const ids=Array.isArray(x?.trainerIds)?x.trainerIds.map(Number):[]; if(x?.trainerId!=null) ids.push(Number(x.trainerId));
-          if(myId!=null && ids.includes(Number(myId))) return true;
-          return [x?.trainer,...(Array.isArray(x?.trainers)?x.trainers:[])].some(v=>{ const n=String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); return n===my || (!!surname && n.split(/\s+/).includes(surname)); });
-        });
-      }catch(e){}
-    }
-    if(!allowed){ toast('Tento tréning/skupina nepatrí tomuto trénerovi.'); return false; }
-  }
-  // HARD SEPARATION: Home has its own entry context. It must never read the
-  // last date selected in Calendar, even if the Calendar was opened moments ago.
+  // TOTO JE VSTUP Z DOMOVA. Ak sa karta tréningu zobrazila v časti
+  // „Dnešné tréningy“, neblokuj ju druhou kontrolou vlastníctva.
+  // Staré verzie kontrolovali trainerId pri otvorení a práve to spôsobovalo,
+  // že niektorí tréneri (napr. Viktor) videli svoju skupinu, ale nemohli ju
+  // otvoriť.
   if(g && g.substitutionInactive){
     toast('Tento tréning je zastupovaný trénerom '+(g.substitutionBy||'iným trénerom')+'.');
     return false;
   }
+  if(isHeadTrainer()){
+    toast('Hlavný tréner nemôže zapisovať dochádzku');
+    return false;
+  }
+
   const todayIso=appToday().iso;
   window.__attendanceOpenedFromCalendar=false;
   window.__attendanceOpenSource='home';
   window.__attendanceHomeDate=todayIso;
+
+  // Jednorazová autorizácia pre Dochádzku. Karta bola už vyfiltrovaná
+  // podľa trénera; attendance() preto nemá znova používať trainerId.
+  window.__gtHomeTrainingAuthorized=true;
+
   saveCurrentTrainingAttendance();
   attendanceState.date=todayIso;
   attendanceState.group=g && g.code ? g.code : '';
@@ -4287,13 +4267,10 @@ function openHomeTodayTraining(g){
   attendanceState.billingAttendanceSnapshot=null;
   attendanceState.billingRecordSnapshot=null;
   applyTrainingSettingsForAttendance();
-  // Render directly as today's attendance. The hashchange handler is only a
-  // routing fallback and is explicitly told to keep this Home context.
   location.hash='attendance';
   attendance();
   return false;
 }
-// Backward-compatible alias for any older stored markup.
 function openHomeTraining(g){ return openHomeTodayTraining(g); }
 function parseSkDateLoose(value){
   if(!value)return null;
@@ -7383,48 +7360,25 @@ function applyBillingSnapshotToAttendance(){
 
 function attendance(){
   if(!isAdmin() && !isHeadTrainer()){
-    const accountId=currentTrainerAccountId();
-    if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
-    const wantedDate=attendanceState.date||appToday().iso;
-    const wantedGroup=String(attendanceState.group||'').toUpperCase();
-    const wantedTime=String(attendanceState.trainingTime||'');
-    const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-
-    // Rovnaké pravidlo ako pri správnom trénerovi (Kuhal):
-    // ak má aktuálny tréner skupinu pridelenú vo svojom profile, je to jeho
-    // skupina a môže otvoriť jej dochádzku. Staré trainerId v rozvrhu nesmie
-    // toto oprávnenie prebiť.
-    let assignedGroup=false;
-    try{
-      const profile=getCurrentTestTrainerProfile();
-      const groups=new Set((profile?.groups||[]).map(x=>String(x).trim().toUpperCase()));
-      assignedGroup=groups.has(wantedGroup);
-
-      // Pre reálne prihlásenie načítaj aj aktuálny záznam trénera podľa ID,
-      // ak sa profilová kópia ešte nestihla synchronizovať.
-      if(!assignedGroup){
-        const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-        const id=Number(account?.trainer_id);
-        const real=(trainersData||[]).find(x=>Number(x.id)===id);
-        const realGroups=new Set((real?.groups||[]).map(x=>String(x).trim().toUpperCase()));
-        assignedGroup=realGroups.has(wantedGroup);
-      }
-    }catch(e){}
-
-    const directScheduleOwner=(typeof scheduleItemsForDate==='function'
-      ? scheduleItemsForDate(wantedDate):[]).some(x=>
+    const homeAuthorized=window.__gtHomeTrainingAuthorized===true;
+    if(!homeAuthorized){
+      const accountId=currentTrainerAccountId();
+      if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
+      const wantedDate=attendanceState.date||appToday().iso;
+      const wantedGroup=String(attendanceState.group||'').toUpperCase();
+      const wantedTime=String(attendanceState.trainingTime||'');
+      const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
+      const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
         String(x.code||'').toUpperCase()===wantedGroup &&
         (!wantedTime || String(x.time||'')===wantedTime) &&
         trainerOwnsTraining(x)
       );
-
-    const own=assignedGroup || directScheduleOwner || acceptedSubstitution;
-    if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
+      if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
+    }
   }
 
-  // One-shot authorization for the Home click has now been consumed.
+  // Jednorazové oprávnenie z Domova je spotrebované až po úspešnom vstupe.
   window.__gtHomeTrainingAuthorized=false;
-
   // DOMOV and KALENDÁR are intentionally independent entry points.
   // A Home-opened attendance carries a hard date context that always wins.
   if(window.__attendanceOpenSource==='home' || window.__attendanceHomeDate){

@@ -5548,8 +5548,14 @@ function normalizeMember(m){
  m.group=m.groups[0];
  // Oficiálny dátum vstupu do klubu je dátum odovzdania prihlášky.
  // Prihláška môže byť zaevidovaná cez Dochádzku alebo priamo v Profile člena.
- if(m.application && m.applicationDate && !m.memberSinceManual){ m.memberSince=m.applicationDate; }
- if(!m.application){ m.applicationDate=''; m.memberSince=''; m.memberSinceManual=false; }
+ if(m.application && m.applicationDate && !m.memberSinceManual){
+   m.memberSince=m.applicationDate;
+ }
+ if(!m.application){
+   m.applicationDate='';
+   // Ručne zadaný dátum vstupu ponechávame aj bez prihlášky.
+   if(!m.memberSinceManual) m.memberSince='';
+ }
  return m;
 }
 function normalizeAllMembers(){
@@ -6530,7 +6536,15 @@ function saveMemberProfile(id,isNew=false){
 try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
    m.applicationDate=formatPaymentDate(appToday().iso);
-   m.memberSince=m.applicationDate;
+   // Ručne zadaný dátum vstupu nesmie byť prepísaný dátumom prihlášky.
+   const savedMemberSinceInput2=(document.getElementById('mpMemberSince')?.value||'').trim();
+   if(savedMemberSinceInput2){
+     m.memberSince=savedMemberSinceInput2;
+     m.memberSinceManual=savedMemberSinceInput2!==m.applicationDate;
+   }else{
+     m.memberSince=m.applicationDate;
+     m.memberSinceManual=false;
+   }
    if(preview && preview.dataset.fileData){
      m.applicationFile=preview.dataset.fileData;
      m.applicationFileName=preview.dataset.fileName||appFile.files[0].name;
@@ -7463,7 +7477,7 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
 try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
      if(!m.applicationDate) m.applicationDate=a.applicationDate||formatPaymentDate(attendanceState.date);
-     m.memberSince=m.applicationDate;
+     if(!m.memberSinceManual) m.memberSince=m.applicationDate;
      a.applicationDate=m.applicationDate;
    }
    refreshAttendance();
@@ -7480,7 +7494,7 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
 try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
    m.applicationDate=a.applicationDate;
-   m.memberSince=m.applicationDate;
+   if(!m.memberSinceManual) m.memberSince=m.applicationDate;
  }
  refreshAttendance();
  toast('Prihláška odovzdaná');
@@ -8026,7 +8040,10 @@ function updateCanonicalMemberFromAttendance(a){
  m.registrationAccountDate=a.registrationAccountDate||'';
  if(a.registrationDate) m.registrationDate=a.registrationDate;
  m.application=!!a.application;
- if(a.applicationDate){ m.applicationDate=a.applicationDate; m.memberSince=a.applicationDate; }
+ if(a.applicationDate){
+   m.applicationDate=a.applicationDate;
+   if(!m.memberSinceManual) m.memberSince=a.applicationDate;
+ }
  m.debt=Number(a.debt||0);
  m.debtReason=a.debtReason||'';
  if(a.newMember && !m.newMemberDate) m.newMemberDate=attendanceState.date;

@@ -7743,7 +7743,8 @@ function renderMembershipPaymentCell(m,i){
 
   if(paidCurrentPeriod){
     const amount=Number(paidCurrentPeriod.amount||30);
-    return `<button ${dis} class="pay-btn membership-paid-elsewhere account-readonly" title="Členské za aktuálny polrok už bolo zaplatené – dvojklik vytvorí evidenčný účet" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">✓<strong>${amount} €</strong></button>`;
+    // Zaplatený AKTUÁLNY polrok = zelená fajka v dochádzke.
+    return `<button ${dis} class="pay-btn on membership-on membership-paid-current account-readonly" title="Členské za aktuálny polrok je zaplatené" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">✓<strong>${amount} €</strong></button>`;
   }
 
   // Predchádzajúce polročné členské nie je platba za aktuálny polrok.

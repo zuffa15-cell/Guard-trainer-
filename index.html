@@ -7364,7 +7364,14 @@ function attendance(){
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-    const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
+
+    // DOMOV už pred otvorením odfiltroval iba tréningy patriace aktuálnemu
+    // trénerovi. Po prechode do Dochádzky preto NESMIEME znovu používať starú
+    // kontrolu trainerId/trainerOwnsTraining(), pretože pri starom zázname môže
+    // byť uložený iný alebo chýbajúci trainerId. To bol dôvod hlášky
+    // „Tento tréning patrí inému trénerovi“ pri Viktorovej vlastnej skupine.
+    const openedFromHome=String(window.__attendanceOpenSource||'').toLowerCase()==='home';
+    const own=openedFromHome || acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
       String(x.code||'').toUpperCase()===wantedGroup &&
       (!wantedTime || String(x.time||'')===wantedTime) &&
       trainerOwnsTraining(x)

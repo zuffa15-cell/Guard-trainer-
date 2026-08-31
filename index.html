@@ -3294,11 +3294,12 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .substitution-q.accepted-offer small{color:#fff!important}
 </style><!-- Guard Trainer v831: isolated member delete, based directly on v820. -->
 
-<style id="gt-v837-hide-new">
-.member-new-badge,.member-status-new,.new-member-badge,.status-new,.badge-new,
-.member-row .new-badge,.member-list .new-badge,[data-member-new-badge]{
-display:none!important;
+<style id="gt-v837-member-delete-style">
+.member-delete-btn{
+ border:0;background:transparent;color:#c62828;font-size:18px;font-weight:800;
+ padding:4px 7px;border-radius:8px;cursor:pointer;
 }
+.member-delete-btn:active{background:#dc2626;color:#fff}
 </style>
 </head>
 <body class="gtSplashV323Active">
@@ -5717,9 +5718,27 @@ function memberRows(arr){
      <span class="${secondHalfMembershipVisual(m)} membership-period-icon" title="Členské 2. polrok">Č</span>
      <span class="${memberHasRegistration(m)?'icon-ok':'icon-no'}" title="Registrácia">R</span>
    </div>
-   <div class="member-flags">${m.newMember?'<b class="new-flag">NOVÝ</b>':''}</div>
+   <div class="member-flags">${(typeof isAdmin==='function'&&isAdmin())||(typeof isHeadTrainer==='function'&&isHeadTrainer())?`<button type="button" class="member-delete-btn" onclick="event.preventDefault();event.stopPropagation();return deleteMemberFromList(${m.id})">🗑</button>`:''}</div>
    <div class="member-arrow">›</div>
  </article>`).join('');
+}
+
+
+function deleteMemberFromList(id){
+ const allowed=(typeof isAdmin==='function'&&isAdmin()) || (typeof isHeadTrainer==='function'&&isHeadTrainer());
+ if(!allowed){ toast('Nemáš oprávnenie vymazať člena'); return false; }
+ const idx=membersData.findIndex(x=>Number(x.id)===Number(id));
+ if(idx<0){ toast('Člen nebol nájdený'); return false; }
+ const m=membersData[idx];
+ if(!confirm(`Naozaj vymazať člena ${m.surname||''} ${m.name||''}?`)) return false;
+
+ membersData.splice(idx,1);
+ normalizeAllMembers();
+ persistMembersData();
+ try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){ console.warn('Delete member cloud sync',e); }
+ renderMembers();
+ toast('Člen bol vymazaný');
+ return false;
 }
 
 function renderMembers(){
@@ -10132,57 +10151,6 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
-
-<script id="gt-v837-delete-member">
-(function(){
-  window.deleteMember=function(id){
-    const ok=(typeof isAdmin==='function'&&isAdmin())||
-             (typeof isHeadTrainer==='function'&&isHeadTrainer());
-    if(!ok || typeof membersData==='undefined' || !Array.isArray(membersData)) return false;
-    const idx=membersData.findIndex(m=>String(m.id)===String(id));
-    if(idx<0)return false;
-    const m=membersData[idx];
-    if(!confirm('Naozaj vymazať člena '+String(m.surname||m.name||'')+'?'))return false;
-    membersData.splice(idx,1);
-    if(typeof saveData==='function') saveData();
-    if(typeof renderMembers==='function') renderMembers();
-    return true;
-  };
-})();
-</script>
-
-<style id="gt-v837-delete-style">
-.gt-v837-delete{
-width:100%;margin-top:8px;padding:9px 12px;border-radius:10px;
-border:1px solid #b42318;background:transparent;color:#f04438;font-weight:700;
-}
-.gt-v837-delete:active{background:#dc2626;color:#fff;border-color:#dc2626}
-</style>
-<script id="gt-v837-delete-ui">
-(function(){
-  function allowed(){
-    return (typeof isAdmin==='function'&&isAdmin())||
-           (typeof isHeadTrainer==='function'&&isHeadTrainer());
-  }
-  function add(){
-    if(!allowed())return;
-    document.querySelectorAll('[data-member-id]').forEach(card=>{
-      if(card.querySelector('.gt-v837-delete'))return;
-      const id=card.getAttribute('data-member-id');
-      if(!id)return;
-      const b=document.createElement('button');
-      b.type='button';b.className='gt-v837-delete';b.textContent='VYMAZAŤ ČLENA';
-      b.onclick=function(e){
-        e.preventDefault();e.stopPropagation();
-        if(typeof window.deleteMember==='function')window.deleteMember(id);
-      };
-      card.appendChild(b);
-    });
-  }
-  document.addEventListener('DOMContentLoaded',add);
-  setInterval(add,1000);
-})();
-</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */

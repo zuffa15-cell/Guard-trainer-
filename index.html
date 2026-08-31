@@ -4141,8 +4141,24 @@ function trainerOwnsTraining(item){
   if(ids.includes(myId)) return true;
   try{
     const me=(trainersData||[]).find(t=>Number(t.id)===myId);
-    const myName=String(me?.full||me?.name||'').trim().toLowerCase();
-    return !!myName && myName===String(item.trainer||'').trim().toLowerCase();
+    const myName=String(me?.full||me?.name||'').trim();
+    const assignedName=String(item.trainer||'').trim();
+
+    // scheduleItemsForDate() môže zobrazovať pri tréningu iba priezvisko
+    // (napr. „Žuffa“), zatiaľ čo účet trénera má celé meno
+    // „Viktor Žuffa“. Porovnaj preto celé meno aj jednotlivé časti mena.
+    const norm=s=>String(s||'')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+    const a=norm(myName), b=norm(assignedName);
+    const surname=a.split(' ').pop();
+    const assignedParts=b.split(' ').filter(Boolean);
+
+    return !!b && (
+      a===b ||
+      (!!surname && assignedParts.includes(surname)) ||
+      (!!a && assignedParts.some(part=>a.split(' ').includes(part) && part.length>=4))
+    );
   }catch(e){ return false; }
 }
 

@@ -8377,34 +8377,47 @@ function showNewMemberChoice(options){
 
     const wrap=document.createElement('div');
     wrap.id='gt-new-member-choice';
-    wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;';
+    wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:99999;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;';
     const box=document.createElement('div');
-    box.style.cssText='width:min(520px,100%);background:#111;border:1px solid #d9a900;border-radius:18px;padding:22px;box-shadow:0 15px 50px rgba(0,0,0,.7);color:#fff;font-family:inherit;';
+    box.style.cssText='width:min(560px,100%);max-height:90vh;overflow:auto;background:#111;border:1px solid #d9a900;border-radius:18px;padding:20px;box-shadow:0 15px 50px rgba(0,0,0,.7);color:#fff;font-family:inherit;';
 
-    let html=`<div style="font-size:22px;font-weight:800;margin-bottom:8px;">Člen už existuje</div>
-      <div style="font-size:15px;color:#bbb;margin-bottom:18px;">Našiel som zhodu bez ohľadu na diakritiku. Vyber, čo chceš urobiť:</div>`;
+    const fmtDate=v=>{
+      if(!v)return 'Dátum neuvedený';
+      const d=new Date(v);
+      if(!isNaN(d.getTime())) return d.toLocaleDateString('sk-SK');
+      return String(v);
+    };
+    const activeDate=m=>m.memberSince||m.applicationDate||m.createdAt||m.created||'';
+    const archivedDate=m=>m.deletedAt||m.archivedAt||m.archiveDate||'';
+
+    let html=`<div style="font-size:22px;font-weight:800;margin-bottom:7px;">Člen už existuje</div>
+      <div style="font-size:15px;color:#bbb;margin-bottom:18px;">Našiel som zhodu bez ohľadu na diakritiku. Vyber konkrétneho člena:</div>`;
 
     if(options.active.length){
       html+=`<div style="font-size:14px;color:#f0c000;font-weight:800;margin-bottom:8px;">AKTÍVNI ČLENOVIA</div>`;
       options.active.forEach((m,idx)=>{
         const hasGroup=(m.groups||[]).some(g=>String(g).trim().toUpperCase()===String(attendanceState.group||'').trim().toUpperCase());
-        html+=`<button data-active="${idx}" style="width:100%;text-align:left;margin:5px 0;padding:13px 14px;border:1px solid #555;border-radius:12px;background:#1b1b1b;color:#fff;font-size:15px;">
-          <b>${m.surname||''} ${m.name||''}</b>
-          <span style="display:block;color:${hasGroup?'#62d96b':'#f0c000'};font-size:13px;margin-top:4px;">
+        html+=`<button data-active="${idx}" style="width:100%;text-align:left;margin:6px 0;padding:14px;border:1px solid #555;border-radius:12px;background:#1b1b1b;color:#fff;font-size:15px;">
+          <b style="font-size:17px;">${m.surname||''} ${m.name||''}</b>
+          <span style="display:block;color:#bbb;font-size:13px;margin-top:5px;">Členom klubu od: <b>${fmtDate(activeDate(m))}</b></span>
+          <span style="display:block;color:${hasGroup?'#62d96b':'#f0c000'};font-size:13px;margin-top:3px;">
             ${hasGroup?'Už patrí do skupiny '+String(attendanceState.group||''):'Nie je v tejto skupine – prideliť skupinu '+String(attendanceState.group||'')}
           </span>
         </button>`;
       });
     }
+
     if(options.archived.length){
       html+=`<div style="font-size:14px;color:#f0c000;font-weight:800;margin:16px 0 8px;">ARCHÍV</div>`;
       options.archived.forEach((m,idx)=>{
-        html+=`<button data-archived="${idx}" style="width:100%;text-align:left;margin:5px 0;padding:13px 14px;border:1px solid #555;border-radius:12px;background:#1b1b1b;color:#fff;font-size:15px;">
-          <b>${m.surname||''} ${m.name||''}</b>
-          <span style="display:block;color:#62d96b;font-size:13px;margin-top:4px;">Obnoviť člena</span>
+        html+=`<button data-archived="${idx}" style="width:100%;text-align:left;margin:6px 0;padding:14px;border:1px solid #555;border-radius:12px;background:#1b1b1b;color:#fff;font-size:15px;">
+          <b style="font-size:17px;">${m.surname||''} ${m.name||''}</b>
+          <span style="display:block;color:#bbb;font-size:13px;margin-top:5px;">Presunutý do archívu: <b>${fmtDate(archivedDate(m))}</b></span>
+          <span style="display:block;color:#62d96b;font-size:13px;margin-top:3px;">Obnoviť člena</span>
         </button>`;
       });
     }
+
     html+=`<div style="display:flex;gap:8px;margin-top:18px;">
       <button data-action="new" style="flex:1;padding:13px;border:1px solid #d9a900;border-radius:12px;background:#d9a900;color:#111;font-weight:800;">NOVÝ</button>
       <button data-action="cancel" style="flex:1;padding:13px;border:1px solid #555;border-radius:12px;background:#222;color:#fff;font-weight:800;">ZRUŠIŤ</button>
@@ -8415,18 +8428,13 @@ function showNewMemberChoice(options){
     document.body.appendChild(wrap);
 
     const finish=v=>{wrap.remove();resolve(v);};
-    box.querySelectorAll('[data-active]').forEach(btn=>{
-      btn.onclick=()=>finish({type:'active',member:options.active[Number(btn.dataset.active)]});
-    });
-    box.querySelectorAll('[data-archived]').forEach(btn=>{
-      btn.onclick=()=>finish({type:'archived',member:options.archived[Number(btn.dataset.archived)]});
-    });
+    box.querySelectorAll('[data-active]').forEach(btn=>btn.onclick=()=>finish({type:'active',member:options.active[Number(btn.dataset.active)]}));
+    box.querySelectorAll('[data-archived]').forEach(btn=>btn.onclick=()=>finish({type:'archived',member:options.archived[Number(btn.dataset.archived)]}));
     box.querySelector('[data-action="new"]').onclick=()=>finish({type:'new'});
     box.querySelector('[data-action="cancel"]').onclick=()=>finish({type:'cancel'});
     wrap.onclick=e=>{if(e.target===wrap)finish({type:'cancel'});};
   });
 }
-
 async function addNewMember(){
  if(!attendanceEditGuard()) return;
  const n=prompt('Priezvisko alebo priezvisko + meno nového člena:','');

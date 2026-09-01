@@ -8139,7 +8139,22 @@ function toggleTraining(i){
  if(!attendanceEditGuard()) return;
  const m=attendanceState.members[i];
  if(!m)return;
- if(m.newMember){ m.training=true; m.trainingAccount=false; saveCurrentTrainingAttendance(); toast('NOVÝ – tréning zdarma'); refreshAttendance(); return; }
+
+ // NOVÝ nie je pevne zamknutý stav.
+ // Prvé kliknutie zmení NOVÝ -> TRÉNING (5/6 € podľa skupiny).
+ // Dvojklik potom cez handleTrainingDoubleClick zmení TRÉNING -> ÚČET.
+ // Záznam nového člena ostáva zachovaný (newMemberDate), mení sa iba
+ // stav platby pre túto konkrétnu dochádzku.
+ if(m.newMember){
+   m.newMember=false;
+   m.training=true;
+   m.trainingAccount=false;
+   saveCurrentTrainingAttendance();
+   refreshAttendance();
+   toast(`Tréning ${trainingFee()} €`);
+   return;
+ }
+
  m.training=!m.training;
  if(!m.training) m.trainingAccount=false;
  saveCurrentTrainingAttendance();

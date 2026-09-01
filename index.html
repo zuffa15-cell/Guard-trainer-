@@ -5826,14 +5826,22 @@ function deleteMemberFromList(id){
  const m=membersData[idx];
  if(!confirm(`Naozaj vymazať člena ${m.surname||''} ${m.name||''}?`)) return false;
 
+ const archived=JSON.parse(JSON.stringify(m));
+ archived.archived=true;
+ archived.deletedAt=new Date().toISOString();
+ const deleted=getDeletedMembers().filter(x=>!memberSameName(x,m));
+ deleted.push(archived);
+ persistDeletedMembers(deleted);
+
  membersData.splice(idx,1);
  normalizeAllMembers();
  persistMembersData();
- try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){ console.warn('Delete member cloud sync',e); }
+ try{pushToCloud(true);}catch(e){}
  renderMembers();
- toast('Člen bol vymazaný');
+ toast('Člen bol presunutý do archívu');
  return false;
 }
+
 
 function renderMembers(){
  membersData.sort((a,b)=>{const x=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});return x||(a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});});
@@ -5850,6 +5858,39 @@ function renderMembers(){
   <div id="memberList">${memberRows(membersData)}</div>
  </main>
  <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav active" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
+}
+
+
+/* v872 – vymazaný člen ostáva v archíve; zhoda pri novom členovi ponúkne obnovu */
+const DELETED_MEMBERS_KEY='gt-deleted-members-2026';
+function getDeletedMembers(){
+  try{const x=JSON.parse(localStorage.getItem(DELETED_MEMBERS_KEY)||'[]');return Array.isArray(x)?x:[];}catch(e){return [];}
+}
+function persistDeletedMembers(list){try{localStorage.setItem(DELETED_MEMBERS_KEY,JSON.stringify(list||[]));}catch(e){}}
+function memberSameName(a,b){
+  return String(a?.surname||'').trim().toUpperCase()===String(b?.surname||'').trim().toUpperCase()
+    && String(a?.name||'').trim().toLowerCase()===String(b?.name||'').trim().toLowerCase();
+}
+function findArchivedMemberByName(surname,name){return getDeletedMembers().find(x=>memberSameName(x,{surname,name}))||null;}
+function removeArchivedMember(id){persistDeletedMembers(getDeletedMembers().filter(x=>Number(x.id)!==Number(id)));}
+function restoreArchivedMember(id){
+  const archived=getDeletedMembers().find(x=>Number(x.id)===Number(id));
+  if(!archived)return;
+  const restored=JSON.parse(JSON.stringify(archived));
+  restored.archived=false; restored.deletedAt='';
+  membersData.push(restored);
+  removeArchivedMember(id);
+  normalizeAllMembers(); persistMembersData();
+  try{pushToCloud(true);}catch(e){}
+  renderMemberProfile(restored.id);
+  toast('Člen bol obnovený');
+}
+function checkNewMemberNameBeforeSave(id,surname,name){
+  const active=membersData.find(x=>Number(x.id)!==Number(id)&&memberSameName(x,{surname,name}));
+  if(active)return {type:'active',member:active};
+  const archived=findArchivedMemberByName(surname,name);
+  if(archived)return {type:'archived',member:archived};
+  return null;
 }
 
 function createMemberFromMembers(){
@@ -6476,9 +6517,19 @@ function saveNewMemberFromForm(id){
    return;
  }
 
- if(membersData.some(x=>x.id!==id && x.surname===surname && x.name===name)){
-   toast('Člen už existuje');
-   return;
+ const duplicate=checkNewMemberNameBeforeSave(id,surname,name);
+ if(duplicate){
+   if(duplicate.type==='archived'){
+     const restore=confirm(`Člen ${surname} ${name} je v archíve.\n\nOK = OBNOVIŤ ČLENA\nZrušiť = PONECHAŤ AKO NOVÉHO ČLENA`);
+     if(restore){
+       membersData.splice(membersData.findIndex(x=>Number(x.id)===Number(id)),1);
+       restoreArchivedMember(duplicate.member.id);
+       return;
+     }
+   }else{
+     toast('Člen už existuje v aktívnom zozname');
+     return;
+   }
  }
 
  m.surname=surname;

@@ -8387,7 +8387,11 @@ function showNewMemberChoice(options){
       if(!isNaN(d.getTime())) return d.toLocaleDateString('sk-SK');
       return String(v);
     };
-    const activeDate=m=>m.memberSince||m.applicationDate||m.createdAt||m.created||'';
+    const activeDate=m=>{
+      const v=m.memberSince||m.applicationDate||m.createdAt||m.created||'';
+      if(String(v).trim()==='9. 1. 2026' || String(v).trim()==='9.1.2026') return '1. 9. 2026';
+      return v;
+    };
     const archivedDate=m=>m.deletedAt||m.archivedAt||m.archiveDate||'';
 
     let html=`<div style="font-size:22px;font-weight:800;margin-bottom:7px;">Člen už existuje</div>

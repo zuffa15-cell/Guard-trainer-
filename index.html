@@ -8383,13 +8383,26 @@ function showNewMemberChoice(options){
 
     const fmtDate=v=>{
       if(!v)return 'Dátum neuvedený';
+      const s=String(v).trim();
+
+      // V Guard Trainer sú dátumy vždy DEŇ.MESIAC.ROK.
+      // Nepoužívame new Date('1. 9. 2026'), pretože JS môže
+      // takýto zápis interpretovať nejednotne.
+      const m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+      if(m) return `${m[1].padStart(2,'0')}.${m[2].padStart(2,'0')}.${m[3]}`;
+
+      const iso=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if(iso) return `${iso[3].padStart(2,'0')}.${iso[2].padStart(2,'0')}.${iso[1]}`;
+
       const d=new Date(v);
-      if(!isNaN(d.getTime())) return d.toLocaleDateString('sk-SK');
-      return String(v);
+      if(!isNaN(d.getTime())){
+        return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
+      }
+      return s;
     };
     const activeDate=m=>{
       const v=m.memberSince||m.applicationDate||m.createdAt||m.created||'';
-      if(String(v).trim()==='9. 1. 2026' || String(v).trim()==='9.1.2026') return '1. 9. 2026';
+      if(String(v).trim()==='9. 1. 2026' || String(v).trim()==='9.1.2026') return '01.09.2026';
       return v;
     };
     const archivedDate=m=>m.deletedAt||m.archivedAt||m.archiveDate||'';

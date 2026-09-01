@@ -7502,6 +7502,20 @@ function attendance(){
   }
   refreshCurrentDateDefaults();
   applyTrainingSettingsForAttendance();
+
+  // Dochádzka musí zobrazovať rovnaký čas ako Domov/Kalendár.
+  // Čas sa berie z konkrétneho tréningu podľa dátumu + skupiny + názvu,
+  // nie z pevne zapísanej hodnoty.
+  const attendanceScheduleItems=(typeof scheduleItemsForDate==='function'
+    ? (scheduleItemsForDate(attendanceState.date)||[]) : []);
+  const attendanceScheduleMatch=attendanceScheduleItems.find(x=>
+    String(x.code||'').trim().toUpperCase()===String(attendanceState.group||'').trim().toUpperCase() &&
+    (!attendanceState.name || String(x.name||'').trim()===String(attendanceState.name||'').trim())
+  );
+  if(attendanceScheduleMatch && attendanceScheduleMatch.time){
+    attendanceState.trainingTime=String(attendanceScheduleMatch.time);
+  }
+  const attendanceDisplayTime=String(attendanceState.trainingTime||'');
   const attendanceCancelled=isTrainingCancelled(attendanceState.date,attendanceState.group,attendanceState.trainingTime||'',attendanceState.name) ||
     isTrainingCancelled(attendanceState.date,attendanceState.group,'',attendanceState.name);
   if(attendanceCancelled){ renderCancelledAttendance(); return; }
@@ -7521,7 +7535,7 @@ function attendance(){
       <div class="att-group" style="--admin-group-color:${getGroupColor(attendanceState.group,'gold')};background:var(--admin-group-color) !important;background-image:none !important;">
         <span>${attendanceState.group}</span><b>${attendanceState.name}</b>
       </div>
-      <div class="att-meta">◷ 17:30 – 18:45　⌖ Watsonova 4　♙ ${attendanceState.members.length} členov</div>
+      <div class="att-meta">◷ ${attendanceDisplayTime}　⌖ Watsonova 4　♙ ${attendanceState.members.length} členov</div>
 
       <div class="finance">
         <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>

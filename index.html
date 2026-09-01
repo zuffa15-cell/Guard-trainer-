@@ -8364,22 +8364,82 @@ function deleteDebt(i){
 }
 function addNewMember(){
  if(!attendanceEditGuard()) return;
- const n=prompt('Meno alebo priezvisko nového člena:','');
+ const n=prompt('Priezvisko alebo priezvisko + meno nového člena:','');
  if(!n||!n.trim())return;
  const parts=n.trim().split(/\s+/);
  const surname=parts[0].toUpperCase();
  const name=parts.length>1?parts.slice(1).join(' '):'';
 
- // A member is created once and remains in the club/member list.
- // If the same person is entered again later, use the existing member.
- let member=membersData.find(x=>x.surname===surname && x.name===name);
+ // V Dochádzke stačí zadať priezvisko. Najprv hľadáme aktívneho člena
+ // podľa priezviska a potom archivovaného člena podľa priezviska.
+ const activeMatches=membersData.filter(x=>
+   String(x.surname||'').trim().toUpperCase()===surname
+ );
+ const archivedMatches=getDeletedMembers().filter(x=>
+   String(x.surname||'').trim().toUpperCase()===surname
+ );
+
+ if(activeMatches.length || archivedMatches.length){
+   const activeText=activeMatches.length
+     ? '\nAktívny: '+activeMatches.map(x=>`${x.surname} ${x.name}`).join(', ')
+     : '';
+   const archivedText=archivedMatches.length
+     ? '\nV archíve: '+archivedMatches.map(x=>`${x.surname} ${x.name}`).join(', ')
+     : '';
+   const restoreCandidate=archivedMatches.length===1 ? archivedMatches[0] : null;
+
+   let choice;
+   if(restoreCandidate){
+     choice=confirm(
+       `Našiel som zhodu pre priezvisko ${surname}.${activeText}${archivedText}\n\n`+
+       `OK = OBNOVIŤ ČLENA\nZrušiť = PRIDAŤ AKO NOVÉHO`
+     );
+     if(choice){
+       restoreArchivedMember(restoreCandidate.id);
+       const restored=membersData.find(x=>Number(x.id)===Number(restoreCandidate.id));
+       if(restored){
+         if(!(restored.groups||[]).includes(attendanceState.group)){
+           restored.groups=[...(restored.groups||[]),attendanceState.group];
+           restored.group=restored.groups[0]||attendanceState.group;
+         }
+         persistMembersData();
+         const existing=attendanceState.members.find(x=>x.surname===restored.surname&&x.name===restored.name);
+         if(existing){ existing.newMember=true; existing.training=true; }
+         else attendanceState.members.push({
+           surname:restored.surname,name:restored.name,training:true,newMember:true,
+           newMemberDate:attendanceState.date,
+           membershipAmount:Number(restored.membershipAmount||0),
+           membershipDate:restored.membershipDate||'',membershipPaidGroup:restored.membershipPaidGroup||'',
+           registration:!!restored.registration,registrationDate:restored.registrationDate||'',
+           debt:Number(restored.debt||0),debtReason:restored.debtReason||'',
+           application:!!restored.application,applicationDate:restored.applicationDate||'',
+           applicationFile:restored.applicationFile||'',applicationFileName:restored.applicationFileName||''
+         });
+         attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
+         saveCurrentTrainingAttendance(); refreshAttendance();
+         toast('Člen bol obnovený a pridaný do dochádzky');
+       }
+       return;
+     }
+   }else{
+     // Viac aktívnych/archivovaných zhôd: nechceme vybrať nesprávnu osobu.
+     alert(`Priezvisko ${surname} už v aplikácii existuje.${activeText}${archivedText}\n\nAk chceš konkrétneho člena, zadaj priezvisko a meno.`);
+     return;
+   }
+ }
+
+ // Žiadna zhoda – vytvoríme úplne nového člena.
+ let member=membersData.find(x=>
+   String(x.surname||'').toUpperCase()===surname &&
+   String(x.name||'').toLowerCase()===name.toLowerCase()
+ );
  if(!member){
    member={
-     id:Date.now(),
-     surname,name,
-     groups:[attendanceState.group],group:attendanceState.group,memberSince:attendanceState.date,
-     training:false,newMember:false,newMemberDate:attendanceState.date,
-     membershipAmount:0,registration:false,debt:0,application:false
+     id:Date.now(),surname,name,
+     groups:[attendanceState.group],group:attendanceState.group,
+     memberSince:attendanceState.date,training:false,newMember:false,
+     newMemberDate:attendanceState.date,membershipAmount:0,
+     registration:false,debt:0,application:false
    };
    membersData.push(member);
  }else if(!(member.groups||[]).includes(attendanceState.group)){
@@ -8388,23 +8448,18 @@ function addNewMember(){
  persistMembersData();
 
  const existing=attendanceState.members.find(x=>x.surname===surname&&x.name===name);
- if(existing){
-   existing.newMember=true;
-   existing.training=true;
- }else{
-   attendanceState.members.push({
-     surname,name,training:true,newMember:true,newMemberDate:attendanceState.date,
-     membershipAmount:Number(member.membershipAmount||0),
-     membershipDate:member.membershipDate||'',membershipPaidGroup:member.membershipPaidGroup||'',
-     registration:!!member.registration,registrationDate:member.registrationDate||'',
-     debt:Number(member.debt||0),debtReason:member.debtReason||'',
-     application:!!member.application,applicationDate:member.applicationDate||'',
-     applicationFile:member.applicationFile||'',applicationFileName:member.applicationFileName||''
-   });
- }
+ if(existing){existing.newMember=true;existing.training=true;}
+ else attendanceState.members.push({
+   surname,name,training:true,newMember:true,newMemberDate:attendanceState.date,
+   membershipAmount:Number(member.membershipAmount||0),
+   membershipDate:member.membershipDate||'',membershipPaidGroup:member.membershipPaidGroup||'',
+   registration:!!member.registration,registrationDate:member.registrationDate||'',
+   debt:Number(member.debt||0),debtReason:member.debtReason||'',
+   application:!!member.application,applicationDate:member.applicationDate||'',
+   applicationFile:member.applicationFile||'',applicationFileName:member.applicationFileName||''
+ });
  attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
- saveCurrentTrainingAttendance();
- refreshAttendance();
+ saveCurrentTrainingAttendance(); refreshAttendance();
  toast('Nový člen bol pridaný do skupiny '+attendanceState.group);
 }
 function goBackAttendance(){ location.hash='home'; renderHome(); }

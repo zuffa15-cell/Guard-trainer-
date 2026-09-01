@@ -5867,11 +5867,19 @@ function getDeletedMembers(){
   try{const x=JSON.parse(localStorage.getItem(DELETED_MEMBERS_KEY)||'[]');return Array.isArray(x)?x:[];}catch(e){return [];}
 }
 function persistDeletedMembers(list){try{localStorage.setItem(DELETED_MEMBERS_KEY,JSON.stringify(list||[]));}catch(e){}}
-function memberSameName(a,b){
-  return String(a?.surname||'').trim().toUpperCase()===String(b?.surname||'').trim().toUpperCase()
-    && String(a?.name||'').trim().toLowerCase()===String(b?.name||'').trim().toLowerCase();
+function normalizeMemberText(v){
+  return String(v||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
 }
-function findArchivedMemberByName(surname,name){return getDeletedMembers().find(x=>memberSameName(x,{surname,name}))||null;}
+function memberSameName(a,b){
+  return normalizeMemberText(a?.surname)===normalizeMemberText(b?.surname)
+    && normalizeMemberText(a?.name)===normalizeMemberText(b?.name);
+}
+function memberSameSurname(a,b){
+  return normalizeMemberText(a?.surname)===normalizeMemberText(b?.surname);
+}
+function findArchivedMemberByName(surname,name){
+  return getDeletedMembers().find(x=>memberSameName(x,{surname,name}))||null;
+}
 function removeArchivedMember(id){persistDeletedMembers(getDeletedMembers().filter(x=>Number(x.id)!==Number(id)));}
 function restoreArchivedMember(id){
   const archived=getDeletedMembers().find(x=>Number(x.id)===Number(id));
@@ -8370,96 +8378,129 @@ function addNewMember(){
  const surname=parts[0].toUpperCase();
  const name=parts.length>1?parts.slice(1).join(' '):'';
 
- // V Dochádzke stačí zadať priezvisko. Najprv hľadáme aktívneho člena
- // podľa priezviska a potom archivovaného člena podľa priezviska.
- const activeMatches=membersData.filter(x=>
-   String(x.surname||'').trim().toUpperCase()===surname
- );
- const archivedMatches=getDeletedMembers().filter(x=>
-   String(x.surname||'').trim().toUpperCase()===surname
- );
+ // Diakritika sa pri porovnávaní ignoruje:
+ // ŽUFFA = ZUFFA, ČIŽMÁRIK = CIZMARIK, ŠTEFAN = STEFAN...
+ const activeMatches=membersData.filter(x=>memberSameSurname(x,{surname}));
+ const archivedMatches=getDeletedMembers().filter(x=>memberSameSurname(x,{surname}));
 
- if(activeMatches.length || archivedMatches.length){
-   const activeText=activeMatches.length
-     ? '\nAktívny: '+activeMatches.map(x=>`${x.surname} ${x.name}`).join(', ')
-     : '';
-   const archivedText=archivedMatches.length
-     ? '\nV archíve: '+archivedMatches.map(x=>`${x.surname} ${x.name}`).join(', ')
-     : '';
-   const restoreCandidate=archivedMatches.length===1 ? archivedMatches[0] : null;
+ // Ak používateľ zadal aj meno, preferujeme presnú zhodu mena+priezviska
+ // bez ohľadu na diakritiku.
+ let archivedCandidates=archivedMatches;
+ if(name){
+   const exactArchived=archivedMatches.filter(x=>memberSameName(x,{surname,name}));
+   if(exactArchived.length) archivedCandidates=exactArchived;
+ }
 
-   let choice;
-   if(restoreCandidate){
-     choice=confirm(
-       `Našiel som zhodu pre priezvisko ${surname}.${activeText}${archivedText}\n\n`+
-       `OK = OBNOVIŤ ČLENA\nZrušiť = PRIDAŤ AKO NOVÉHO`
+ if(archivedCandidates.length){
+   const list=archivedCandidates.map(x=>`${x.surname} ${x.name}`).join(', ');
+   if(archivedCandidates.length===1){
+     const candidate=archivedCandidates[0];
+     const restore=confirm(
+       `Člen ${candidate.surname} ${candidate.name} už v aplikácii existuje v archíve.\\n\\n`+
+       `OK = OBNOVIŤ ČLENA\\nZrušiť = PRIDAŤ NOVÉHO ČLENA`
      );
-     if(choice){
-       restoreArchivedMember(restoreCandidate.id);
-       const restored=membersData.find(x=>Number(x.id)===Number(restoreCandidate.id));
+     if(restore){
+       restoreArchivedMember(candidate.id);
+       const restored=membersData.find(x=>Number(x.id)===Number(candidate.id));
        if(restored){
          if(!(restored.groups||[]).includes(attendanceState.group)){
            restored.groups=[...(restored.groups||[]),attendanceState.group];
-           restored.group=restored.groups[0]||attendanceState.group;
          }
+         restored.group=attendanceState.group;
          persistMembersData();
-         const existing=attendanceState.members.find(x=>x.surname===restored.surname&&x.name===restored.name);
+         const existing=attendanceState.members.find(x=>
+           normalizeMemberText(x.surname)===normalizeMemberText(restored.surname) &&
+           normalizeMemberText(x.name)===normalizeMemberText(restored.name)
+         );
          if(existing){ existing.newMember=true; existing.training=true; }
          else attendanceState.members.push({
            surname:restored.surname,name:restored.name,training:true,newMember:true,
            newMemberDate:attendanceState.date,
            membershipAmount:Number(restored.membershipAmount||0),
-           membershipDate:restored.membershipDate||'',membershipPaidGroup:restored.membershipPaidGroup||'',
-           registration:!!restored.registration,registrationDate:restored.registrationDate||'',
+           membershipDate:restored.membershipDate||'',
+           membershipPaidGroup:restored.membershipPaidGroup||'',
+           registration:!!restored.registration,
+           registrationDate:restored.registrationDate||'',
            debt:Number(restored.debt||0),debtReason:restored.debtReason||'',
-           application:!!restored.application,applicationDate:restored.applicationDate||'',
-           applicationFile:restored.applicationFile||'',applicationFileName:restored.applicationFileName||''
+           application:!!restored.application,
+           applicationDate:restored.applicationDate||'',
+           applicationFile:restored.applicationFile||'',
+           applicationFileName:restored.applicationFileName||''
          });
          attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
-         saveCurrentTrainingAttendance(); refreshAttendance();
+         saveCurrentTrainingAttendance();
+         refreshAttendance();
          toast('Člen bol obnovený a pridaný do dochádzky');
        }
        return;
      }
+     // Zrušiť = pokračuj nižšie a vytvor nový záznam.
    }else{
-     // Viac aktívnych/archivovaných zhôd: nechceme vybrať nesprávnu osobu.
-     alert(`Priezvisko ${surname} už v aplikácii existuje.${activeText}${archivedText}\n\nAk chceš konkrétneho člena, zadaj priezvisko a meno.`);
+     alert(`V archíve je viac členov s priezviskom ${surname}:\\n${list}\\n\\nZadaj priezvisko a meno konkrétneho člena.`);
      return;
    }
  }
 
- // Žiadna zhoda – vytvoríme úplne nového člena.
- let member=membersData.find(x=>
-   String(x.surname||'').toUpperCase()===surname &&
-   String(x.name||'').toLowerCase()===name.toLowerCase()
- );
- if(!member){
-   member={
-     id:Date.now(),surname,name,
-     groups:[attendanceState.group],group:attendanceState.group,
-     memberSince:attendanceState.date,training:false,newMember:false,
-     newMemberDate:attendanceState.date,membershipAmount:0,
-     registration:false,debt:0,application:false
-   };
-   membersData.push(member);
- }else if(!(member.groups||[]).includes(attendanceState.group)){
-   member.groups=[...(member.groups||[]),attendanceState.group];
+ // Aktívneho člena nepovažujeme za dôvod na automatické zastavenie.
+ // Ak chce tréner vytvoriť nového človeka s rovnakým priezviskom,
+ // môže pokračovať; aplikácia už pri presnom mene zabráni tichej duplicite.
+ const exactActive=membersData.find(x=>memberSameName(x,{surname,name}));
+ if(exactActive){
+   const useExisting=confirm(
+     `Člen ${exactActive.surname} ${exactActive.name} už je aktívny.\\n\\n`+
+     `OK = POUŽIŤ EXISTUJÚCEHO\\nZrušiť = PRIDAŤ NOVÉHO`
+   );
+   if(useExisting){
+     if(!(exactActive.groups||[]).includes(attendanceState.group)){
+       exactActive.groups=[...(exactActive.groups||[]),attendanceState.group];
+     }
+     exactActive.group=attendanceState.group;
+     persistMembersData();
+     const existing=attendanceState.members.find(x=>memberSameName(x,exactActive));
+     if(existing){existing.newMember=true;existing.training=true;}
+     else attendanceState.members.push({
+       surname:exactActive.surname,name:exactActive.name,training:true,newMember:true,
+       newMemberDate:attendanceState.date,
+       membershipAmount:Number(exactActive.membershipAmount||0),
+       membershipDate:exactActive.membershipDate||'',
+       membershipPaidGroup:exactActive.membershipPaidGroup||'',
+       registration:!!exactActive.registration,
+       registrationDate:exactActive.registrationDate||'',
+       debt:Number(exactActive.debt||0),debtReason:exactActive.debtReason||'',
+       application:!!exactActive.application,
+       applicationDate:exactActive.applicationDate||'',
+       applicationFile:exactActive.applicationFile||'',
+       applicationFileName:exactActive.applicationFileName||''
+     });
+     attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
+     saveCurrentTrainingAttendance(); refreshAttendance();
+     toast('Existujúci člen bol pridaný do dochádzky');
+     return;
+   }
  }
+
+ // Žiadna obnovená zhoda – vytvoríme nový záznam.
+ let member={
+   id:Date.now(),surname,name,
+   groups:[attendanceState.group],group:attendanceState.group,
+   memberSince:attendanceState.date,training:false,newMember:false,
+   newMemberDate:attendanceState.date,membershipAmount:0,
+   registration:false,debt:0,application:false
+ };
+ membersData.push(member);
  persistMembersData();
 
- const existing=attendanceState.members.find(x=>x.surname===surname&&x.name===name);
- if(existing){existing.newMember=true;existing.training=true;}
- else attendanceState.members.push({
+ attendanceState.members.push({
    surname,name,training:true,newMember:true,newMemberDate:attendanceState.date,
-   membershipAmount:Number(member.membershipAmount||0),
-   membershipDate:member.membershipDate||'',membershipPaidGroup:member.membershipPaidGroup||'',
-   registration:!!member.registration,registrationDate:member.registrationDate||'',
-   debt:Number(member.debt||0),debtReason:member.debtReason||'',
-   application:!!member.application,applicationDate:member.applicationDate||'',
-   applicationFile:member.applicationFile||'',applicationFileName:member.applicationFileName||''
+   membershipAmount:0,membershipDate:'',membershipPaidGroup:'',
+   registration:false,registrationDate:'',
+   debt:0,debtReason:'',
+   application:false,applicationDate:'',
+   applicationFile:'',applicationFileName:''
  });
  attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
- saveCurrentTrainingAttendance(); refreshAttendance();
+ saveCurrentTrainingAttendance();
+ refreshAttendance();
  toast('Nový člen bol pridaný do skupiny '+attendanceState.group);
 }
 function goBackAttendance(){ location.hash='home'; renderHome(); }

@@ -7593,7 +7593,7 @@ function renderAttendanceRows(){
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
-   <button ${locked?'disabled':''} class="pay-btn ${m.training&&!m.newMember?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&cycleTrainingState(${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':(m.trainingAccount?'<strong>'+trainingFee()+' €</strong>':'')}</button>
+   <button ${locked?'disabled':''} class="pay-btn ${m.training&&!m.newMember?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&cycleTrainingState(${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':(m.training?'TRÉNING':'') )}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':(m.trainingAccount?'<strong>'+trainingFee()+' €</strong>':'')}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
    <button ${locked?'disabled':''} class="pay-btn ${m.debt>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${m.debt>0?'<strong>'+m.debt+' €</strong>':''}</button>
@@ -8125,14 +8125,23 @@ function cycleTrainingState(i){
  const m=attendanceState.members[i];
  if(!m)return;
 
- // Jedno políčko: NOVÝ -> TRÉNING -> ÚČET -> NOVÝ.
- if(m.newMember){
-   m.newMember=false;
+ // Jedno políčko, poradie:
+ // PRÁZDNE -> TRÉNING -> ÚČET -> NOVÝ -> PRÁZDNE
+ if(!m.training && !m.trainingAccount && !m.newMember){
    m.training=true;
    m.trainingAccount=false;
    saveCurrentTrainingAttendance();
    refreshAttendance();
    toast(`Tréning ${trainingFee()} €`);
+   return;
+ }
+
+ if(m.training && !m.trainingAccount && !m.newMember){
+   m.training=true;
+   m.trainingAccount=true;
+   saveCurrentTrainingAttendance();
+   refreshAttendance();
+   toast(`Účet ${trainingFee()} €`);
    return;
  }
 
@@ -8147,14 +8156,16 @@ function cycleTrainingState(i){
    return;
  }
 
- m.training=true;
- m.trainingAccount=true;
- saveCurrentTrainingAttendance();
- refreshAttendance();
- toast(`Účet ${trainingFee()} €`);
+ if(m.newMember){
+   m.training=false;
+   m.trainingAccount=false;
+   m.newMember=false;
+   saveCurrentTrainingAttendance();
+   refreshAttendance();
+   toast('Prázdne');
+   return;
+ }
 }
-
-
 function handleTrainingClick(i){
  const now=Date.now();
  trainingLastClickAt[String(i)]=now;

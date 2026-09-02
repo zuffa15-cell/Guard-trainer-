@@ -7593,6 +7593,7 @@ function renderAttendanceRows(){
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
+   ${(!m.training&&!m.newMember)?`<button ${locked?'disabled':''} class="pay-btn new-option-btn new-blue" onclick="attendanceEditGuard()&&toggleNewMember(${i})">NOVÝ</button>`:''}
    <button ${locked?'disabled':''} class="pay-btn ${m.training?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&handleTrainingClick(${i})" ondblclick="attendanceEditGuard()&&handleTrainingDoubleClick(event,${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':'TRÉNING')}${m.training&&!m.newMember?'<strong>'+trainingFee()+' €</strong>':''}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
@@ -8120,6 +8121,21 @@ function clearOther(type){
 }
 let trainingClickTimers={};
 let trainingLastClickAt={};
+function toggleNewMember(i){
+ if(!attendanceEditGuard()) return;
+ const m=attendanceState.members[i];
+ if(!m)return;
+ // NOVÝ is an attendance state: no training fee is charged.
+ // It can be selected directly for an already listed member.
+ m.newMember=true;
+ m.training=true;
+ m.trainingAccount=false;
+ m.newMemberDate=m.newMemberDate||attendanceState.date;
+ saveCurrentTrainingAttendance();
+ refreshAttendance();
+ toast('NOVÝ – tréning zdarma');
+}
+
 function handleTrainingClick(i){
  const now=Date.now();
  trainingLastClickAt[String(i)]=now;

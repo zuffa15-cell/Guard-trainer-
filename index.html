@@ -7593,7 +7593,7 @@ function renderAttendanceRows(){
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
-   <button ${locked?'disabled':''} class="pay-btn ${m.training&&!m.newMember?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&cycleTrainingState(${i})">${m.newMember?'NOVÝ':(m.trainingAccount?'ÚČET':('TRÉNING '+trainingFee()+' €'))}</button>
+   <button ${locked?'disabled':''} class="pay-btn ${m.training&&!m.newMember?'on training-on':''} ${m.trainingAccount?'account-on':''} ${m.newMember?'new-blue':''}" onclick="attendanceEditGuard()&&cycleTrainingState(${i})">${m.newMember?'NOVÝ':(m.trainingAccount?('ÚČET<br><strong>'+trainingFee()+' €</strong>'):('TRÉNING<br><strong>'+trainingFee()+' €</strong>'))}</button>
    ${renderMembershipPaymentCell(m,i)}
    ${renderRegistrationPaymentCell(m,i)}
    <button ${locked?'disabled':''} class="pay-btn ${m.debt>0?'debt-on':''}" onclick="attendanceEditGuard()&&enterDebt(${i})">DLŽNÉ${m.debt>0?'<strong>'+m.debt+' €</strong>':''}</button>

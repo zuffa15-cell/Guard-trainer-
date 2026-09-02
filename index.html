@@ -7295,7 +7295,9 @@ function syncMemberFromAttendance(member){
   if(a.applicationFileName) member.applicationFileName=a.applicationFileName;
   member.debt=Number(a.debt||0);
   member.debtReason=a.debtReason||'';
-  member.newMember=!!a.newMember;
+  // NOVÝ je stav konkrétnej dochádzky, nie globálny stav člena.
+  // Pri ukladaní vyúčtovania ho preto NESMIEME prepísať v membersData.
+  // Inak sa po návrate z vyúčtovania nový člen zobrazil ako bežný TRÉNING.
   return member;
 }
 function syncAllMembersFromAttendance(){
@@ -7308,7 +7310,10 @@ function syncAttendanceRecord(member){
     attendanceState.members.push(a);
   }
   a.surname=member.surname;a.name=member.name;
-  a.newMember=!!member.newMember;
+  // Zachovaj stav NOVÝ uložený v tejto konkrétnej dochádzke.
+  // Neber ho z globálneho profilu člena, pretože ten môže byť zmenený
+  // pri ukladaní vyúčtovania alebo synchronizácii člena.
+  if(typeof a.newMember!=='boolean') a.newMember=!!member.newMember;
   a.membershipAmount=member.membership?Number(member.membershipAmount||30):0;
   a.membershipAccountAmount=Number(member.membershipAccountAmount||0);
   a.membershipAccountDate=member.membershipAccountDate||'';

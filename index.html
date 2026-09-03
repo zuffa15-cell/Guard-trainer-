@@ -4030,21 +4030,39 @@ function todayTrainingGroups(){
   return result;
 }
 function todayHomeVisibleGroupCodes(){
-  // Použi presne tie skupiny, ktoré sa zobrazujú v karte DNESNÉ TRÉNINGY
-  // na Domove. Rýchly prehľad teda ostáva viazaný iba na dnešný tréning.
+  // Musí používať rovnaké údaje ako karta DNESNÉ TRÉNINGY.
+  // Niektoré zdroje majú kód v .code, iné v .groupCode.
   const t=appToday();
   const dynamic=typeof scheduleItemsForDate==='function'?scheduleItemsForDate(t.iso):[];
   const base=(calendarDayGroups&&calendarDayGroups[t.iso])||[];
-  const items=[
-    ...base.map(g=>({...g,color:getGroupColor(g.code,g.color)})),
-    ...dynamic.map(g=>({...g,color:getGroupColor(g.code,g.color)}))
-  ].filter((g,i,a)=>a.findIndex(x=>
-    String(x.code||x.groupCode||'').toUpperCase()===String(g.code||g.groupCode||'').toUpperCase() &&
-    x.time===g.time && x.name===g.name
-  )===i);
-  const visible=typeof filterHomeItemsForCurrentRole==='function' ? filterHomeItemsForCurrentRole(items) : items;
-  return new Set(visible.map(g=>String(g.code||g.groupCode||'').trim().toUpperCase()).filter(Boolean));
+  const raw=[...base,...dynamic].map(g=>({
+    ...g,
+    code:String(g?.code||g?.groupCode||g?.group||'').trim().toUpperCase()
+  })).filter(g=>g.code);
+
+  let visible=raw;
+  try{
+    if(typeof filterHomeItemsForCurrentRole==='function'){
+      const filtered=filterHomeItemsForCurrentRole(raw);
+      if(Array.isArray(filtered) && filtered.length) visible=filtered;
+    }
+  }catch(e){}
+
+  const result=new Set(visible.map(g=>quickGroupCode(g.code)).filter(Boolean));
+
+  // Zastupovanie prijaté trénerom je súčasť dnešných tréningov.
+  try{
+    const me=getCurrentTrainerDisplayName();
+    substitutionOffers.filter(o=>o.date===t.iso && o.acceptedBy===me)
+      .forEach(o=>{const c=quickGroupCode(o.code);if(c)result.add(c);});
+  }catch(e){}
+
+  // Bezpečnostná poistka: ak filtrovanie role z nejakého dôvodu nevráti kartu,
+  // ale dnešný rozvrh ju obsahuje, skupina sa nesmie zmeniť na „žiadne“.
+  if(!result.size) raw.forEach(g=>{const c=quickGroupCode(g.code);if(c)result.add(c);});
+  return result;
 }
+
 function quickGroupCode(value){
   const v=String(value||'').trim().toUpperCase();
   if(!v)return '';
@@ -4052,33 +4070,37 @@ function quickGroupCode(value){
   return m?m[1]:v.split(/\s*[–—-]\s*/)[0].trim();
 }
 function quickMemberList(type){
-  // Použi PRESNE skupinu/skupiny z dnešných kariet na Domove.
-  // Kód skupiny normalizujeme (C == C – NÁBOR GRUNT), aby sa členovia nestratili.
-  const all=homeMyGroupMembers();
+  normalizeAllMembers();
   const paymentTypes=type==='membership'||type==='registration'||type==='debt';
   const todayGroups=paymentTypes?todayHomeVisibleGroupCodes():null;
-  let arr=all;
+
+  // Dôležité: pri dnešnom tréningu musí zoznam vychádzať z ČLENOV,
+  // ktorí patria do dnešnej viditeľnej skupiny. Nesmie sa tu použiť
+  // homeMyGroupMembers(), pretože tréner môže mať dnešný tréning cez zastupovanie.
+  let arr=membersData.slice();
   if(paymentTypes && todayGroups && todayGroups.size){
-    arr=all.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(quickGroupCode(g))));
+    arr=arr.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(quickGroupCode(g))));
   }
-  const today=new Date();
-  if(type==='membership') return arr.filter(m=>{
-    const today=appToday();
+
+  const today=appToday();
+  if(type==='membership'){
     const period=membershipPeriodForDate(today.iso) || (today.month<=6?1:2);
     const year=Number(today.year);
-    // Nezaplatené = neexistuje úhrada pre DNES aktuálny polrok.
-    // Staré pole m.membership sa tu zámerne nepoužíva, pretože označuje najmä 1. polrok.
-    return !membershipPaymentForPeriod(m.id,period,year) &&
-           !(typeof membershipAccountForPeriod==='function' && membershipAccountForPeriod(m.id,period,year));
-  });
+    return arr.filter(m=>{
+      const paid=membershipPaymentForPeriod(m.id,period,year);
+      const account=typeof membershipAccountForPeriod==='function' ? membershipAccountForPeriod(m.id,period,year) : null;
+      return !paid && !account;
+    });
+  }
   if(type==='registration') return arr.filter(m=>typeof memberHasRegistration==='function'?!memberHasRegistration(m):!m.registration);
   if(type==='debt') return arr.filter(m=>Number(m.debt||0)>0);
   if(type==='birthday') return arr.filter(m=>{
     const x=String(m.dob||'').match(/(\d{1,2})\.\s*(\d{1,2})\./);
-    return x && Number(x[2])===today.getMonth()+1 && Number(x[1])===today.getDate();
+    return x && Number(x[2])===today.month && Number(x[1])===today.day;
   });
   return [];
 }
+
 function updateHomeQuickOverview(){
   const counts={
     membership:quickMemberList('membership').length,

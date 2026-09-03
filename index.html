@@ -409,13 +409,12 @@ function initCloudSync(){
 
 function pushToCloud(force = false){
   if(!db || !cloudEnabled) return;
-  if(isApplyingRemote) return; // neposielaj keď práve aplikujem vzdialené zmeny
+  if(isApplyingRemote) return;
   const uid = firebase.auth().currentUser?.uid;
   if(!uid && !force) return;
-  
+
   const payload = {_lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
   lastCloudUpdate = payload._updatedAt;
-  
   SYNC_KEYS.forEach(k=>{
     let v = originalGetItem(k);
     if(k==='gt-members-real-2026-v847' && v){
@@ -425,13 +424,66 @@ function pushToCloud(force = false){
   });
   Object.keys(localStorage).forEach(k=>{
     if(isGTLocalAuthKey(k)) return;
-    if(k.startsWith('gt-') && !payload[k]) {
-      const v = originalGetItem(k);
-      if(v) payload[k] = v;
+    if(k.startsWith('gt-') && !payload[k]){
+      const v=originalGetItem(k);
+      if(v) payload[k]=v;
     }
   });
-  db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload, {merge:true})
-    .then(()=>console.log("📤 Odoslané do cloudu")).catch(e=>console.warn("Push fail", e));
+
+  // KRITICKÉ: dochádzka sa nesmie pri pushnutí jedného zariadenia prepísať
+  // jeho neúplnou lokálnou kópiou. Najprv načítame aktuálny cloudový dokument
+  // a záznamy dochádzky zlúčime po dátume + skupine. Takto sa staršie dni
+  // (napr. 1.9. a 2.9.) už nikdy nestratia iba preto, že ich jedno zariadenie
+  // nemá lokálne.
+  db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
+    try{
+      const remote=doc.exists?doc.data():{};
+      const mergeJsonMaps=(localRaw,remoteRaw)=>{
+        let l={},r={};
+        try{const x=localRaw?JSON.parse(localRaw):{};if(x&&typeof x==='object')l=x;}catch(e){}
+        try{const x=remoteRaw?JSON.parse(remoteRaw):{};if(x&&typeof x==='object')r=x;}catch(e){}
+        return {l,r};
+      };
+      // Save-order timestampy: vždy zachovaj union oboch zariadení.
+      {
+        const {l,r}=mergeJsonMaps(payload['gt-attendance-save-order-v1'],remote['gt-attendance-save-order-v1']);
+        const m={}; new Set([...Object.keys(l),...Object.keys(r)]).forEach(k=>m[k]=Math.max(Number(l[k]||0),Number(r[k]||0)));
+        payload['gt-attendance-save-order-v1']=JSON.stringify(m);
+      }
+      // Admin edit timestampy: zachovaj všetky záznamy.
+      {
+        const {l,r}=mergeJsonMaps(payload['gt-attendance-admin-edits-v1'],remote['gt-attendance-admin-edits-v1']);
+        const m={}; new Set([...Object.keys(l),...Object.keys(r)]).forEach(k=>m[k]=Math.max(Number(l[k]||0),Number(r[k]||0)));
+        payload['gt-attendance-admin-edits-v1']=JSON.stringify(m);
+      }
+      // Dochádzka: union podľa canonical date|group. Pri rovnakom kľúči
+      // vyhrá záznam s novším uložením; ak nemáme timestamp, existujúci
+      // záznam sa nemaže.
+      {
+        const {l,r}=mergeJsonMaps(payload['gt-training-attendance-history'],remote['gt-training-attendance-history']);
+        let lo={},ro={};
+        try{lo=JSON.parse(payload['gt-attendance-save-order-v1']||'{}')||{};}catch(e){}
+        try{ro=JSON.parse(remote['gt-attendance-save-order-v1']||'{}')||{};}catch(e){}
+        const la=JSON.parse(payload['gt-attendance-admin-edits-v1']||'{}')||{};
+        const ra=JSON.parse(remote['gt-attendance-admin-edits-v1']||'{}')||{};
+        const canonMap=obj=>{const out={};Object.keys(obj||{}).forEach(rawKey=>{const k=canonicalAttendanceHistoryKey(rawKey);out[k]=obj[rawKey];});return out;};
+        const lm=canonMap(l),rm=canonMap(r),out={};
+        new Set([...Object.keys(lm),...Object.keys(rm)]).forEach(k=>{
+          const lat=Math.max(Number(lo[k]||0),Number(getAttendancePendingSaveAt(String(k).split('|')[0],String(k).split('|').slice(1).join('|'))||0));
+          const rat=Number(ro[k]||0);
+          const lad=Number(la[k]||0),rad=Number(ra[k]||0);
+          if(rad>lad && rm[k]) out[k]=rm[k];
+          else if(lad>rad && lm[k]) out[k]=lm[k];
+          else if(lat>=rat && lm[k]) out[k]=lm[k];
+          else if(rm[k]) out[k]=rm[k];
+          else if(lm[k]) out[k]=lm[k];
+        });
+        payload['gt-training-attendance-history']=JSON.stringify(out);
+      }
+    }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
+    return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
+  }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
+    .catch(e=>console.warn('Push fail',e));
 }
 
 // 3. Intercept localStorage.setItem aby sa auto-syncovalo - s ochranou proti slučke

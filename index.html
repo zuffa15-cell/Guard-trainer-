@@ -3318,7 +3318,7 @@ html,body{color-scheme:dark!important;}
   line-height:1!important;
   font-size:clamp(20px,5.5vw,30px)!important;
 }
-.home-topbar .logged-trainer-name{
+.home-topbar .logged-user-small{
   display:inline!important;
   font-size:.45em!important;
   font-weight:600!important;
@@ -3330,7 +3330,7 @@ html,body{color-scheme:dark!important;}
 }
 @media(max-width:420px){
  .home-topbar .brand.home-brand{font-size:22px!important;gap:6px!important}
- .home-topbar .logged-trainer-name{font-size:10px!important;max-width:36vw!important}
+ .home-topbar .logged-user-small{font-size:10px!important;max-width:36vw!important}
 }</style><style>
 .home-topbar{overflow:hidden!important;width:100%!important;box-sizing:border-box!important}
 .home-topbar .brand.home-brand{position:relative!important;left:auto!important;right:auto!important}
@@ -3352,14 +3352,14 @@ html,body{color-scheme:dark!important;}
  white-space:nowrap!important;overflow:hidden!important;line-height:1!important;
  font-size:22px!important;box-sizing:border-box!important;
 }
-.home-topbar .logged-trainer-name{
+.home-topbar .logged-user-small{
  display:inline-block!important;font-size:10px!important;font-weight:600!important;
  white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;
  max-width:38vw!important;opacity:.9;
 }
 @media(max-width:420px){
  .home-topbar .brand.home-brand{font-size:21px!important;gap:5px!important}
- .home-topbar .logged-trainer-name{font-size:10px!important;max-width:37vw!important}
+ .home-topbar .logged-user-small{font-size:10px!important;max-width:37vw!important}
 }
 </style><style id="gt-logout-pressed-style">
 .more-menu-item.gt-logout-button:active,.more-menu-item.gt-logout-button.gt-pressed{background:#20a45a!important;border-color:#20a45a!important;color:#fff!important;transform:scale(.985)}
@@ -3396,6 +3396,31 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .topbar .brand.gt-brand-with-user{display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:1px!important;line-height:1.05!important;}
 .topbar .brand.gt-brand-with-user .logged-user-small{display:block!important;font-size:10px!important;font-weight:500!important;letter-spacing:.15px!important;opacity:.72!important;line-height:1.1!important;white-space:nowrap!important;max-width:70vw!important;overflow:hidden!important;text-overflow:ellipsis!important;}
 @media(max-width:420px){.topbar .brand.gt-brand-with-user{font-size:23px!important}.topbar .brand.gt-brand-with-user .logged-user-small{font-size:9px!important;max-width:68vw!important;}}
+</style>
+
+<style id="gt-home-user-label-fix">
+.home-topbar .brand.home-brand.gt-brand-with-user{
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:center!important;
+  gap:2px!important;
+  line-height:1.05!important;
+}
+.home-topbar .brand.home-brand .logged-user-small{
+  display:block!important;
+  font-size:10px!important;
+  font-weight:500!important;
+  letter-spacing:.1px!important;
+  opacity:.72!important;
+  line-height:1.05!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  max-width:75vw!important;
+}
+@media(max-width:420px){
+  .home-topbar .brand.home-brand .logged-user-small{font-size:9px!important;max-width:72vw!important}
+}
 </style>
 </head>
 <body class="gtSplashV323Active">

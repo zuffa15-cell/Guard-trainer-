@@ -11829,17 +11829,27 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const groupCounts={A:0,B:0,C:0,D:0,'D+':0};
   entries.forEach(e=>{
     const group=quickGroupCode(e.group);
-    const presentCount=e.people.length;
-    let newCount=Number(e.newCount||0);
-    // Ak je k dispozícii história dochádzky, použijeme jej presný počet NOVÝ.
+    let presentCount=0, newCount=0;
+    let usedHistory=false;
+    // Presný stav berieme priamo z uloženej dochádzky pre konkrétny deň/skupinu.
+    // TRÉNING/ÚČET = PRÍTOMNÝ, NOVÝ = NOVÝ; NOVÝ sa nikdy nesmie rátať medzi prítomných.
     try{
       const histKey=`${e.date}|${group}`;
       const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey])||null;
-      if(hist && typeof hist==='object'){
-        const histNew=Object.values(hist).filter(v=>v && v.newMember).length;
-        if(histNew>=0) newCount=histNew;
+      if(hist && typeof hist==='object' && Object.keys(hist).length){
+        usedHistory=true;
+        Object.values(hist).forEach(v=>{
+          if(!v) return;
+          if(v.newMember) newCount++;
+          else if(v.training) presentCount++;
+        });
       }
     }catch(err){}
+    // Staršie uložené záznamy bez histórie použijú svoje historické počty.
+    if(!usedHistory){
+      presentCount=Number(e.people.length||0);
+      newCount=Number(e.newCount||0);
+    }
     groupCounts[group]=(groupCounts[group]||0)+presentCount+newCount;
     e.people.forEach(n=>memberCounts[n]=(memberCounts[n]||0)+1);
   });
@@ -11855,12 +11865,22 @@ function renderStatistics(month=appToday().month,year=appToday().year){
       .sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))
       .slice(0,3);
   });
-  const totalAttendance=entries.reduce((a,e)=>a+e.people.length,0);
+  const totalAttendance=Object.values(groupCounts).reduce((a,b)=>a+Number(b||0),0);
 
   // Training day with the highest and lowest attendance FOR EACH GROUP.
-  const attendanceDays=entries.map(e=>({
-    date:e.date, group:e.group, count:e.people.length
-  }));
+  const attendanceDays=entries.map(e=>{
+    const group=quickGroupCode(e.group);
+    let present=0,newCount=0,usedHistory=false;
+    try{
+      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[`${e.date}|${group}`])||null;
+      if(hist && typeof hist==='object' && Object.keys(hist).length){
+        usedHistory=true;
+        Object.values(hist).forEach(v=>{ if(v?.newMember) newCount++; else if(v?.training) present++; });
+      }
+    }catch(err){}
+    if(!usedHistory){ present=e.people.length; newCount=Number(e.newCount||0); }
+    return {date:e.date, group, count:present+newCount};
+  });
   const formatStatDate=iso=>{
     const d=parsePaymentDate(iso);
     return d ? `${d.day}. ${d.month}. ${d.year}` : iso;
@@ -11944,15 +11964,24 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const dailyNewCounts=Array.from({length:daysInMonth},(_,i)=>Object.keys(groupNames).reduce((sum,g)=>sum+(dailyNewByGroupCounts[g][i]||0),0));
 
   const daily=Array.from({length:daysInMonth},()=>0);
-  entries.forEach(e=>{const d=Number(e.date.slice(8,10)); if(d>=1&&d<=daysInMonth) daily[d-1]+=e.people.length;});
-  const maxDaily=Math.max(1,...daily);
   const stackedAttendanceByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>0)]));
   entries.forEach(e=>{
     const group=quickGroupCode(e.group);
-    if(!stackedAttendanceByGroup[group]) return;
     const day=Number(String(e.date).slice(8,10));
-    if(day>=1 && day<=daysInMonth) stackedAttendanceByGroup[group][day-1]+=e.people.length;
+    if(day<1 || day>daysInMonth || !stackedAttendanceByGroup[group]) return;
+    let count=0,usedHistory=false;
+    try{
+      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[`${e.date}|${group}`])||null;
+      if(hist && typeof hist==='object' && Object.keys(hist).length){
+        usedHistory=true;
+        Object.values(hist).forEach(v=>{ if(v?.newMember || v?.training) count++; });
+      }
+    }catch(err){}
+    if(!usedHistory) count=e.people.length+Number(e.newCount||0);
+    stackedAttendanceByGroup[group][day-1]+=count;
+    daily[day-1]+=count;
   });
+  const maxDaily=Math.max(1,...daily);
   const stackedDayMax=Math.max(1,...daily);
   const stackedNewMax=Math.max(1,...dailyNewCounts);
   const statGroupColors={A:getGroupColor('A','#dca10e'),B:getGroupColor('B','#3d7cff'),C:getGroupColor('C','#35b76b'),D:getGroupColor('D','#d94b4b'),'D+':getGroupColor('D+','#9b59b6')};

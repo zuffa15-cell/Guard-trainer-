@@ -163,8 +163,11 @@ function initCloudSync(){
             const remoteAt=Number(rOrder[key]||0);
             const localAdminAt=Number(lAdmin[key]||0);
             const remoteAdminAt=Number(rAdmin[key]||0);
-            if(remoteAdminAt>localAdminAt && rHist[key]) merged[key]=rHist[key];
-            else if(localAdminAt>remoteAdminAt && lHist[key]) merged[key]=lHist[key];
+            // FIX: Admin má vždy prednosť - akýkoľvek admin timestamp vyhráva nad bežným
+            if(remoteAdminAt>0 && remoteAdminAt>=localAdminAt && rHist[key]){ merged[key]=rHist[key]; }
+            else if(localAdminAt>0 && localAdminAt>=remoteAdminAt && lHist[key]){ merged[key]=lHist[key]; }
+            else if(remoteAdminAt>0 && rHist[key]){ merged[key]=rHist[key]; }
+            else if(localAdminAt>0 && lHist[key]){ merged[key]=lHist[key]; }
             else if(localAt>remoteAt && localAt>0) merged[key]=lHist[key]||{};
             else if(rHist[key]) merged[key]=rHist[key];
             else if(lHist[key]) merged[key]=lHist[key];
@@ -7965,39 +7968,60 @@ function getAttendancePendingSaveAt(date,group){
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
   const before=trainingAttendanceByGroup[key]||null;
-  // Vždy vytvoríme nový kompletný snapshot a až potom ho priradíme ku kľúču.
-  // Starý kód zapisoval do trainingAttendanceByGroup[key] a následne tento
-  // objekt nahradil prázdnym "next", čím sa uložená dochádzka stratila.
+  // FIX: Uložiť PRESNE tak ako je zadané - kompletný snapshot bez miešania
   const next=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{
-    next[a.surname+'|'+a.name]={
+    // kľúč podľa ID ak existuje (stabilný), inak meno|priezvisko
+    const stableKey = a.id ? ('id:'+a.id) : (a.surname+'|'+a.name);
+    // tiež uložíme pod meno pre spätnú kompatibilitu
+    const fallbackKey = a.surname+'|'+a.name;
+    const record={
+      id: a.id||'',
+      surname: a.surname||'',
+      name: a.name||'',
       training:!!a.training,
       trainingAccount:!!a.trainingAccount,
-      membershipAccountAmount:Number(a.membershipAccountAmount||0),membershipAccountDate:a.membershipAccountDate||'',
-      registrationAccountAmount:Number(a.registrationAccountAmount||0),registrationAccountDate:a.registrationAccountDate||'',
       newMember:!!a.newMember,
-      newMemberDate:a.newMember ? (a.newMemberDate||attendanceState.date) : ''
+      newMemberDate:a.newMember ? (a.newMemberDate||attendanceState.date) : (a.newMemberDate||''),
+      savedAt: Date.now(),
+      savedBy: (typeof currentTrainerAccountId==='function'? (currentTrainerAccountId()||'') : ''),
+      isAdminSave: (typeof isAdmin==='function' && isAdmin())
     };
+    next[stableKey]=record;
+    // Duplicita pre starý kód - aby getSavedTrainingAttendance našiel záznam
+    if(stableKey!==fallbackKey) next[fallbackKey]=record;
   });
   trainingAttendanceByGroup[key]=next;
-  const changedAttendance=JSON.stringify(before||{})!==JSON.stringify(next||{});
-  if(isAdmin()){
+  try{
+    // Pre istotu uložíme aj presnú kópiu toho čo videl používateľ
+    const exactCopy = JSON.parse(JSON.stringify(next));
+    const histRaw = originalGetItem('gt-training-attendance-exact-v1')||'{}';
+    let hist={}; try{hist=JSON.parse(histRaw)||{};}catch(e){}
+    hist[key]= { data: exactCopy, savedAt: Date.now(), savedByAdmin: (typeof isAdmin==='function' && isAdmin()) };
+    originalSetItem('gt-training-attendance-exact-v1', JSON.stringify(hist));
+  }catch(e){}
+  if(typeof isAdmin==='function' && isAdmin()){
     try{
       const adminEdits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}');
-      // Každé explicitné uloženie administrátorom je autoritatívne pre daný
-      // dátum/skupinu. Timestamp zapisujeme aj vtedy, keď sa výsledný JSON
-      // náhodou nezmenil, aby neskorší cloud snapshot nemohol vrátiť starý stav.
       adminEdits[key]=Date.now();
       originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(adminEdits));
+      // Admin edit je autoritatívny - musí prebiť pending save trénera
+      try{ localStorage.removeItem(ATTENDANCE_PENDING_SAVE_KEY); }catch(e){}
+      const orderRaw=originalGetItem('gt-attendance-save-order-v1')||'{}';
+      let order={}; try{order=JSON.parse(orderRaw)||{};}catch(e){}
+      order[key]=Date.now()+5000; // admin +5s bonus aby vyhral
+      originalSetItem('gt-attendance-save-order-v1', JSON.stringify(order));
     }catch(e){}
   }
   persistTrainingAttendanceHistory();
-  // Toto je rozhodujúci čas pre poradie skupín v daný deň.
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
-  // Kritická ochrana dnešnej dochádzky: pri pomalom Firebase nesmie nový
-  // lokálny zápis po reloadovaní ustúpiť staršiemu cloudovému snapshotu.
-  markAttendancePendingSave(attendanceState.date,attendanceState.group);
-  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),100); }catch(e){}
+  // Ak je to admin, NEOZNAČUJ ako pending - admin má prednosť okamžite
+  if(!(typeof isAdmin==='function' && isAdmin())){
+    markAttendancePendingSave(attendanceState.date,attendanceState.group);
+  }
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(typeof isAdmin==='function' && isAdmin() ? true : false),50); }catch(e){}
+  // Okamžitý druhý push pre istotu
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),400); }catch(e){}
 }
 function membershipDraftKey(memberId,date,group){
   return `${memberId}|${date}|${group}`;
@@ -8049,11 +8073,33 @@ function commitMembershipDraftsForCurrentTraining(){
 }
 
 function getSavedTrainingAttendance(group,name){
-  const data=trainingAttendanceByGroup[trainingAttendanceKey(group)];
-  const v=data && data[name];
-  if(typeof v==='boolean') return {training:v,trainingAccount:false};
-  return v || {training:false,trainingAccount:false};
+  const key = trainingAttendanceKey(group);
+  const data=trainingAttendanceByGroup[key];
+  if(!data) return {training:false,trainingAccount:false,newMember:false};
+  // name môže byť id:xxx alebo surname|name
+  let v = data[name];
+  if(!v){
+    // skús nájsť podľa id v mape
+    // name je surname|name, hľadaj záznam kde surname+|+name sedí
+    const parts = String(name||'').split('|');
+    if(parts.length>=2){
+      const s = parts[0], n = parts.slice(1).join('|');
+      // hľadaj akýkoľvek kľúč id: kde sa zhoduje meno
+      for(const k of Object.keys(data)){
+        const rec=data[k];
+        if(rec && rec.surname===s && rec.name===n){ v=rec; break; }
+      }
+    }
+  }
+  if(typeof v==='boolean') return {training:v,trainingAccount:false,newMember:false};
+  return v || {training:false,trainingAccount:false,newMember:false};
 }
+// Nová funkcia pre presné spätné zobrazenie
+function getExactSavedAttendance(date, group){
+  const key = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(group, date) : (date+'|'+group);
+  return (typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) ? trainingAttendanceByGroup[key] : null;
+}
+
 function cleanAttendanceMember(m){
   return {
     surname:m.surname,name:m.name,training:false,newMember:false,
@@ -8133,6 +8179,7 @@ function syncAttendanceRecord(member){
   return a;
 }
 function loadAttendanceFromMembers(){
+ // FIX: Načítanie presne tak ako bolo uložené - pre spätný pohľad
  const current=attendanceState.members||[];
  const byName=new Map(current.map(a=>[a.surname+'|'+a.name,a]));
  const wantedGroups=new Set(groupRosterCodes(attendanceState.group));
@@ -8140,42 +8187,78 @@ function loadAttendanceFromMembers(){
    const gs=Array.isArray(m.groups)?m.groups:[m.group];
    return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
  });
- // Test mode: keep the original 10 test members visible, but NEVER
- // discard a real member who was added to this group.
+ const key = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(attendanceState.group, attendanceState.date) : (attendanceState.date+'|'+attendanceState.group);
+ const savedMap = (typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) ? trainingAttendanceByGroup[key] : null;
+ // Ak existuje uložená dochádzka pre tento dátum/skupinu, použijeme ju PRESNE
+ const hasSavedHistory = !!savedMap && Object.keys(savedMap).length>0;
  
  attendanceState.members=selected.map(m=>{
-   const old=byName.get(m.surname+'|'+m.name);
-   return {
-     surname:m.surname,name:m.name,training:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).training
-      || ((old && old.group===attendanceState.group)?!!old.training:false)),
-     trainingAccount:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).trainingAccount
-      || ((old && old.group===attendanceState.group)?!!old.trainingAccount:false)),
-     membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
-     registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
-     newMember:(Object.prototype.hasOwnProperty.call(
-        getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name),'newMember')
-        ? !!getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).newMember
-        : (!!m.newMemberDate && m.newMemberDate===attendanceState.date)),
-     newMemberDate:m.newMemberDate||'',
-     // Membership is member-level, not group-level: once paid, it remains paid
-     // when the member appears in any other assigned group.
-     membershipAmount:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='add'
-       ? Number(getMembershipDraft(m.id,attendanceState.date,attendanceState.group).amount||0)
-       : (getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='remove' ? 0 : Number(m.membershipAmount||0))),
-     membershipDate:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.date : (m.membershipDate||'')),
-     membershipPaidGroup:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.group : (m.membershipPaidGroup||'')),
-     membershipAccountAmount:Number(m.membershipAccountAmount||0),
-     membershipAccountDate:m.membershipAccountDate||'',
-     registration:!!m.registration,
-     registrationDate:m.registrationDate||'',
-     registrationAccountAmount:Number(m.registrationAccountAmount||0),
-     registrationAccountDate:m.registrationAccountDate||'',
-     debt:Number(m.debt||0),
-     debtReason:m.debtReason||'',application:!!m.application,
-     applicationDate:m.applicationDate||'',
-     applicationFile:m.applicationFile||'',
-     applicationFileName:m.applicationFileName||''
-   };
+   // Hľadaj záznam: najprv podľa id, potom podľa mena
+   let saved=null;
+   if(savedMap){
+     if(m.id && savedMap['id:'+m.id]) saved=savedMap['id:'+m.id];
+     else if(savedMap[m.surname+'|'+m.name]) saved=savedMap[m.surname+'|'+m.name];
+   }
+   if(hasSavedHistory && saved){
+     // PRESNÉ obnovenie - tak ako bolo uložené
+     return {
+       id:m.id||'',
+       surname:m.surname,name:m.name,
+       group: attendanceState.group,
+       training: !!saved.training,
+       trainingAccount: !!saved.trainingAccount,
+       newMember: !!saved.newMember,
+       newMemberDate: saved.newMemberDate||'',
+       savedAt: saved.savedAt||0,
+       membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
+       membershipAmount:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='add'
+         ? Number(getMembershipDraft(m.id,attendanceState.date,attendanceState.group).amount||0)
+         : (getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='remove' ? 0 : Number(m.membershipAmount||0))),
+       membershipDate:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.date : (m.membershipDate||'')),
+       membershipPaidGroup:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.group : (m.membershipPaidGroup||'')),
+       membershipAccountAmount:Number(m.membershipAccountAmount||0),
+       membershipAccountDate:m.membershipAccountDate||'',
+       registration:!!m.registration,
+       registrationDate:m.registrationDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0),
+       registrationAccountDate:m.registrationAccountDate||'',
+       debt:Number(m.debt||0),
+       debtReason:m.debtReason||'',application:!!m.application,
+       applicationDate:m.applicationDate||'',
+       applicationFile:m.applicationFile||'',
+       applicationFileName:m.applicationFileName||''
+     };
+   } else {
+     // Nový deň bez histórie - prázdne, nepreberaj old state
+     return {
+       id:m.id||'',
+       surname:m.surname,name:m.name,
+       group: attendanceState.group,
+       training:false,
+       trainingAccount:false,
+       membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
+       newMember:(!!m.newMemberDate && m.newMemberDate===attendanceState.date),
+       newMemberDate:m.newMemberDate||'',
+       membershipAmount:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='add'
+         ? Number(getMembershipDraft(m.id,attendanceState.date,attendanceState.group).amount||0)
+         : (getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='remove' ? 0 : Number(m.membershipAmount||0))),
+       membershipDate:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.date : (m.membershipDate||'')),
+       membershipPaidGroup:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.group : (m.membershipPaidGroup||'')),
+       membershipAccountAmount:Number(m.membershipAccountAmount||0),
+       membershipAccountDate:m.membershipAccountDate||'',
+       registration:!!m.registration,
+       registrationDate:m.registrationDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0),
+       registrationAccountDate:m.registrationAccountDate||'',
+       debt:Number(m.debt||0),
+       debtReason:m.debtReason||'',application:!!m.application,
+       applicationDate:m.applicationDate||'',
+       applicationFile:m.applicationFile||'',
+       applicationFileName:m.applicationFileName||''
+     };
+   }
  });
 }
 

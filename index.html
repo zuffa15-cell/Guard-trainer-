@@ -4045,25 +4045,31 @@ function todayHomeVisibleGroupCodes(){
   const visible=typeof filterHomeItemsForCurrentRole==='function' ? filterHomeItemsForCurrentRole(items) : items;
   return new Set(visible.map(g=>String(g.code||g.groupCode||'').trim().toUpperCase()).filter(Boolean));
 }
+function quickGroupCode(value){
+  const v=String(value||'').trim().toUpperCase();
+  if(!v)return '';
+  const m=v.match(/^([A-ZČĎĽŇŠŤŽ0-9]+)(?:\s*[–—-].*)?$/);
+  return m?m[1]:v.split(/\s*[–—-]\s*/)[0].trim();
+}
 function quickMemberList(type){
-  // Platobný prehľad na Domove je viazaný IBA na dnešný tréning,
-  // ktorý sa dnes zobrazuje. Nesmie sa ďalej filtrovať cez profilové skupiny,
-  // pretože tým sa pri reálnom trénerovi mohli členovia dnešnej skupiny stratiť.
+  // Použi PRESNE skupinu/skupiny z dnešných kariet na Domove.
+  // Kód skupiny normalizujeme (C == C – NÁBOR GRUNT), aby sa členovia nestratili.
   const all=homeMyGroupMembers();
   const paymentTypes=type==='membership'||type==='registration'||type==='debt';
-  const todayGroups=paymentTypes?todayTrainingGroups():null;
+  const todayGroups=paymentTypes?todayHomeVisibleGroupCodes():null;
   let arr=all;
-  if(paymentTypes){
-    arr=all.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(String(g).trim().toUpperCase())));
+  if(paymentTypes && todayGroups && todayGroups.size){
+    arr=all.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(quickGroupCode(g))));
   }
   const today=new Date();
   if(type==='membership') return arr.filter(m=>{
-    const period=membershipPeriodForDate(appToday().iso) || 2;
-    const year=appToday().year;
-    // Domov vždy počíta aktuálny polrok podľa dnešného dátumu,
-    // nikdy podľa dátumu naposledy otvorenej dochádzky.
-    if(typeof membershipProfilePaymentForPeriod==='function' && membershipProfilePaymentForPeriod(m,period,year)) return false;
-    return true;
+    const today=appToday();
+    const period=membershipPeriodForDate(today.iso) || (today.month<=6?1:2);
+    const year=Number(today.year);
+    // Nezaplatené = neexistuje úhrada pre DNES aktuálny polrok.
+    // Staré pole m.membership sa tu zámerne nepoužíva, pretože označuje najmä 1. polrok.
+    return !membershipPaymentForPeriod(m.id,period,year) &&
+           !(typeof membershipAccountForPeriod==='function' && membershipAccountForPeriod(m.id,period,year));
   });
   if(type==='registration') return arr.filter(m=>typeof memberHasRegistration==='function'?!memberHasRegistration(m):!m.registration);
   if(type==='debt') return arr.filter(m=>Number(m.debt||0)>0);
@@ -5755,7 +5761,7 @@ function currentMembershipPeriod(){ return membershipPeriodForDate(attendanceDat
 function membershipPaymentForPeriod(memberId,period,year=appToday().year){
   return membershipPayments.find(p=>{
     const py=Number(p.year||String(p.date||'').slice(0,4));
-    return p.memberId===memberId && Number(p.period)===Number(period) && py===Number(year);
+    return Number(p.memberId)===Number(memberId) && Number(p.period)===Number(period) && py===Number(year);
   });
 }
 function membershipProfilePaymentForPeriod(member,period,year=appToday().year){

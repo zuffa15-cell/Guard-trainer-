@@ -4507,33 +4507,86 @@ function headHomeWeekStart(){
   const t=appToday(); const d=new Date(t.year,t.month-1,t.day); const dow=d.getDay(); const monday=new Date(d); monday.setDate(d.getDate()+(dow===0?-6:1-dow)); monday.setHours(0,0,0,0); return monday;
 }
 function headHomeMonthAttendance(){
-  // Hlavný tréner: účasť je presne to, čo bolo uložené pri konkrétnom
-  // tréningu. PRÍTOMNÍ + NOVÍ. Skupina sa nikdy nepresúva z B+C do C ani B.
+  // Hlavný tréner: mesačná účasť sa počíta priamo z uloženej dochádzky.
+  // Pre KAŽDÝ konkrétny tréning platí: ÚČASŤ = PRÍTOMNÍ + NOVÍ.
+  // NOVÝ nikdy nesmie byť započítaný medzi PRÍTOMNÝCH.
+  // B+C je samostatný spoločný tréning a jeho členovia sa nepripočítavajú
+  // automaticky ani k B, ani ku C.
   const t=appToday();
   const out={};
-  getAdminGroupCodes().forEach(g=>{ out[String(g).trim().toUpperCase()]={sum:0,trainings:0,avg:0}; });
   const norm=v=>String(v||'').trim().toUpperCase();
-  const seen=new Set();
-  (monthlyBillingRecords||[]).forEach(r=>{
-    const d=parsePaymentDate(r.date);
-    if(!d || d.month!==Number(t.month) || d.year!==Number(t.year)) return;
-    const recordIso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    if(recordIso<TRAINING_DATA_START_DATE) return;
-    if(r.substituteReference) return;
-    const trainer=norm(r.trainer||r.name);
-    const group=norm(r.group);
-    if(!group || !out[group]) return;
-    const uniqueKey=`${trainer}|${recordIso}|${group}`;
-    if(seen.has(uniqueKey)) return;
-    seen.add(uniqueKey);
-    out[group].trainings += 1;
-    let present=Number(r.presentCount);
-    if(!Number.isFinite(present)) present=Array.isArray(r.attendanceSnapshot) ? r.attendanceSnapshot.length : Number(r.paying||0);
-    if(!Number.isFinite(present) || present<0) present=0;
-    let newCount=Number(r.newCount);
-    if(!Number.isFinite(newCount) || newCount<0) newCount=0;
-    out[group].sum += present + newCount;
+  const codeOf=v=>{
+    const x=norm(v);
+    if(!x)return '';
+    const m=x.match(/^([A-ZČĎĽŇŠŤŽ0-9+]+)(?:\s*[–—-].*)?$/);
+    return m?m[1]:x.split(/\s*[–—-]\s*/)[0].trim();
+  };
+  getAdminGroupCodes().forEach(g=>{
+    const k=norm(g);
+    out[k]={sum:0,trainings:0,avg:0};
   });
+  const seen=new Set();
+
+  try{
+    const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup) || {};
+    Object.keys(hist).forEach(key=>{
+      const parts=String(key).split('|');
+      const iso=parts[0]||'';
+      const rawGroup=parts.slice(1).join('|').trim();
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return;
+      const d=new Date(iso+'T12:00:00');
+      if(isNaN(d.getTime()) || d.getFullYear()!==Number(t.year) || d.getMonth()+1!==Number(t.month)) return;
+      if(iso<TRAINING_DATA_START_DATE) return;
+      const group=codeOf(rawGroup);
+      if(!group || !out[group]) return;
+      const rec=hist[key];
+      if(!rec || typeof rec!=='object' || !Object.keys(rec).length) return;
+      if(isTrainingCancelled(iso,rawGroup,'','')) return;
+
+      const uniqueKey=iso+'|'+group;
+      if(seen.has(uniqueKey)) return;
+      seen.add(uniqueKey);
+
+      let present=0, newCount=0;
+      Object.keys(rec).forEach(name=>{
+        const v=rec[name]||{};
+        if(v.newMember){
+          newCount++;
+        }else if(v.training){
+          present++;
+        }
+      });
+      out[group].trainings += 1;
+      out[group].sum += present + newCount;
+    });
+  }catch(e){ console.warn('headHomeMonthAttendance history',e); }
+
+  // Staršie/nevhodne migrované záznamy: ak pre konkrétny tréning ešte
+  // neexistuje attendance history, použijeme iba billing záznam s presným
+  // presentCount + newCount. Nikdy ho však nepridáme druhýkrát.
+  try{
+    (monthlyBillingRecords||[]).forEach(r=>{
+      const d=parsePaymentDate(r.date);
+      if(!d || d.month!==Number(t.month) || d.year!==Number(t.year)) return;
+      const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      if(iso<TRAINING_DATA_START_DATE || r.substituteReference) return;
+      const group=codeOf(r.group);
+      if(!group || !out[group]) return;
+      const key=iso+'|'+group;
+      if(seen.has(key)) return;
+      let present=Number(r.presentCount);
+      let newCount=Number(r.newCount);
+      if(!Number.isFinite(present) || present<0) present=0;
+      if(!Number.isFinite(newCount) || newCount<0) newCount=0;
+      // Fallback len pri explicitných poliach; attendanceSnapshot.length
+      // sa nepoužíva, pretože môže obsahovať aj NOVÝCH.
+      if(!('presentCount' in r) && !('newCount' in r)) return;
+      seen.add(key);
+      out[group].trainings += 1;
+      out[group].sum += present + newCount;
+    });
+  }catch(e){ console.warn('headHomeMonthAttendance billing fallback',e); }
+
   Object.values(out).forEach(x=>x.avg=x.trainings?x.sum/x.trainings:0);
   return out;
 }

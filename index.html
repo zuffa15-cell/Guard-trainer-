@@ -6047,8 +6047,13 @@ const MEMBER_APPLICATION_CLOUD_COLLECTION='guard-trainer-applications';
 async function saveApplicationFileToCloud(memberId, fileRec){
   try{
     if(!db || !fileRec || !fileRec.data) return false;
+    const data=String(fileRec.data);
+    if(data.length>900*1024){
+      console.warn('Guard Trainer: prihláška je stále príliš veľká pre Firestore',data.length);
+      return false;
+    }
     await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(memberId)).set({
-      memberId:String(memberId), data:String(fileRec.data), name:String(fileRec.name||'Prihláška'), updatedAt:Number(fileRec.updatedAt||Date.now())
+      memberId:String(memberId), data, name:String(fileRec.name||'Prihláška'), updatedAt:Number(fileRec.updatedAt||Date.now())
     },{merge:true});
     return true;
   }catch(e){ console.warn('Guard Trainer: application file cloud save failed',e); return false; }
@@ -6992,17 +6997,48 @@ function deleteMemberApplication(id){
  const btn=document.querySelector('.delete-application-btn'); if(btn)btn.remove();
  toast('Prihláška bola vymazaná');
 }
+async function prepareApplicationFile(file){
+ if(!file) return null;
+ const original=await new Promise((resolve,reject)=>{
+   const r=new FileReader(); r.onload=()=>resolve(r.result); r.onerror=reject; r.readAsDataURL(file);
+ });
+ if(!(file.type||'').startsWith('image/')) return original;
+ const img=await new Promise((resolve,reject)=>{
+   const im=new Image(); im.onload=()=>resolve(im); im.onerror=reject; im.src=original;
+ });
+ // Firestore má limit približne 1 MiB na dokument. Fotku preto vždy
+ // zmenšíme na bezpečnú veľkosť, aby ju mohlo načítať každé zariadenie.
+ let max=1200;
+ let quality=.68;
+ let result='';
+ for(let pass=0;pass<8;pass++){
+   const scale=Math.min(1,max/Math.max(img.width,img.height));
+   const c=document.createElement('canvas');
+   c.width=Math.max(1,Math.round(img.width*scale));
+   c.height=Math.max(1,Math.round(img.height*scale));
+   const ctx=c.getContext('2d',{alpha:false});
+   ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);
+   ctx.drawImage(img,0,0,c.width,c.height);
+   result=c.toDataURL('image/jpeg',quality);
+   // 700 KB je bezpečná hranica aj s JSON obalom Firestore dokumentu.
+   if(result.length<=700*1024) break;
+   if(quality>.42) quality-=.06; else max=Math.max(700,Math.round(max*.82));
+ }
+ return result||original;
+}
+
 function previewMemberApplication(input){
  const file=input.files && input.files[0];
  if(!file)return;
  const preview=document.getElementById('applicationPreview');
- const reader=new FileReader();
- reader.onload=()=>{
+ preview.textContent='⏳ Spracúvam prihlášku…';
+ prepareApplicationFile(file).then(data=>{
    preview.textContent='✓ Prihláška pripravená: '+file.name;
-   preview.dataset.fileData=reader.result;
+   preview.dataset.fileData=data;
    preview.dataset.fileName=file.name;
- };
- reader.readAsDataURL(file);
+ }).catch(()=>{
+   preview.textContent='⚠ Prihlášku sa nepodarilo spracovať';
+ });
 }
 
 function selectEditGroup(group,btn){
@@ -8226,17 +8262,7 @@ function offerAttendanceApplicationPhoto(i){
        toast('Prihláška bola uložená');
      };
      if(file.type && file.type.startsWith('image/')){
-       const img=new Image();
-       img.onload=()=>{
-         const max=1400, scale=Math.min(1,max/Math.max(img.width,img.height));
-         const c=document.createElement('canvas');
-         c.width=Math.max(1,Math.round(img.width*scale));
-         c.height=Math.max(1,Math.round(img.height*scale));
-         c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-         finish(c.toDataURL('image/jpeg',0.72));
-       };
-       img.onerror=()=>finish(reader.result);
-       img.src=reader.result;
+       prepareApplicationFile(file).then(finish).catch(()=>finish(reader.result));
      }else{
        finish(reader.result);
      }

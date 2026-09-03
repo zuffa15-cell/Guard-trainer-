@@ -4537,14 +4537,20 @@ function headHomeMonthAttendance(){
       if(!out[g]) return;
       out[g].trainings += 1;
       // Účasť hlavného trénera = PRÍTOMNÍ + NOVÍ.
-      // NOVÍ nie sú v r.paying, preto ich pripočítame priamo z uloženého
-      // attendanceSnapshotu pre konkrétny tréning.
-      const present=Number(r.paying||0);
+      // attendanceSnapshot obsahuje iba členov so stavom TRÉNING/ÚČET,
+      // preto je jeho dĺžka presný počet PRÍTOMNÝCH. Stav NOVÝ je uložený
+      // v trainingAttendanceByGroup pre konkrétny dátum a skupinu.
+      let present=Array.isArray(r.attendanceSnapshot) ? r.attendanceSnapshot.length : Number(r.paying||0);
+      if(!Number.isFinite(present)) present=0;
       let newCount=0;
-      if(Array.isArray(r.attendanceSnapshot)){
-        newCount=r.attendanceSnapshot.filter(v=>v && v.newMember).length;
-      }
-      out[g].sum += (Number.isFinite(present)?present:0) + newCount;
+      try{
+        const histKey=`${recordIso}|${String(r.group||'').trim()}`;
+        const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey]) || null;
+        if(hist && typeof hist==='object'){
+          newCount=Object.keys(hist).reduce((n,k)=>n+(hist[k] && hist[k].newMember ? 1 : 0),0);
+        }
+      }catch(e){}
+      out[g].sum += present + newCount;
     });
   });
   Object.values(out).forEach(x=>x.avg=x.trainings?x.sum/x.trainings:0);

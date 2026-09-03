@@ -141,26 +141,32 @@ function initCloudSync(){
           let localHist={}, remoteHist={};
           try{ const x=localRaw?JSON.parse(localRaw):{}; if(x&&typeof x==='object') localHist=x; }catch(e){}
           try{ const x=remoteRaw?JSON.parse(remoteRaw):{}; if(x&&typeof x==='object') remoteHist=x; }catch(e){}
+          const canonicalizeMap=(obj)=>{
+            const out={};
+            Object.keys(obj||{}).forEach(rawKey=>{
+              const key=canonicalAttendanceHistoryKey(rawKey);
+              out[key]=Object.assign(out[key]||{},obj[rawKey]&&typeof obj[rawKey]==='object'?obj[rawKey]:{});
+            });
+            return out;
+          };
+          const lHist=canonicalizeMap(localHist), rHist=canonicalizeMap(remoteHist);
+          const lOrder={}, rOrder={}, lAdmin={}, rAdmin={};
+          Object.keys(localAttendanceOrder||{}).forEach(k=>{const c=canonicalAttendanceHistoryKey(k);lOrder[c]=Math.max(Number(lOrder[c]||0),Number(localAttendanceOrder[k]||0));});
+          Object.keys(remoteAttendanceOrder||{}).forEach(k=>{const c=canonicalAttendanceHistoryKey(k);rOrder[c]=Math.max(Number(rOrder[c]||0),Number(remoteAttendanceOrder[k]||0));});
+          Object.keys(localAttendanceAdminEdits||{}).forEach(k=>{const c=canonicalAttendanceHistoryKey(k);lAdmin[c]=Math.max(Number(lAdmin[c]||0),Number(localAttendanceAdminEdits[k]||0));});
+          Object.keys(remoteAttendanceAdminEdits||{}).forEach(k=>{const c=canonicalAttendanceHistoryKey(k);rAdmin[c]=Math.max(Number(rAdmin[c]||0),Number(remoteAttendanceAdminEdits[k]||0));});
           const merged={};
-          const keys=new Set([...Object.keys(localHist),...Object.keys(remoteHist)]);
+          const keys=new Set([...Object.keys(lHist),...Object.keys(rHist)]);
           keys.forEach(key=>{
-            const localAt=Math.max(Number(localAttendanceOrder[key]||0), getAttendancePendingSaveAt(String(key).split('|')[0], String(key).split('|').slice(1).join('|')));
-            const remoteAt=Number(remoteAttendanceOrder[key]||0);
-            const localAdminAt=Number(localAttendanceAdminEdits[key]||0);
-            const remoteAdminAt=Number(remoteAttendanceAdminEdits[key]||0);
-            // Ak administrátor výslovne upravil tento deň/skupinu, jeho
-            // záznam má prednosť pred starou lokálnou dochádzkou trénera.
-            if(remoteAdminAt>localAdminAt && remoteHist[key]){
-              merged[key]=remoteHist[key];
-            }else if(localAdminAt>remoteAdminAt && localHist[key]){
-              merged[key]=localHist[key];
-            }else if(localAt>remoteAt && localAt>0){
-              merged[key]=localHist[key]||{};
-            }else if(remoteHist[key]){
-              merged[key]=remoteHist[key];
-            }else if(localHist[key]){
-              merged[key]=localHist[key];
-            }
+            const localAt=Math.max(Number(lOrder[key]||0), getAttendancePendingSaveAt(String(key).split('|')[0], String(key).split('|').slice(1).join('|')));
+            const remoteAt=Number(rOrder[key]||0);
+            const localAdminAt=Number(lAdmin[key]||0);
+            const remoteAdminAt=Number(rAdmin[key]||0);
+            if(remoteAdminAt>localAdminAt && rHist[key]) merged[key]=rHist[key];
+            else if(localAdminAt>remoteAdminAt && lHist[key]) merged[key]=lHist[key];
+            else if(localAt>remoteAt && localAt>0) merged[key]=lHist[key]||{};
+            else if(rHist[key]) merged[key]=rHist[key];
+            else if(lHist[key]) merged[key]=lHist[key];
           });
           const mergedRaw=JSON.stringify(merged);
           if(mergedRaw!==localRaw){ originalSetItem(k,mergedRaw); changed=true; }
@@ -5138,8 +5144,7 @@ function getCalendarAttendanceCounts(dateLabel, groupCode, groupName){
   // NEW is a separate state (newMember=true, training=false), so it must NOT
   // be derived from the paid-training snapshot.
   try{
-    const key=`${String(dateLabel||'')}|${String(groupCode||'').trim()}`;
-    const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) || null;
+    const hist=findAttendanceHistory(dateLabel,groupCode);
     if(hist && typeof hist==='object' && Object.keys(hist).length){
       let present=0, newCount=0;
       Object.keys(hist).forEach(k=>{
@@ -6474,7 +6479,7 @@ function groupAttendanceRegisterData(group){
  const presentByDate=Object.create(null);
  trainingDates.forEach(iso=>{
    const key=trainingAttendanceKey(group,iso);
-   const rec=trainingAttendanceByGroup[key]||{};
+   const rec=findAttendanceHistory(iso,group)||{};
    presentByDate[iso]=new Set(Object.keys(rec).filter(k=>rec[k]&&rec[k].training));
  });
  return {group,year,month,daysInMonth,members,trainingDates,presentByDate};
@@ -6850,8 +6855,8 @@ function getSavedMemberTrainingData(member){
         const groupValue=parts.slice(1).join('|')||'';
         const hist=trainingAttendanceByGroup[histKey];
         if(!hist || typeof hist!=='object')return;
-        const state=hist[key];
-        if(!state || (!state.training && !state.newMember))return;
+        const memberState=hist[key];
+        if(!memberState || (!memberState.training && !memberState.newMember))return;
         addRow(dateValue,groupValue,'');
       });
     }
@@ -7747,7 +7752,8 @@ function renderMore(){
 document.documentElement.classList.remove('light-theme');
 localStorage.setItem('gt-theme','dark');
 
-/* Training attendance is group + date specific and is persisted so Calendar
+/* v942: canonical attendance date/group keys preserve saved 1.9. and 2.9. records.
+   Training attendance is group + date specific and is persisted so Calendar
    can reopen a previous training with exactly the attendance that was saved. */
 const trainingAttendanceByGroup = Object.create(null);
 try{
@@ -7755,17 +7761,50 @@ try{
   const parsed=raw?JSON.parse(raw):null;
   if(parsed && typeof parsed==='object'){
     Object.keys(parsed).forEach(k=>{
-      const date=String(k).split('|')[0];
+      const canonical=canonicalAttendanceHistoryKey(k);
+      const date=canonical.split('|')[0];
       if(date>=TRAINING_DATA_START_DATE){
-        trainingAttendanceByGroup[k]=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {};
+        const incoming=parsed[k] && typeof parsed[k]==='object' ? parsed[k] : {};
+        trainingAttendanceByGroup[canonical]=Object.assign(trainingAttendanceByGroup[canonical]||{},incoming);
       }
     });
     try{ localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup)); }catch(e){}
   }
 }catch(e){ console.warn('Attendance history load failed',e); }
 
-function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
+function canonicalAttendanceDate(value){
+  const d=parsePaymentDate(value);
+  return d ? `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}` : String(value||'').trim();
+}
+function canonicalAttendanceGroup(value){
+  const raw=String(value||'').trim().toUpperCase();
+  if(!raw)return '';
+  if(raw==='B+C' || raw==='C+B') return 'B+C';
+  const m=raw.match(/^([A-ZČĎĽŇŠŤŽ0-9+]+)/);
+  return m ? m[1] : raw;
+}
+function canonicalAttendanceHistoryKey(value){
+  const parts=String(value||'').split('|');
+  const date=canonicalAttendanceDate(parts.shift()||'');
+  const group=canonicalAttendanceGroup(parts.join('|'));
   return `${date}|${group}`;
+}
+function findAttendanceHistory(date,group){
+  const wanted=`${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
+  try{
+    if(typeof trainingAttendanceByGroup==='undefined') return null;
+    if(trainingAttendanceByGroup[wanted] && typeof trainingAttendanceByGroup[wanted]==='object') return trainingAttendanceByGroup[wanted];
+    for(const k of Object.keys(trainingAttendanceByGroup)){
+      if(canonicalAttendanceHistoryKey(k)===wanted){
+        const h=trainingAttendanceByGroup[k];
+        if(h && typeof h==='object') return h;
+      }
+    }
+  }catch(e){}
+  return null;
+}
+function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
+  return `${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
 }
 function persistTrainingAttendanceHistory(){
   try{
@@ -7836,7 +7875,7 @@ try{
   if(savedOrder && typeof savedOrder==='object') Object.assign(attendanceSaveOrder,savedOrder);
 }catch(e){}
 function attendanceSaveOrderKey(date,group){
-  return `${String(date||'')}|${String(group||'').trim().toUpperCase()}`;
+  return `${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
 }
 function markAttendanceSavedNow(date=attendanceState.date,group=attendanceState.group){
   try{

@@ -48,7 +48,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -119,6 +119,16 @@ function initCloudSync(){
         const x = data['gt-attendance-save-order-v1'] ? JSON.parse(data['gt-attendance-save-order-v1']) : {};
         if(x && typeof x==='object') remoteAttendanceOrder=x;
       } catch(e){}
+      let localAttendanceAdminEdits = {};
+      let remoteAttendanceAdminEdits = {};
+      try {
+        const x = originalGetItem('gt-attendance-admin-edits-v1') ? JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')) : {};
+        if(x && typeof x==='object') localAttendanceAdminEdits=x;
+      } catch(e){}
+      try {
+        const x = data['gt-attendance-admin-edits-v1'] ? JSON.parse(data['gt-attendance-admin-edits-v1']) : {};
+        if(x && typeof x==='object') remoteAttendanceAdminEdits=x;
+      } catch(e){}
 
       let memberSyncHandled=false;
       SYNC_KEYS.forEach(k=>{
@@ -136,7 +146,15 @@ function initCloudSync(){
           keys.forEach(key=>{
             const localAt=Math.max(Number(localAttendanceOrder[key]||0), getAttendancePendingSaveAt(String(key).split('|')[0], String(key).split('|').slice(1).join('|')));
             const remoteAt=Number(remoteAttendanceOrder[key]||0);
-            if(localAt>remoteAt && localAt>0){
+            const localAdminAt=Number(localAttendanceAdminEdits[key]||0);
+            const remoteAdminAt=Number(remoteAttendanceAdminEdits[key]||0);
+            // Ak administrátor výslovne upravil tento deň/skupinu, jeho
+            // záznam má prednosť pred starou lokálnou dochádzkou trénera.
+            if(remoteAdminAt>localAdminAt && remoteHist[key]){
+              merged[key]=remoteHist[key];
+            }else if(localAdminAt>remoteAdminAt && localHist[key]){
+              merged[key]=localHist[key];
+            }else if(localAt>remoteAt && localAt>0){
               merged[key]=localHist[key]||{};
             }else if(remoteHist[key]){
               merged[key]=remoteHist[key];
@@ -194,6 +212,21 @@ function initCloudSync(){
           });
           const mergedRaw=JSON.stringify(merged);
           if(mergedRaw!==originalGetItem(k)){ originalSetItem(k,mergedRaw); changed=true; }
+          return;
+        }
+        if(k==='gt-attendance-admin-edits-v1'){
+          // Samostatný register úprav administrátora. Slúži iba na to,
+          // aby zariadenie trénera vedelo, že konkrétny deň/skupinu zmenil
+          // administrátor a musí prijať jeho stav aj pri rozdielnych hodinách.
+          let localObj={}, remoteObj={};
+          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localObj=p; }catch(e){}
+          try{ const p=data[k]?JSON.parse(data[k]):{}; if(p&&typeof p==='object') remoteObj=p; }catch(e){}
+          const merged={};
+          new Set([...Object.keys(localObj),...Object.keys(remoteObj)]).forEach(key=>{
+            merged[key]=Math.max(Number(localObj[key]||0),Number(remoteObj[key]||0));
+          });
+          const raw=JSON.stringify(merged);
+          if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
           return;
         }
         if(k==='gt-attendance-save-order-v1'){
@@ -262,7 +295,7 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-application-files-v1') return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -336,7 +369,9 @@ function initCloudSync(){
             const curKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
             const localAt=Number(localAttendanceOrder[curKey]||0);
             const remoteAt=Number(remoteAttendanceOrder[curKey]||0);
-            if(remoteAt>localAt){
+            const localAdminAt=Number(localAttendanceAdminEdits[curKey]||0);
+            const remoteAdminAt=Number(remoteAttendanceAdminEdits[curKey]||0);
+            if(remoteAt>localAt || remoteAdminAt>localAdminAt){
               attendanceState.billingPaymentSnapshot=null;
               attendanceState.billingAttendanceSnapshot=null;
               attendanceState.billingRecordSnapshot=null;
@@ -7829,7 +7864,8 @@ function getAttendancePendingSaveAt(date,group){
 
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
-  trainingAttendanceByGroup[key]=Object.create(null);
+  const before=trainingAttendanceByGroup[key]||null;
+  const next=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{
     trainingAttendanceByGroup[key][a.surname+'|'+a.name]={
       training:!!a.training,
@@ -7839,13 +7875,22 @@ function saveCurrentTrainingAttendance(){
       newMember:!!a.newMember
     };
   });
+  trainingAttendanceByGroup[key]=next;
+  const changedAttendance=JSON.stringify(before||{})!==JSON.stringify(next||{});
+  if(changedAttendance && isAdmin()){
+    try{
+      const adminEdits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}');
+      adminEdits[key]=Date.now();
+      originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(adminEdits));
+    }catch(e){}
+  }
   persistTrainingAttendanceHistory();
   // Toto je rozhodujúci čas pre poradie skupín v daný deň.
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
   // Kritická ochrana dnešnej dochádzky: pri pomalom Firebase nesmie nový
   // lokálny zápis po reloadovaní ustúpiť staršiemu cloudovému snapshotu.
   markAttendancePendingSave(attendanceState.date,attendanceState.group);
-  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(),100); }catch(e){}
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),100); }catch(e){}
 }
 function membershipDraftKey(memberId,date,group){
   return `${memberId}|${date}|${group}`;

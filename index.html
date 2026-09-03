@@ -3432,6 +3432,20 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .stats-new-members-card b{font-size:30px!important}
 .stats-new-members .new-member-bar{opacity:.9}
 </style>
+
+<style id="gt-stats-stacked-v908">
+.stats-stacked-chart{height:175px;display:flex;align-items:flex-end;gap:4px;overflow-x:auto;padding:8px 2px 0}
+.stats-stack-col{min-width:25px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px}
+.stats-stack-col>b{font-size:8px;color:#ddd;min-height:10px}
+.stats-stack-bar{height:125px;width:19px;display:flex;flex-direction:column;justify-content:flex-end;overflow:visible;border-radius:4px 4px 0 0}
+.stats-stack-segment{display:block;width:19px;min-height:2px;border-radius:0}
+.stats-stack-segment:first-child{border-radius:0 0 3px 3px}
+.stats-stack-segment:last-child{border-radius:3px 3px 0 0}
+.stats-stack-col small{font-size:8px;color:#aaa}
+.stats-stack-legend{display:flex;flex-wrap:wrap;gap:8px 13px;margin:7px 2px 0;font-size:10px;color:#bbb}
+.stats-stack-legend span{display:inline-flex;align-items:center;gap:4px}
+.stats-stack-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -11876,36 +11890,72 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const active=hasSavedStats
     ? new Set(entries.flatMap(e=>e.people)).size
     : 0;
-  // Noví tento mesiac: jedineční členovia, ktorí boli v uloženom vyúčtovaní
-  // označení ako NOVÝ. Nepoužívame aktuálny stav profilu, aby starší NOVÝ
-  // záznam nezostal v štatistike aj po neskoršej zmene profilu.
+  // NOVÍ: zdrojom je uložená dochádzka + uložené vyúčtovania.
+  // Aktuálny stav profilu nepoužívame, preto sa NOVÝ nestratí po neskoršej zmene profilu.
   const newMemberSet=new Set();
-  const dailyNew=Array.from({length:daysInMonth},()=>new Set());
+  const dailyNewByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>new Set())]));
   entries.forEach(e=>{
-    if(Array.isArray(e.paymentSnapshot) && e.paymentSnapshot.length){
+    const day=Number(String(e.date).slice(8,10));
+    if(day<1 || day>daysInMonth) return;
+    const group=quickGroupCode(e.group);
+    // 1) Najpresnejší zdroj: attendance history pre konkrétny deň/skupinu.
+    try{
+      const histKey=`${e.date}|${group}`;
+      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey])||null;
+      if(hist && typeof hist==='object'){
+        Object.keys(hist).forEach(k=>{
+          const v=hist[k]||{};
+          if(v.newMember){
+            newMemberSet.add(k);
+            if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(k);
+          }
+        });
+      }
+    }catch(err){}
+    // 2) Vyúčtovanie si uchováva historický príznak NOVÝ.
+    if(Array.isArray(e.paymentSnapshot)){
       e.paymentSnapshot.forEach(x=>{
         if(x && x.newMember){
-          const key=String(x.surname||'')+'|'+String(x.name||'');
+          const key=String(x.surname||'').trim()+'|'+String(x.name||'').trim();
           if(key && key!=='|'){
             newMemberSet.add(key);
-            const day=Number(String(e.date).slice(8,10));
-            if(day>=1 && day<=daysInMonth) dailyNew[day-1].add(key);
+            if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(key);
           }
         }
       });
-    }else if(Number(e.newCount||0)>0){
-      // Staršie uložené záznamy bez paymentSnapshotu nemajú mená, preto
-      // ich vieme zobraziť iba v dennom grafe ako počet nových.
-      const day=Number(String(e.date).slice(8,10));
-      if(day>=1 && day<=daysInMonth) dailyNew[day-1].add('__legacy_'+e.date+'_'+e.group);
     }
   });
   const newMembers=newMemberSet.size;
-  const dailyNewCounts=dailyNew.map(set=>set.size);
+  const dailyNewByGroupCounts=Object.fromEntries(Object.keys(groupNames).map(g=>[g,dailyNewByGroup[g].map(set=>set.size)]));
+  const dailyNewCounts=Array.from({length:daysInMonth},(_,i)=>Object.keys(groupNames).reduce((sum,g)=>sum+(dailyNewByGroupCounts[g][i]||0),0));
 
   const daily=Array.from({length:daysInMonth},()=>0);
   entries.forEach(e=>{const d=Number(e.date.slice(8,10)); if(d>=1&&d<=daysInMonth) daily[d-1]+=e.people.length;});
   const maxDaily=Math.max(1,...daily);
+  const stackedAttendanceByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>0)]));
+  entries.forEach(e=>{
+    const group=quickGroupCode(e.group);
+    if(!stackedAttendanceByGroup[group]) return;
+    const day=Number(String(e.date).slice(8,10));
+    if(day>=1 && day<=daysInMonth) stackedAttendanceByGroup[group][day-1]+=e.people.length;
+  });
+  const stackedDayMax=Math.max(1,...daily);
+  const stackedNewMax=Math.max(1,...dailyNewCounts);
+  const statGroupColors={A:getGroupColor('A','#dca10e'),B:getGroupColor('B','#3d7cff'),C:getGroupColor('C','#35b76b'),D:getGroupColor('D','#d94b4b'),'D+':getGroupColor('D+','#9b59b6')};
+  const renderStackedMonthChart=(seriesByGroup,maxValue,emptyText)=>{
+    const groups=Object.keys(groupNames);
+    const total=Array.from({length:daysInMonth},(_,i)=>groups.reduce((sum,g)=>sum+Number((seriesByGroup[g]||[])[i]||0),0));
+    if(!total.some(v=>v>0)) return `<div class=\"stats-empty\">${emptyText}</div>`;
+    return `<div class=\"stats-stacked-chart\">${total.map((sum,i)=>{
+      const segments=groups.map(g=>{
+        const v=Number((seriesByGroup[g]||[])[i]||0);
+        if(!v) return '';
+        const h=Math.max(2,Math.round(v/Math.max(1,maxValue)*120));
+        return `<i class=\"stats-stack-segment\" title=\"${g}: ${v}\" style=\"height:${h}px;background:${statGroupColors[g]}\"></i>`;
+      }).join('');
+      return `<div class=\"stats-stack-col\"><b>${sum||''}</b><div class=\"stats-stack-bar\">${segments}</div><small>${i+1}</small></div>`;
+    }).join('')}</div><div class=\"stats-stack-legend\">${groups.map(g=>`<span><i style=\"background:${statGroupColors[g]}\"></i>${g}</span>`).join('')}</div>`;
+  };
 
   const groupMax=Math.max(1,...Object.values(groupCounts));
   const medals=['🥇','🥈','🥉'];
@@ -11928,14 +11978,15 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     </section>
 
     <section class="stats-section">
-      <h3>📈 DOCHÁDZKA V MESIACI</h3>
-      ${entries.length?`<div class="stats-chart">${daily.map((v,i)=>`<div class="stats-bar-col"><b>${v||''}</b><i class="stats-bar" style="height:${Math.max(3,Math.round(v/maxDaily*110))}px"></i><small>${i+1}</small></div>`).join('')}</div>`:`<div class="stats-empty">Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.</div>`}
+      <h3>📈 DOCHÁDZKA V MESIACI – CELÝ KLUB</h3>
+      ${renderStackedMonthChart(stackedAttendanceByGroup,stackedDayMax,`Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.`)}
+      <div class="stats-money-note">Každý stĺpec je jeden deň. Farby sú rozdelené podľa skupín a hodnoty sa sčítavajú nad seba.</div>
     </section>
 
     <section class="stats-section stats-new-members">
-      <h3>🆕 NOVÍ ČLENOVIA V MESIACI</h3>
-      ${entries.length?`<div class="stats-chart">${dailyNewCounts.map((v,i)=>`<div class="stats-bar-col"><b>${v||''}</b><i class="stats-bar new-member-bar" style="height:${Math.max(3,Math.round(v/Math.max(1,...dailyNewCounts)*110))}px"></i><small>${i+1}</small></div>`).join('')}</div>`:`<div class="stats-empty">Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.</div>`}
-      <div class="stats-money-note">Graf zobrazuje počet nových členov podľa jednotlivých dní. Celkový počet hore je počet jedinečných nových členov za mesiac.</div>
+      <h3>🆕 NOVÍ ČLENOVIA V MESIACI – CELÝ KLUB</h3>
+      ${renderStackedMonthChart(dailyNewByGroupCounts,stackedNewMax,`Za ${monthNames[m-1]} ${y} zatiaľ nie sú evidovaní noví členovia.`)}
+      <div class="stats-money-note">Počet je počítaný z historicky uloženého označenia NOVÝ. Za mesiac sa každý nový člen počíta iba raz; skupiny B a C sa zobrazujú samostatnou farbou.</div>
     </section>
 
     <section class="stats-section">

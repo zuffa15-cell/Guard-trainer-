@@ -48,7 +48,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -120,8 +120,10 @@ function initCloudSync(){
         if(x && typeof x==='object') remoteAttendanceOrder=x;
       } catch(e){}
 
+      let memberSyncHandled=false;
       SYNC_KEYS.forEach(k=>{
         if(isGTLocalAuthKey(k)) return;
+        if((k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') && memberSyncHandled) return;
         if(!data[k]) return;
         if(k==='gt-training-attendance-history'){
           const localRaw=localAttendanceHistoryRaw;
@@ -206,6 +208,38 @@ function initCloudSync(){
           });
           const raw=JSON.stringify(merged);
           if(raw!==localRaw){ originalSetItem(k,raw); changed=true; }
+          return;
+        }
+        if(k==='gt-member-save-order-v1'){
+          // Každý člen má vlastný čas poslednej zmeny. Zabránime tomu,
+          // aby starší cloudový zoznam prepísal novšie údaje člena
+          // (napr. dátum narodenia, telefón alebo prihlášku).
+          let localOrder={}, remoteOrder={};
+          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localOrder=p; }catch(e){}
+          try{ const p=data[k]?JSON.parse(data[k]):{}; if(p&&typeof p==='object') remoteOrder=p; }catch(e){}
+          let localMembers=[], remoteMembers=[];
+          try{ const x=originalGetItem('gt-members-real-2026-v847'); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localMembers=p; }catch(e){}
+          try{ const p=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[]; if(Array.isArray(p)) remoteMembers=p; }catch(e){}
+          const byId=new Map();
+          localMembers.forEach(m=>{ if(m&&m.id!=null) byId.set(String(m.id),m); });
+          remoteMembers.forEach(m=>{
+            if(!m||m.id==null)return;
+            const id=String(m.id), l=byId.get(id);
+            const lt=Number(localOrder[id]||0), rt=Number(remoteOrder[id]||0);
+            if(!l || rt>=lt) byId.set(id,m);
+          });
+          // Členov, ktorí existujú iba lokálne, nikdy nemaž kvôli staršiemu
+          // snapshotu cloudu.
+          const mergedMembers=Array.from(byId.values());
+          const mergedOrder={};
+          new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>{
+            mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0));
+          });
+          const membersRaw=JSON.stringify(mergedMembers);
+          const orderRaw=JSON.stringify(mergedOrder);
+          if(membersRaw!==originalGetItem('gt-members-real-2026-v847')){ originalSetItem('gt-members-real-2026-v847',membersRaw); changed=true; }
+          if(orderRaw!==originalGetItem(k)){ originalSetItem(k,orderRaw); changed=true; }
+          memberSyncHandled=true;
           return;
         }
         if(originalGetItem(k) !== data[k]) {
@@ -894,7 +928,7 @@ body{overflow-x:hidden}
 
 .members-head{display:flex;justify-content:space-between;align-items:center;margin:8px 0 12px}.members-head h2{margin:0;font-size:22px}.members-head small{color:#aaa}.members-head button{background:#d99a10;border:1px solid #efb52c;color:#111;border-radius:6px;padding:11px;font-weight:900}
 .member-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.member-stats div{border:1px solid #594400;border-radius:7px;text-align:center;padding:10px 4px}.member-stats b{display:block;font-size:23px;color:#ffd12b}.member-stats span{font-size:9px;color:#aaa}
-.member-filters{display:grid;grid-template-columns:1.6fr 1fr 1fr 1.2fr;gap:7px;margin:10px 0}.member-filters input,.member-filters button{padding:10px;border:1px solid #594400;border-radius:6px;background:#080808;color:#ddd}
+.member-filters{display:grid;grid-template-columns:1.6fr 1fr 1fr 1.2fr;gap:7px;margin:10px 0}.member-filters input[type=search]{min-width:0}.member-filters input,.member-filters button{padding:10px;border:1px solid #594400;border-radius:6px;background:#080808;color:#ddd}
 .member-list-head{display:grid;grid-template-columns:1.7fr 1fr 1.2fr 1.2fr 1fr;padding:6px 12px;color:#888;font-size:9px}
 .member-row{display:grid;grid-template-columns:48px 1.6fr 1fr 1.2fr 1.3fr 1fr 24px;gap:8px;align-items:center;border:1px solid #594400;border-radius:8px;padding:7px 9px;margin-bottom:7px;background:#050505;cursor:pointer}.member-avatar{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#303030;color:#fff;font-size:19px}.member-name b{display:block;font-size:14px}.member-name span{font-size:11px;color:#ccc}.member-group-col{display:flex;align-items:center;gap:5px}.member-group-col small{color:#aaa;font-size:8px}.member-group{display:inline-flex;width:27px;height:27px;border-radius:4px;align-items:center;justify-content:center;color:#fff;font-style:normal;font-weight:800;font-size:11px}.member-contact{font-size:10px}.member-contact small{display:block;color:#888;margin-top:3px}.member-pay{display:flex;flex-direction:column;gap:3px}.member-pay span{font-size:8px;border-radius:3px;padding:3px 5px;text-align:center}.paid{color:#43d05a;border:1px solid #287c35}.unpaid{color:#ff3d3d;border:1px solid #7c2929}.new-flag{color:#49aaff;border:1px solid #2874a9;border-radius:3px;padding:3px 5px;font-size:8px}.debt-flag{color:#ffca2c;border:1px solid #8d6a14;border-radius:3px;padding:3px 5px;font-size:8px}.member-flags{display:flex;flex-direction:column;gap:3px}.member-arrow{color:#ffd12b;font-size:22px}
 .member-profile-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.member-profile-title h2{margin:0;font-size:19px}.member-profile-title small{color:#aaa}.member-profile-card{display:grid;grid-template-columns:80px 1.2fr 1fr 1fr;gap:12px;align-items:center;border:1px solid #735600;border-radius:8px;padding:12px}.member-big-avatar{width:72px;height:72px;border-radius:50%;background:#303030;display:flex;align-items:center;justify-content:center;font-size:31px}.member-profile-name h2{margin:0;font-size:19px}.member-profile-name b{font-size:13px;color:#ddd}.member-profile-contact small{font-size:9px;color:#888}.member-profile-contact p{margin:3px 0 7px;font-size:11px}.member-status{display:flex;flex-direction:column;gap:5px;align-items:flex-start}
@@ -5978,8 +6012,20 @@ normalizeAllMembers();
 
 /* v466 – persist members added/edited by the user across app reloads. */
 const MEMBERS_STORAGE_KEY='gt-members-real-2026-v847';
-function persistMembersData(){
-  try{ localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData)); }
+const MEMBER_SAVE_ORDER_KEY='gt-member-save-order-v1';
+function markMemberSaved(id){
+  try{
+    const raw=originalGetItem(MEMBER_SAVE_ORDER_KEY);
+    const obj=raw?JSON.parse(raw):{};
+    obj[String(id)]=Date.now();
+    originalSetItem(MEMBER_SAVE_ORDER_KEY,JSON.stringify(obj));
+  }catch(e){ console.warn('Guard Trainer: member save timestamp failed',e); }
+}
+function persistMembersData(changedMemberId=null){
+  try{
+    localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+    if(changedMemberId!=null) markMemberSaved(changedMemberId);
+  }
   catch(e){ console.warn('Guard Trainer: members could not be persisted',e); }
 }
 function loadPersistedMembers(){
@@ -6192,7 +6238,7 @@ function renderMembers(){
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content members-page">
   <div class="members-head"><div><h2>ČLENOVIA <span class="member-count">(${active})</span></h2><small>Správa členov klubu</small></div><button onclick="createMemberFromMembers()">＋ NOVÝ ČLEN</button></div>
-  <div class="member-filters"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
+  <div class="member-filters"><input id="memberSearchInput" type="search" placeholder="🔎 Hľadať člena..." autocomplete="off" oninput="filterMembers(this.value)"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
   <div class="member-list-head"><span>ČLEN</span><span>SKUPINA</span><span>PRIHLÁŠKA</span><span>ČLENSKÉ</span><span>REGISTRÁCIA</span></div>
   <div id="memberList">${memberRows(membersData)}</div>
  </main>
@@ -6274,7 +6320,8 @@ function filterMembersGroup(group){
  if(el)el.innerHTML=memberRows(list);
  const filters=document.querySelector('.member-filters');
  if(filters){
-   filters.innerHTML=`<button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}`;
+   const search=String(document.getElementById('memberSearchInput')?.value||'');
+   filters.innerHTML=`<input id="memberSearchInput" type="search" placeholder="🔎 Hľadať člena..." autocomplete="off" value="${escapeHtml(search)}" oninput="filterMembers(this.value)"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}`;
  }
 }
 function groupAttendanceRegisterData(group){
@@ -6376,8 +6423,11 @@ function saveGroupAttendanceRegisterPDF(group){
 }
 
 function filterMembers(q){
- const x=q.toLowerCase();
- document.getElementById('memberList').innerHTML=memberRows(membersData.filter(m=>(m.surname+' '+m.name+' '+m.phone).toLowerCase().includes(x)));
+ const x=normalizeMemberText(q||'').toLowerCase();
+ const source=currentMemberGroupFilter==='ALL'?membersData:membersData.filter(m=>(m.groups||[m.group]).map(g=>String(g).trim()).includes(String(currentMemberGroupFilter).trim()));
+ const filtered=source.filter(m=>normalizeMemberText((m.surname||'')+' '+(m.name||'')+' '+(m.phone||'')).toLowerCase().includes(x));
+ const el=document.getElementById('memberList');
+ if(el) el.innerHTML=memberRows(filtered);
 }
 function getMemberAge(m){
  const raw=String(m?.dob||'').trim();
@@ -6903,7 +6953,6 @@ function saveNewMemberFromForm(id){
  const preview=document.getElementById('applicationPreview');
  if(appFile&&appFile.files&&appFile.files.length){
    m.application=true;
-try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
    m.applicationDate=formatPaymentDate(appToday().iso);
    // Ak tréner v tom istom formulári zadal vlastný dátum vstupu,
@@ -6923,6 +6972,7 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
  }
 
  normalizeMember(m);
+ markMemberSaved(m.id);
 
  // Keep the member list alphabetically sorted by surname, then name.
  membersData.sort((a,b)=>{
@@ -6930,6 +6980,7 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
    return s || (a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});
  });
  persistMembersData();
+ try{ if(typeof pushToCloud==='function'){ setTimeout(()=>pushToCloud(true),50); } }catch(e){}
 
  if(btn){
    btn.style.setProperty('background','#27c93f','important');
@@ -6993,7 +7044,6 @@ function saveMemberProfile(id,isNew=false){
  const preview=document.getElementById('applicationPreview');
  if(appFile&&appFile.files.length){
    m.application=true;
-try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
    m.applicationDate=formatPaymentDate(appToday().iso);
    // Ručne zadaný dátum vstupu nesmie byť prepísaný dátumom prihlášky.
@@ -7012,10 +7062,11 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
  }
 
  normalizeMember(m);
+ markMemberSaved(m.id);
  const a=attendanceState.members.find(x=>x.surname===m.surname && x.name===m.name);
  if(a) updateCanonicalMemberFromAttendance(a);
  persistMembersData();
-  try{ if(typeof pushToCloud==='function'){ setTimeout(()=>pushToCloud(), 400); } }catch(e){}
+  try{ if(typeof pushToCloud==='function'){ setTimeout(()=>pushToCloud(true),50); } }catch(e){}
 
 
  if(isNew){
@@ -8005,7 +8056,6 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
  a.applicationDate=formatPaymentDate(attendanceState.date);
  if(m){
    m.application=true;
-try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
    m.applicationDate=a.applicationDate;
    if(!m.memberSinceManual) m.memberSince=m.applicationDate;

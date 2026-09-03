@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v905: Home zobrazuje prihláseného používateľa; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v906: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -3426,6 +3426,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
   .home-topbar .brand.home-brand .logged-user-small{font-size:9px!important;max-width:72vw!important}
 }
 </style>
+<style id="gt-cloud-loading-immediate-v906">#gtSplashCloudLoading{display:block!important;visibility:visible!important;}</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -4676,7 +4677,22 @@ function renderHome(){
   html=html.replace(/<button class="menu"[^>]*>☰<\/button>/, '');
   html=html.replace(/<div class="date">[\s\S]*?<\/div>/,`<div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>`);
   const listHtml=items.length ? items.map(g=>{const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};const homeDate=appToday().iso;const cancelled=isTrainingCancelled(homeDate,g.code,g.time,g.name);const headInactive = isHeadTrainer();return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:'${g.code}',name:'${String(g.name||'').replace(/'/g,"\\'")}',substitutionInactive:${!!g.substitutionInactive},substitutionBy:'${String(g.substitutionBy||'').replace(/'/g,"\\'")}',scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`}" data-group-code="${g.code}" data-group-name="${g.name}"><div class="badge ${g.code.toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}${g.substitutionLabel?`<small class="sub-home-label">${g.substitutionLabel}${g.substitutionBy?` · ${g.substitutionBy}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${g.time}<br><i>⌖</i>${g.location||'Watsonova 4'}${g.trainer?`<br><i>♟</i>${g.trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;}).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;
-  html=html.replace(/<section class="training-list">[\s\S]*?<\/section>/,`<section class="training-list">${listHtml}</section>`);app.innerHTML=html;updateHomeGroupCounts();updateHomeQuickOverview();
+  html=html.replace(/<section class="training-list">[\s\S]*?<\/section>/,`<section class="training-list">${listHtml}</section>`);
+  app.innerHTML=html;
+  // Vynútene nastav meno priamo po vykreslení Domova.
+  try{
+    const homeUserEl=app.querySelector('.home-topbar .logged-user-small');
+    if(homeUserEl){
+      let label='';
+      try{
+        const acc=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+        if(acc && String(acc.role||'').toLowerCase()!=='admin' && String(acc.display_name||'').trim()) label=`Tréner ${String(acc.display_name).trim()}`;
+      }catch(e){}
+      if(!label) label=getTopbarLoggedUserLabel();
+      homeUserEl.textContent=label;
+    }
+  }catch(e){}
+  updateHomeGroupCounts();updateHomeQuickOverview();
 }
 
 function renderCalendar(){

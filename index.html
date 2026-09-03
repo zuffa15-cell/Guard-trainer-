@@ -249,6 +249,9 @@ function initCloudSync(){
       });
       Object.keys(data).forEach(k=>{
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
+        // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
+        // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -6023,8 +6026,24 @@ function markMemberSaved(id){
 }
 function persistMembersData(changedMemberId=null){
   try{
+    const previousRaw=originalGetItem(MEMBERS_STORAGE_KEY);
+    let previous=[];
+    try{ const p=previousRaw?JSON.parse(previousRaw):[]; if(Array.isArray(p)) previous=p; }catch(e){}
+    const prevById=new Map(previous.map(m=>[String(m?.id),m]));
+    const changedIds=new Set();
+    if(changedMemberId!=null) changedIds.add(String(changedMemberId));
+    if(previousRaw){
+      membersData.forEach(m=>{
+        if(!m||m.id==null)return;
+        const old=prevById.get(String(m.id));
+        if(JSON.stringify(old)!==JSON.stringify(m)) changedIds.add(String(m.id));
+      });
+      previous.forEach(m=>{
+        if(m&&m.id!=null && !membersData.some(x=>String(x?.id)===String(m.id))) changedIds.add(String(m.id));
+      });
+    }
     localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
-    if(changedMemberId!=null) markMemberSaved(changedMemberId);
+    changedIds.forEach(id=>markMemberSaved(id));
   }
   catch(e){ console.warn('Guard Trainer: members could not be persisted',e); }
 }
@@ -8077,20 +8096,39 @@ function offerAttendanceApplicationPhoto(i){
    if(!file){ input.remove(); return; }
    const reader=new FileReader();
    reader.onload=()=>{
-     a.applicationFile=reader.result;
-     a.applicationFileName=file.name;
-     const m=membersData.find(x=>x.surname===a.surname&&x.name===a.name);
-     if(m){
-       m.application=true;
-try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
-
-       m.applicationDate=a.applicationDate||formatPaymentDate(attendanceState.date);
-       m.applicationFile=reader.result;
-       m.applicationFileName=file.name;
+     const finish=(dataUrl)=>{
+       a.applicationFile=dataUrl;
+       a.applicationFileName=file.name;
+       const m=membersData.find(x=>x.surname===a.surname&&x.name===a.name);
+       if(m){
+         m.application=true;
+         m.applicationDate=a.applicationDate||formatPaymentDate(attendanceState.date);
+         m.applicationFile=dataUrl;
+         m.applicationFileName=file.name;
+         // DÔLEŽITÉ: uložiť až PO priradení fotografie.
+         // Inak sa do cloudu odosielal starý stav bez súboru.
+         try{ if(typeof persistMembersData==='function') persistMembersData(m.id); }catch(e){}
+         try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),50); }catch(e){}
+       }
+       input.remove();
+       refreshAttendance();
+       toast('Prihláška bola uložená');
+     };
+     if(file.type && file.type.startsWith('image/')){
+       const img=new Image();
+       img.onload=()=>{
+         const max=1400, scale=Math.min(1,max/Math.max(img.width,img.height));
+         const c=document.createElement('canvas');
+         c.width=Math.max(1,Math.round(img.width*scale));
+         c.height=Math.max(1,Math.round(img.height*scale));
+         c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+         finish(c.toDataURL('image/jpeg',0.72));
+       };
+       img.onerror=()=>finish(reader.result);
+       img.src=reader.result;
+     }else{
+       finish(reader.result);
      }
-     input.remove();
-     refreshAttendance();
-     toast('Prihláška bola uložená');
    };
    reader.readAsDataURL(file);
  };

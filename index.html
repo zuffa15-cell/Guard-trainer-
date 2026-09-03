@@ -3427,6 +3427,11 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 }
 </style>
 <style id="gt-cloud-loading-immediate-v906">#gtSplashCloudLoading{display:block!important;visibility:visible!important;}</style>
+
+<style id="gt-stats-new-members-v907">
+.stats-new-members-card b{font-size:30px!important}
+.stats-new-members .new-member-bar{opacity:.9}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -11800,7 +11805,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     if(!d || d.month!==m || d.year!==y) return;
     const people=r.attendanceSnapshot.slice();
     entries.push({date:`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`,
-      group:r.group||'', people});
+      group:r.group||'', people, paymentSnapshot:Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[], newCount:Number(r.newCount||0)});
   });
   entries.sort((a,b)=>a.date.localeCompare(b.date));
 
@@ -11871,12 +11876,32 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const active=hasSavedStats
     ? new Set(entries.flatMap(e=>e.people)).size
     : 0;
-  const newMembers=hasSavedStats
-    ? entries.reduce((sum,e)=>sum+e.people.filter(n=>{
-        const member=membersData.find(x=>(x.surname+'|'+x.name)===n);
-        return !!(member && member.newMember);
-      }).length,0)
-    : 0;
+  // Noví tento mesiac: jedineční členovia, ktorí boli v uloženom vyúčtovaní
+  // označení ako NOVÝ. Nepoužívame aktuálny stav profilu, aby starší NOVÝ
+  // záznam nezostal v štatistike aj po neskoršej zmene profilu.
+  const newMemberSet=new Set();
+  const dailyNew=Array.from({length:daysInMonth},()=>new Set());
+  entries.forEach(e=>{
+    if(Array.isArray(e.paymentSnapshot) && e.paymentSnapshot.length){
+      e.paymentSnapshot.forEach(x=>{
+        if(x && x.newMember){
+          const key=String(x.surname||'')+'|'+String(x.name||'');
+          if(key && key!=='|'){
+            newMemberSet.add(key);
+            const day=Number(String(e.date).slice(8,10));
+            if(day>=1 && day<=daysInMonth) dailyNew[day-1].add(key);
+          }
+        }
+      });
+    }else if(Number(e.newCount||0)>0){
+      // Staršie uložené záznamy bez paymentSnapshotu nemajú mená, preto
+      // ich vieme zobraziť iba v dennom grafe ako počet nových.
+      const day=Number(String(e.date).slice(8,10));
+      if(day>=1 && day<=daysInMonth) dailyNew[day-1].add('__legacy_'+e.date+'_'+e.group);
+    }
+  });
+  const newMembers=newMemberSet.size;
+  const dailyNewCounts=dailyNew.map(set=>set.size);
 
   const daily=Array.from({length:daysInMonth},()=>0);
   entries.forEach(e=>{const d=Number(e.date.slice(8,10)); if(d>=1&&d<=daysInMonth) daily[d-1]+=e.people.length;});
@@ -11899,11 +11924,18 @@ function renderStatistics(month=appToday().month,year=appToday().year){
       <div class="stats-card"><b>${entries.length}</b><span>TRÉNINGOV</span></div>
       <div class="stats-card"><b>${totalAttendance}</b><span>ÚČASTÍ</span></div>
       <div class="stats-card"><b>${avg}</b><span>PRIEMER / TRÉNING</span></div>
+      <div class="stats-card stats-new-members-card"><b>${newMembers}</b><span>NOVÍ TENTO MESIAC</span></div>
     </section>
 
     <section class="stats-section">
       <h3>📈 DOCHÁDZKA V MESIACI</h3>
       ${entries.length?`<div class="stats-chart">${daily.map((v,i)=>`<div class="stats-bar-col"><b>${v||''}</b><i class="stats-bar" style="height:${Math.max(3,Math.round(v/maxDaily*110))}px"></i><small>${i+1}</small></div>`).join('')}</div>`:`<div class="stats-empty">Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.</div>`}
+    </section>
+
+    <section class="stats-section stats-new-members">
+      <h3>🆕 NOVÍ ČLENOVIA V MESIACI</h3>
+      ${entries.length?`<div class="stats-chart">${dailyNewCounts.map((v,i)=>`<div class="stats-bar-col"><b>${v||''}</b><i class="stats-bar new-member-bar" style="height:${Math.max(3,Math.round(v/Math.max(1,...dailyNewCounts)*110))}px"></i><small>${i+1}</small></div>`).join('')}</div>`:`<div class="stats-empty">Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.</div>`}
+      <div class="stats-money-note">Graf zobrazuje počet nových členov podľa jednotlivých dní. Celkový počet hore je počet jedinečných nových členov za mesiac.</div>
     </section>
 
     <section class="stats-section">

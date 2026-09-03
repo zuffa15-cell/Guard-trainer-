@@ -2548,6 +2548,19 @@ body.gtSplashV323Active>.app{
   background:#d9a928!important;
 }
 #gtSplashV319.hide{opacity:0!important;visibility:hidden!important;transition:opacity .25s linear!important}
+
+.gtSplashCloudLoading{
+  position:absolute!important;
+  left:0!important;right:0!important;
+  bottom:3.5vh!important;
+  text-align:center!important;
+  color:#fff!important;
+  font:700 15px Arial,sans-serif!important;
+  letter-spacing:.8px!important;
+  z-index:30!important;
+  opacity:.95!important;
+}
+.gtSplashCloudLoading .gtCloudDots{display:inline-block;min-width:18px;text-align:left}
 </style>
 
 <style id="gtSplashV326TextFixed">
@@ -12382,6 +12395,18 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 <label class="field"><span class="icon">♙</span><input id="gtLoginPassword" type="password" placeholder="Heslo" autocomplete="current-password"></label>
 <button class="login" type="button">PRIHLÁSIŤ SA</button>
 <div class="footer">GUARD TRAINER 1.0<br>© 2024 Guard Košice</div></div></div>
+
+<script id="gtCloudLoadingTextV1">
+(function(){
+  var el=document.getElementById('gtSplashCloudLoading');
+  if(!el)return;
+  var dots=el.querySelector('.gtCloudDots'),n=0;
+  window._gtCloudLoadingTimer=setInterval(function(){
+    if(!dots)return;
+    n=(n+1)%4; dots.textContent='.'.repeat(n||1);
+  },450);
+})();
+</script>
 <script id="gtLoginV335Script">
 (function(){
   function app(){return document.querySelector('.app')}
@@ -12405,6 +12430,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
       console.warn('Firebase prvý snapshot neprišiel do 5 s – pokračujem z lokálnych dát');
       cloudInitialSnapshotReady=true;
     }
+    try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}
     console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');
     localStorage.setItem('gt-auth-initialized','true');
 

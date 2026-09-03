@@ -4536,8 +4536,15 @@ function headHomeMonthAttendance(){
       const g=norm(r.group);
       if(!out[g]) return;
       out[g].trainings += 1;
+      // Účasť hlavného trénera = PRÍTOMNÍ + NOVÍ.
+      // NOVÍ nie sú v r.paying, preto ich pripočítame priamo z uloženého
+      // attendanceSnapshotu pre konkrétny tréning.
       const present=Number(r.paying||0);
-      out[g].sum += Number.isFinite(present)?present:0;
+      let newCount=0;
+      if(Array.isArray(r.attendanceSnapshot)){
+        newCount=r.attendanceSnapshot.filter(v=>v && v.newMember).length;
+      }
+      out[g].sum += (Number.isFinite(present)?present:0) + newCount;
     });
   });
   Object.values(out).forEach(x=>x.avg=x.trainings?x.sum/x.trainings:0);

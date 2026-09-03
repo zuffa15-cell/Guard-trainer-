@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-admin-override-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -237,6 +237,28 @@ function initCloudSync(){
           if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
           return;
         }
+        if(k==='gt-attendance-admin-override-v1'){
+          let localObj={}, remoteObj={};
+          try{ const lr=originalGetItem('gt-attendance-admin-override-v1'); const x=lr?JSON.parse(lr):{}; if(x&&typeof x==='object') localObj=x; }catch(e){}
+          try{ const rr=data[k]?JSON.parse(data[k]):{}; if(rr&&typeof rr==='object') remoteObj=rr; }catch(e){}
+          const mergedOverride={};
+          const allKeys=new Set([...Object.keys(localObj),...Object.keys(remoteObj)]);
+          allKeys.forEach(ck=>{
+            const l=localObj[ck], r=remoteObj[ck];
+            if(r && l){ const rt=Number(r.savedAt||0), lt=Number(l.savedAt||0); mergedOverride[ck]= rt>=lt ? r : l; }
+            else if(r) mergedOverride[ck]=r; else if(l) mergedOverride[ck]=l;
+          });
+          const raw=JSON.stringify(mergedOverride);
+          if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
+          try{
+            const curKeyNow = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(attendanceState.group,attendanceState.date) : '';
+            if(mergedOverride[curKeyNow] && mergedOverride[curKeyNow].data){
+              const d=mergedOverride[curKeyNow].data;
+              if(typeof trainingAttendanceByGroup!=='undefined'){ trainingAttendanceByGroup[curKeyNow]=d; persistTrainingAttendanceHistory(); }
+            }
+          }catch(e){}
+          return;
+        }
         if(k==='gt-attendance-save-order-v1'){
           // Merge timestampy z oboch zariadení, aby sa nestratila informácia
           // o novšom lokálnom uložení dochádzky.
@@ -405,7 +427,8 @@ function initCloudSync(){
             const remoteAt=Number(remoteAttendanceOrder[curKey]||0);
             const localAdminAt=Number(localAttendanceAdminEdits[curKey]||0);
             const remoteAdminAt=Number(remoteAttendanceAdminEdits[curKey]||0);
-            if(remoteAt>localAt || remoteAdminAt>localAdminAt){
+            const hasAdminOverride = (Number(remoteAdminAt||0)>0) || (data['gt-attendance-admin-override-v1'] && data['gt-attendance-admin-override-v1']!=='{}');
+            if(hasAdminOverride || remoteAt>=localAt || remoteAdminAt>=localAdminAt || remoteAt!=localAt){
               attendanceState.billingPaymentSnapshot=null;
               attendanceState.billingAttendanceSnapshot=null;
               attendanceState.billingRecordSnapshot=null;
@@ -7988,13 +8011,9 @@ function getAttendancePendingSaveAt(date,group){
 
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
-  const before=trainingAttendanceByGroup[key]||null;
-  // FIX: Uložiť PRESNE tak ako je zadané - kompletný snapshot bez miešania
   const next=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{
-    // kľúč podľa ID ak existuje (stabilný), inak meno|priezvisko
     const stableKey = a.id ? ('id:'+a.id) : (a.surname+'|'+a.name);
-    // tiež uložíme pod meno pre spätnú kompatibilitu
     const fallbackKey = a.surname+'|'+a.name;
     const record={
       id: a.id||'',
@@ -8009,42 +8028,36 @@ function saveCurrentTrainingAttendance(){
       isAdminSave: (typeof isAdmin==='function' && isAdmin())
     };
     next[stableKey]=record;
-    // Duplicita pre starý kód - aby getSavedTrainingAttendance našiel záznam
     if(stableKey!==fallbackKey) next[fallbackKey]=record;
   });
   trainingAttendanceByGroup[key]=next;
-  try{
-    // Pre istotu uložíme aj presnú kópiu toho čo videl používateľ
-    const exactCopy = JSON.parse(JSON.stringify(next));
-    const histRaw = originalGetItem('gt-training-attendance-exact-v1')||'{}';
-    let hist={}; try{hist=JSON.parse(histRaw)||{};}catch(e){}
-    hist[key]= { data: exactCopy, savedAt: Date.now(), savedByAdmin: (typeof isAdmin==='function' && isAdmin()) };
-    originalSetItem('gt-training-attendance-exact-v1', JSON.stringify(hist));
-  }catch(e){}
+  persistTrainingAttendanceHistory();
   if(typeof isAdmin==='function' && isAdmin()){
     try{
+      const overrideRaw = originalGetItem('gt-attendance-admin-override-v1')||'{}';
+      let override={}; try{override=JSON.parse(overrideRaw)||{};}catch(e){}
+      override[key]= { data: JSON.parse(JSON.stringify(next)), savedAt: Date.now(), by: 'admin' };
+      originalSetItem('gt-attendance-admin-override-v1', JSON.stringify(override));
       const adminEdits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}');
       adminEdits[key]=Date.now();
       originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(adminEdits));
-      // Admin edit je autoritatívny - musí prebiť pending save trénera
-      try{ localStorage.removeItem(ATTENDANCE_PENDING_SAVE_KEY); }catch(e){}
       const orderRaw=originalGetItem('gt-attendance-save-order-v1')||'{}';
       let order={}; try{order=JSON.parse(orderRaw)||{};}catch(e){}
-      order[key]=Date.now()+5000; // admin +5s bonus aby vyhral
+      order[key]=Date.now()+10000;
       originalSetItem('gt-attendance-save-order-v1', JSON.stringify(order));
+      try{ localStorage.removeItem(ATTENDANCE_PENDING_SAVE_KEY); }catch(e){}
+      try{ originalSetItem(ATTENDANCE_PENDING_SAVE_KEY, '{}'); }catch(e){}
     }catch(e){}
-  }
-  persistTrainingAttendanceHistory();
-  markAttendanceSavedNow(attendanceState.date,attendanceState.group);
-  // Ak je to admin, NEOZNAČUJ ako pending - admin má prednosť okamžite
-  if(!(typeof isAdmin==='function' && isAdmin())){
+  } else {
+    markAttendanceSavedNow(attendanceState.date,attendanceState.group);
     markAttendancePendingSave(attendanceState.date,attendanceState.group);
   }
-  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(typeof isAdmin==='function' && isAdmin() ? true : false),50); }catch(e){}
-  // Okamžitý druhý push pre istotu
-  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),400); }catch(e){}
+  try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),300); }catch(e){}
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),1000); }catch(e){}
 }
-function membershipDraftKey(memberId,date,group){
+function membershipDraftKey(mem
+(memberId,date,group){
   return `${memberId}|${date}|${group}`;
 }
 function getMembershipDraft(memberId,date,group){
@@ -8209,7 +8222,15 @@ function loadAttendanceFromMembers(){
    return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
  });
  const key = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(attendanceState.group, attendanceState.date) : (attendanceState.date+'|'+attendanceState.group);
- const savedMap = (typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) ? trainingAttendanceByGroup[key] : null;
+ let adminOverrideMap=null;
+ try{
+   const overRaw = originalGetItem('gt-attendance-admin-override-v1')||localStorage.getItem('gt-attendance-admin-override-v1')||'{}';
+   const over=JSON.parse(overRaw)||{};
+   if(over[key] && over[key].data) adminOverrideMap=over[key].data;
+ }catch(e){}
+ const regularMap = (typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) ? trainingAttendanceByGroup[key] : null;
+ const savedMap = adminOverrideMap || regularMap;
+
  // Ak existuje uložená dochádzka pre tento dátum/skupinu, použijeme ju PRESNE
  const hasSavedHistory = !!savedMap && Object.keys(savedMap).length>0;
  

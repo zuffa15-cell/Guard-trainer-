@@ -5999,8 +5999,11 @@ function normalizeMember(m){
  m.group=m.groups[0];
  // Oficiálny dátum vstupu do klubu je dátum odovzdania prihlášky.
  // Prihláška môže byť zaevidovaná cez Dochádzku alebo priamo v Profile člena.
- if(m.application && m.applicationDate && !m.memberSinceManual && m.memberSince!=='1. 1. 2026'){
-   m.memberSince=m.applicationDate;
+ if(m.application && m.applicationDate && !m.memberSinceManual){
+   // Bežný člen: oficiálny dátum vstupu je vždy dátum odovzdania prihlášky.
+   // Výnimka: historicky importovaní členovia s 1. 1. 2026, ktorým bol
+   // tento dátum nastavený podľa zaplateného 1. polroka 2026.
+   if(m.memberSince!=='1. 1. 2026') m.memberSince=m.applicationDate;
  }
  if(!m.application){
    m.applicationDate='';
@@ -6756,23 +6759,78 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
+  // Štatistika člena sa musí opierať o skutočne uloženú dochádzku.
+  // Vyúčtovanie používame iba ako spätnú kompatibilnú zálohu pre staré
+  // záznamy, ktoré ešte nemajú trainingAttendanceByGroup.
   const key=`${member.surname}|${member.name}`;
   const rows=[];
   const seen=new Set();
-  getBillingRecords().forEach(r=>{
-    if(!Array.isArray(r.attendanceSnapshot) || !r.attendanceSnapshot.includes(key)) return;
-    const d=parsePaymentDate(r.date);
+  const normGroup=v=>{
+    const x=String(v||'').trim().toUpperCase();
+    if(!x)return '';
+    const m=x.match(/^([A-ZČĎĽŇŠŤŽ0-9+]+)/);
+    return m?m[1]:x;
+  };
+  const addRow=(dateValue,groupValue,nameValue)=>{
+    const d=parsePaymentDate(dateValue);
     if(!d)return;
-    const group=r.group||'';
-    const unique=`${d.year}-${d.month}-${d.day}|${group}`;
-    if(seen.has(unique)) return;
+    const group=String(groupValue||'').trim();
+    const groupKey=normGroup(group)||group;
+    const unique=`${d.year}-${d.month}-${d.day}|${groupKey}`;
+    if(seen.has(unique))return;
     seen.add(unique);
     rows.push({
       date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-      group,
-      name:r.name||'',
+      group:group||groupKey,
+      name:nameValue||'',
       dateObj:new Date(d.year,d.month-1,d.day)
     });
+  };
+
+  // 1. Primárny zdroj: uložená dochádzka podľa dátumu + skupiny.
+  try{
+    if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
+      Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
+        const parts=String(histKey).split('|');
+        const dateValue=parts[0]||'';
+        const groupValue=parts.slice(1).join('|')||'';
+        const hist=trainingAttendanceByGroup[histKey];
+        if(!hist || typeof hist!=='object')return;
+        const state=hist[key];
+        if(!state || (!state.training && !state.newMember))return;
+        addRow(dateValue,groupValue,'');
+      });
+    }
+  }catch(e){ console.warn('member training history read failed',e); }
+
+  // 2. Záloha: staršie vyúčtovania bez dochádzkového záznamu.
+  getBillingRecords().forEach(r=>{
+    if(!Array.isArray(r.attendanceSnapshot) || !r.attendanceSnapshot.includes(key))return;
+    const d=parsePaymentDate(r.date);
+    if(!d)return;
+    const group=String(r.group||r.groupCode||'').trim();
+    const groupKey=normGroup(group)||group;
+    const unique=`${d.year}-${d.month}-${d.day}|${groupKey}`;
+    if(seen.has(unique))return;
+    // Ak pre tento dátum/skupinu existuje uložená dochádzka, ale člen v nej
+    // nemá účasť, nesmie ho staré vyúčtovanie znovu pripočítať.
+    let histExists=false;
+    try{
+      const histKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}|${group}`;
+      const hist=(typeof trainingAttendanceByGroup!=='undefined'&&trainingAttendanceByGroup[histKey])||null;
+      histExists=!!(hist && typeof hist==='object' && Object.prototype.hasOwnProperty.call(hist,key));
+      if(!histExists && typeof trainingAttendanceByGroup!=='undefined'){
+        histExists=Object.keys(trainingAttendanceByGroup).some(k=>{
+          const pp=String(k).split('|');
+          if(pp[0]!==`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`)return false;
+          if(normGroup(pp.slice(1).join('|'))!==groupKey)return false;
+          const h=trainingAttendanceByGroup[k];
+          return !!(h && typeof h==='object' && Object.prototype.hasOwnProperty.call(h,key));
+        });
+      }
+    }catch(e){}
+    if(histExists)return;
+    addRow(r.date,group,r.name||'');
   });
   rows.sort((a,b)=>b.dateObj-a.dateObj);
   return rows;
@@ -7113,14 +7171,15 @@ function saveNewMemberFromForm(id){
  if(appFile&&appFile.files&&appFile.files.length){
    m.application=true;
 
+   const previousApplicationDate=String(m.applicationDate||'').trim();
    m.applicationDate=formatPaymentDate(appToday().iso);
-   // Ak tréner v tom istom formulári zadal vlastný dátum vstupu,
-   // prihláška ho nesmie prepísať.
+   // Ak administrátor už skôr nastavil vlastný dátum vstupu, zachovaj ho.
+   // Inak sa pri novej/odovzdanej prihláške nastaví vstup do klubu na dnešný deň.
    const savedMemberSinceInput=(document.getElementById('mpMemberSince')?.value||'').trim();
-   if(savedMemberSinceInput){
+   if(savedMemberSinceInput && savedMemberSinceInput!==previousApplicationDate){
      m.memberSince=savedMemberSinceInput;
      m.memberSinceManual=savedMemberSinceInput!==m.applicationDate;
-   }else{
+   }else if(!m.memberSinceManual){
      m.memberSince=m.applicationDate;
      m.memberSinceManual=false;
    }
@@ -8207,7 +8266,7 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
 try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){}
 
      if(!m.applicationDate) m.applicationDate=a.applicationDate||formatPaymentDate(attendanceState.date);
-     if(!m.memberSinceManual) m.memberSince=m.applicationDate;
+     if(!m.memberSinceManual && m.memberSince!=='1. 1. 2026') m.memberSince=m.applicationDate;
      a.applicationDate=m.applicationDate;
    }
    refreshAttendance();
@@ -8223,7 +8282,7 @@ try{ if(typeof persistMembersData==='function') persistMembersData(); }catch(e){
    m.application=true;
 
    m.applicationDate=a.applicationDate;
-   if(!m.memberSinceManual) m.memberSince=m.applicationDate;
+   if(!m.memberSinceManual && m.memberSince!=='1. 1. 2026') m.memberSince=m.applicationDate;
  }
  refreshAttendance();
  toast('Prihláška odovzdaná');
@@ -8862,7 +8921,7 @@ function updateCanonicalMemberFromAttendance(a){
  m.application=!!a.application;
  if(a.applicationDate){
    m.applicationDate=a.applicationDate;
-   if(!m.memberSinceManual) m.memberSince=a.applicationDate;
+   if(!m.memberSinceManual && m.memberSince!=='1. 1. 2026') m.memberSince=a.applicationDate;
  }
  m.debt=Number(a.debt||0);
  m.debtReason=a.debtReason||'';

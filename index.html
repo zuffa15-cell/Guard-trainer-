@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v906: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v931: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -262,7 +262,7 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-application-files-v1') return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -272,6 +272,7 @@ function initCloudSync(){
     } finally {
       isApplyingRemote = false;
     }
+    try{ applyMemberApplicationFiles(); }catch(e){}
     cloudInitialSnapshotReady = true;
 
         if(changed) {
@@ -6668,15 +6669,59 @@ function deleteMemberPaymentFromProfile(memberId,type,period){
  renderMemberProfile(memberId);
  toast('Platba vymazaná');
 }
-function showMemberApplication(id){
- const m=membersData.find(x=>x.id===id); if(!m||!m.application)return;
- if(m.applicationFile && m.applicationFile.startsWith('data:image')){
-   const w=window.open('');
-   if(w) w.document.write('<title>Prihláška</title><img src="'+m.applicationFile+'" style="max-width:100%;height:auto">');
- }else if(m.applicationFile){
-   const w=window.open(m.applicationFile,'_blank');
-   if(!w) toast(m.applicationFileName||'Prihláška');
- }else toast('Prihláška je evidovaná, ale súbor ešte nie je uložený.');
+async function showMemberApplication(id){
+ const m=membersData.find(x=>Number(x.id)===Number(id));
+ if(!m||!m.application){toast('Prihláška nie je evidovaná.');return;}
+ // Okno otvoríme okamžite, aby mobilný prehliadač nezablokoval popup.
+ const w=window.open('about:blank','_blank');
+ const openData=(data,name)=>{
+   if(!data){
+     if(w){ try{w.close();}catch(e){} }
+     toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');
+     return;
+   }
+   try{
+     if(w){
+       if(String(data).startsWith('data:image')){
+         w.document.open();
+         w.document.write('<!doctype html><html><head><title>Prihláška</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#111;display:flex;justify-content:center;align-items:flex-start"><img src="'+data+'" style="max-width:100%;height:auto"></body></html>');
+         w.document.close();
+       }else{
+         w.location.href=data;
+       }
+       return;
+     }
+   }catch(e){}
+   // Ak popup zablokuje prehliadač, skúsime ešte priamu navigáciu.
+   try{ window.location.href=data; }catch(e){ toast(name||'Prihláška'); }
+ };
+ // Lokálna kópia má prednosť.
+ let data=m.applicationFile||'';
+ let name=m.applicationFileName||'Prihláška';
+ if(data){ openData(data,name); return; }
+ // Na druhom zariadení môže byť súbor iba v spoločnom cloude.
+ try{
+   if(db && typeof db.collection==='function'){
+     const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
+     const raw=doc.exists?doc.data()?.[MEMBER_APPLICATION_FILES_KEY]:null;
+     let files=raw;
+     if(typeof raw==='string'){
+       try{files=JSON.parse(raw);}catch(e){files=null;}
+     }
+     const f=files && files[String(id)];
+     if(f&&f.data){
+       memberApplicationFiles[String(id)]=f;
+       persistMemberApplicationFiles();
+       m.application=true;
+       m.applicationFile=f.data;
+       m.applicationFileName=f.name||name;
+       openData(f.data,f.name||name);
+       return;
+     }
+   }
+ }catch(e){ console.warn('Guard Trainer: načítanie prihlášky z cloudu zlyhalo',e); }
+ if(w){ try{w.close();}catch(e){} }
+ toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');
 }
 
 function getSavedMemberTrainingData(member){

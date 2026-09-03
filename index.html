@@ -4512,14 +4512,17 @@ function headHomeWeekStart(){
   const t=appToday(); const d=new Date(t.year,t.month-1,t.day); const dow=d.getDay(); const monday=new Date(d); monday.setDate(d.getDate()+(dow===0?-6:1-dow)); monday.setHours(0,0,0,0); return monday;
 }
 function headHomeMonthAttendance(){
-  // HLAVNÝ TRÉNER – autoritatívnym zdrojom toho, či sa tréning vôbec
-  // uskutočnil, je ULOŽENÉ VYÚČTOVANIE tréningu. Samotný rozvrh ani
-  // osamotený záznam v trainingAttendanceByGroup nestačí.
+  // HLAVNÝ TRÉNER: tréning existuje iba vtedy, ak má reálne uložené
+  // vyúčtovanie. Samotný rozvrh ani osamotený záznam dochádzky tréning
+  // nevytvára.
   //
-  // ÚČASŤ = PRÍTOMNÍ + NOVÍ.
-  // Z vyúčtovania berieme presentCount a newCount uložené pri potvrdení
-  // dochádzky. Tým sa do štatistiky nedostane napr. budúci tréning D,
-  // pre ktorý nikto nemá vyúčtovanie.
+  // POČET ÚČASTÍ však vždy berieme priamo z konkrétnej uloženej dochádzky:
+  //   PRÍTOMNÍ = training && !newMember
+  //   NOVÍ     = newMember
+  //   ÚČASŤ    = PRÍTOMNÍ + NOVÍ
+  // Tým sa nepreberajú staré presentCount/newCount zo starých vyúčtovaní.
+  // Zároveň sa vynechajú prázdne/omylom vytvorené nulové vyúčtovania, napr.
+  // D, ak v ňom nikto nebol a nebola žiadna platba.
   const t=appToday();
   const out={};
   const norm=v=>String(v||'').trim().toUpperCase();
@@ -4544,14 +4547,11 @@ function headHomeMonthAttendance(){
       if(!r || r.cancelled || r.substituteReference || r.substitute) return;
       const iso=dateIso(r);
       if(!iso || iso.slice(0,7)!==`${t.year}-${String(t.month).padStart(2,'0')}`) return;
-      // Budúce vyúčtovanie sa do aktuálneho mesiaca nesmie započítať.
       if(iso>t.iso) return;
-
       const group=codeOf(r.group||r.groupCode||r.code);
       if(!group || !out[group]) return;
       const trainer=norm(r.trainer||r.name||'');
-      const time=norm(r.time||r.trainingTime||'');
-      const key=`${trainer}|${iso}|${group}|${time}`;
+      const key=`${trainer}|${iso}|${group}`;
       const old=latest.get(key);
       const stamp=Number(r.savedAt||r.updatedAt||r.createdAt||0);
       const oldStamp=Number(old?.savedAt||old?.updatedAt||old?.createdAt||0);
@@ -4561,21 +4561,39 @@ function headHomeMonthAttendance(){
     latest.forEach(r=>{
       const group=codeOf(r.group||r.groupCode||r.code);
       if(!group || !out[group]) return;
-      // presentCount/newCount sú uložené priamo pri potvrdení dochádzky.
-      // Ak chýbajú v staršom zázname, dopočítame ich iba z jeho snapshotu.
-      let present=Number.isFinite(Number(r.presentCount)) ? Number(r.presentCount) : 0;
-      let newCount=Number.isFinite(Number(r.newCount)) ? Number(r.newCount) : 0;
-      if(r.presentCount==null || r.newCount==null){
+      const iso=dateIso(r);
+      const histKey=`${iso}|${String(r.group||r.groupCode||r.code||'').trim()}`;
+      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey]) || null;
+
+      // Dochádzka je jediný zdroj počtu PRÍTOMNÝCH a NOVÝCH.
+      let present=0, newCount=0;
+      if(hist && typeof hist==='object'){
+        Object.keys(hist).forEach(k=>{
+          const v=hist[k]||{};
+          if(v.training && !v.newMember) present++;
+          if(v.newMember) newCount++;
+        });
+      }else{
+        // Starší uložený záznam bez attendance history: použi snapshot iba
+        // ako kompatibilnú zálohu, nikdy nie súčet zo starého reportu.
         const snap=Array.isArray(r.paymentSnapshot)?r.paymentSnapshot:[];
-        if(snap.length){
-          present=snap.filter(x=>x && x.training && !x.newMember).length;
-          newCount=snap.filter(x=>x && x.newMember).length;
-        }
+        present=snap.filter(x=>x && x.training && !x.newMember).length;
+        newCount=snap.filter(x=>x && x.newMember).length;
       }
+
+      // Nulové vyúčtovanie bez účasti/platby nie je uskutočnený tréning pre
+      // mesačnú účasť. Toto odstráni napr. starý nulový záznam D.
+      const hasFinancialOrAttendance =
+        present>0 || newCount>0 ||
+        Number(r.paying||0)>0 || Number(r.trainingPaid||0)>0 ||
+        Number(r.membershipSum||0)>0 || Number(r.registrationSum||0)>0 ||
+        Number(r.otherPlus||0)!==0 || Number(r.otherMinus||0)!==0;
+      if(!hasFinancialOrAttendance) return;
+
       out[group].trainings++;
       out[group].sum += present + newCount;
     });
-  }catch(e){ console.warn('headHomeMonthAttendance billing-source',e); }
+  }catch(e){ console.warn('headHomeMonthAttendance attendance-source',e); }
 
   Object.values(out).forEach(x=>x.avg=x.trainings?x.sum/x.trainings:0);
   return out;

@@ -48,7 +48,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -210,6 +210,15 @@ function initCloudSync(){
           if(raw!==localRaw){ originalSetItem(k,raw); changed=true; }
           return;
         }
+        if(k==='gt-member-application-files-v1'){
+          let localObj={}, remoteObj={};
+          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localObj=p; }catch(e){}
+          try{ const p=data[k]?JSON.parse(data[k]):{}; if(p&&typeof p==='object') remoteObj=p; }catch(e){}
+          const merged={...localObj};
+          Object.keys(remoteObj).forEach(id=>{ const l=merged[id],r=remoteObj[id]; if(!l){merged[id]=r;return;} if(Number(r?.updatedAt||0)>=Number(l.updatedAt||0)) merged[id]=r; });
+          const raw=JSON.stringify(merged); if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
+          memberApplicationFiles=merged; applyMemberApplicationFiles(); return;
+        }
         if(k==='gt-member-save-order-v1'){
           // Každý člen má vlastný čas poslednej zmeny. Zabránime tomu,
           // aby starší cloudový zoznam prepísal novšie údaje člena
@@ -220,6 +229,8 @@ function initCloudSync(){
           let localMembers=[], remoteMembers=[];
           try{ const x=originalGetItem('gt-members-real-2026-v847'); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localMembers=p; }catch(e){}
           try{ const p=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[]; if(Array.isArray(p)) remoteMembers=p; }catch(e){}
+          remoteMembers.forEach(m=>{if(m){delete m.applicationFile;delete m.applicationFileName;}});
+          localMembers.forEach(m=>{if(m&&m.id!=null){const f=memberApplicationFiles[String(m.id)];if(f&&f.data){m.applicationFile=f.data;m.applicationFileName=f.name||'';}}});
           const byId=new Map();
           localMembers.forEach(m=>{ if(m&&m.id!=null) byId.set(String(m.id),m); });
           remoteMembers.forEach(m=>{
@@ -273,6 +284,7 @@ function initCloudSync(){
             if(Array.isArray(p)){
               if(typeof membersData!=='undefined') membersData=p;
               else window.membersData=p;
+              try{applyMemberApplicationFiles();}catch(e){}
               try{if(typeof normalizeAllMembers==='function') normalizeAllMembers();}catch(e){}
             }
           }
@@ -344,7 +356,10 @@ function pushToCloud(force = false){
   lastCloudUpdate = payload._updatedAt;
   
   SYNC_KEYS.forEach(k=>{
-    const v = originalGetItem(k);
+    let v = originalGetItem(k);
+    if(k==='gt-members-real-2026-v847' && v){
+      try{ const arr=JSON.parse(v); if(Array.isArray(arr)) v=JSON.stringify(arr.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})); }catch(e){}
+    }
     if(v) payload[k] = v;
   });
   Object.keys(localStorage).forEach(k=>{
@@ -6016,6 +6031,20 @@ normalizeAllMembers();
 /* v466 – persist members added/edited by the user across app reloads. */
 const MEMBERS_STORAGE_KEY='gt-members-real-2026-v847';
 const MEMBER_SAVE_ORDER_KEY='gt-member-save-order-v1';
+const MEMBER_APPLICATION_FILES_KEY='gt-member-application-files-v1';
+let memberApplicationFiles={};
+try{
+  const raw=originalGetItem(MEMBER_APPLICATION_FILES_KEY);
+  const parsed=raw?JSON.parse(raw):{};
+  if(parsed && typeof parsed==='object') memberApplicationFiles=parsed;
+}catch(e){ memberApplicationFiles={}; }
+function persistMemberApplicationFiles(){
+  try{ originalSetItem(MEMBER_APPLICATION_FILES_KEY,JSON.stringify(memberApplicationFiles)); }
+  catch(e){ console.warn('Guard Trainer: application files could not be persisted',e); }
+}
+function applyMemberApplicationFiles(){
+  try{ membersData.forEach(m=>{ const f=memberApplicationFiles[String(m.id)]; if(f&&f.data){m.application=true;m.applicationFile=f.data;m.applicationFileName=f.name||m.applicationFileName||'';} }); }catch(e){}
+}
 function markMemberSaved(id){
   try{
     const raw=originalGetItem(MEMBER_SAVE_ORDER_KEY);
@@ -6065,6 +6094,8 @@ function loadPersistedMembers(){
   return false;
 }
 loadPersistedMembers();
+applyMemberApplicationFiles();
+persistMemberApplicationFiles();
 persistPaymentHistory();
 loadMemberNotes();
 
@@ -6881,6 +6912,8 @@ function renderMemberEditForm(id,isNew=false){
 function deleteMemberApplication(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
  m.application=false; m.applicationDate=''; m.applicationFile=''; m.applicationFileName='';
+ delete memberApplicationFiles[String(id)]; persistMemberApplicationFiles();
+ try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),50); }catch(e){}
  // Po odstránení prihlášky už dátum členstva nie je dátum prihlášky.
  m.memberSince=''; m.memberSinceManual=false;
  persistMembersData();
@@ -8105,10 +8138,10 @@ function offerAttendanceApplicationPhoto(i){
          m.applicationDate=a.applicationDate||formatPaymentDate(attendanceState.date);
          m.applicationFile=dataUrl;
          m.applicationFileName=file.name;
-         // DÔLEŽITÉ: uložiť až PO priradení fotografie.
-         // Inak sa do cloudu odosielal starý stav bez súboru.
+         memberApplicationFiles[String(m.id)]={data:dataUrl,name:file.name,updatedAt:Date.now()};
+         persistMemberApplicationFiles();
          try{ if(typeof persistMembersData==='function') persistMembersData(m.id); }catch(e){}
-         try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),50); }catch(e){}
+         try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),100); }catch(e){}
        }
        input.remove();
        refreshAttendance();

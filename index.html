@@ -49,6 +49,7 @@ try {
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
 const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers'];
+const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -131,7 +132,7 @@ function initCloudSync(){
           const merged={};
           const keys=new Set([...Object.keys(localHist),...Object.keys(remoteHist)]);
           keys.forEach(key=>{
-            const localAt=Number(localAttendanceOrder[key]||0);
+            const localAt=Math.max(Number(localAttendanceOrder[key]||0), getAttendancePendingSaveAt(String(key).split('|')[0], String(key).split('|').slice(1).join('|')));
             const remoteAt=Number(remoteAttendanceOrder[key]||0);
             if(localAt>remoteAt && localAt>0){
               merged[key]=localHist[key]||{};
@@ -7469,6 +7470,20 @@ function markAttendanceSavedNow(date=attendanceState.date,group=attendanceState.
 function getAttendanceSavedAt(date,group){
   return Number(attendanceSaveOrder[attendanceSaveOrderKey(date,group)]||0);
 }
+function markAttendancePendingSave(date=attendanceState.date,group=attendanceState.group){
+  try{
+    const key=attendanceSaveOrderKey(date,group);
+    const pending=JSON.parse(originalGetItem(ATTENDANCE_PENDING_SAVE_KEY)||'{}');
+    pending[key]=Date.now();
+    originalSetItem(ATTENDANCE_PENDING_SAVE_KEY,JSON.stringify(pending));
+  }catch(e){}
+}
+function getAttendancePendingSaveAt(date,group){
+  try{
+    const pending=JSON.parse(originalGetItem(ATTENDANCE_PENDING_SAVE_KEY)||'{}');
+    return Number(pending[attendanceSaveOrderKey(date,group)]||0);
+  }catch(e){ return 0; }
+}
 
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
@@ -7485,6 +7500,10 @@ function saveCurrentTrainingAttendance(){
   persistTrainingAttendanceHistory();
   // Toto je rozhodujúci čas pre poradie skupín v daný deň.
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
+  // Kritická ochrana dnešnej dochádzky: pri pomalom Firebase nesmie nový
+  // lokálny zápis po reloadovaní ustúpiť staršiemu cloudovému snapshotu.
+  markAttendancePendingSave(attendanceState.date,attendanceState.group);
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(),100); }catch(e){}
 }
 function membershipDraftKey(memberId,date,group){
   return `${memberId}|${date}|${group}`;

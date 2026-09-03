@@ -8580,11 +8580,12 @@ function membershipPaidHereToday(m){
 }
 function memberHasRegistration(m){
   if(!m)return false;
-  // Pri importovaných členoch je boolean príznak v profile autoritatívny.
-  // História platieb sa použije ako fallback iba ak profil tento príznak nemá.
-  if(typeof m.registration==='boolean') return m.registration;
+  // Registrácia je zaplatená, ak ju má člen označenú v profile ALEBO
+  // existuje uložený záznam o registračnej platbe. História platby má
+  // prednosť pred prípadným starým/neúplným booleanom zo synchronizácie.
   const id=attendanceMemberId(m);
-  return registrationPayments.some(p=>Number(p.memberId)===Number(id));
+  const paidInHistory=registrationPayments.some(p=>Number(p.memberId)===Number(id) && Number(p.amount||30)>0);
+  return m.registration===true || paidInHistory;
 }
 function savedRegistrationForMember(m){
   if(!m)return null;

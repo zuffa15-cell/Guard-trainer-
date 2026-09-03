@@ -4821,20 +4821,37 @@ function calendarDays(){
   return days;
 }
 function getCalendarAttendanceCounts(dateLabel, groupCode, groupName){
+  // The attendance screen is the authoritative source. In the 5-state cycle
+  // NEW is a separate state (newMember=true, training=false), so it must NOT
+  // be derived from the paid-training snapshot.
+  try{
+    const key=`${String(dateLabel||'')}|${String(groupCode||'').trim()}`;
+    const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) || null;
+    if(hist && typeof hist==='object' && Object.keys(hist).length){
+      let present=0, newCount=0;
+      Object.keys(hist).forEach(k=>{
+        const v=hist[k]||{};
+        if(v.training) present++;
+        if(v.newMember) newCount++;
+      });
+      return {present,newCount};
+    }
+  }catch(e){}
+
+  // Fallback for old records that predate the attendance-history store.
   const records=(getBillingRecords()||[]).filter(r=>{
     if(r.substituteReference) return false;
     const d=parsePaymentDate(r.date);
     const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
     if(iso!==String(dateLabel)) return false;
-    if(String(r.group||'').toUpperCase()!==String(groupCode||'').toUpperCase()) return false;
+    if(String(r.group||'').trim().toUpperCase()!==String(groupCode||'').trim().toUpperCase()) return false;
     if(groupName && r.name && String(r.name)!==String(groupName)) return false;
     return Array.isArray(r.attendanceSnapshot);
   });
   if(!records.length) return null;
   const r=records[records.length-1];
-  const present=Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot.length:Number(r.presentCount||0);
-  const derivedNew=Math.max(0,present-Number(r.paying||0)-Number(r.trainingAccountCount||0));
-  return {present, newCount:Number(r.newCount ?? derivedNew)};
+  const present=Number.isFinite(Number(r.presentCount)) ? Number(r.presentCount) : (Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot.length:0);
+  return {present,newCount:Number(r.newCount||0)};
 }
 function dayRows(){
   const dateLabel=`${selectedCalendarYear}-${String(selectedCalendarMonth+1).padStart(2,'0')}-${String(selectedCalendarDay).padStart(2,'0')}`;
@@ -9028,7 +9045,7 @@ function upsertBillingRecordFromAttendance(){
       return {surname:m.surname,name:m.name,membership:Number(pt.membership||0),registration:Number(pt.registration||0),trainingAccount:!!m.trainingAccount,training:!!m.training,newMember:!!m.newMember};
     }).filter(x=>x.training||x.membership>0||x.registration>0),
     presentCount:attendanceState.members.filter(m=>m.training).length,
-    newCount:attendanceState.members.filter(m=>m.training&&m.newMember).length,
+    newCount:attendanceState.members.filter(m=>m.newMember).length,
     // Poradie skupín v daný deň vo Vyúčtovaní = poradie posledného uloženia dochádzky.
     // Pri opätovnom uložení sa skupina presunie na koniec poradia.
     savedAt:Date.now(),
@@ -9220,7 +9237,7 @@ function saveTrainingBilling(saveButton){
       })
       .filter(x=>x.training||x.membership>0||x.registration>0),
     presentCount:attendanceState.members.filter(m=>m.training).length,
-    newCount:attendanceState.members.filter(m=>m.training&&m.newMember).length,
+    newCount:attendanceState.members.filter(m=>m.newMember).length,
     // Aktuálny čas uloženia určuje poradie skupiny v rámci rovnakého dňa.
     savedAt:Date.now()
   };

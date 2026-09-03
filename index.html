@@ -6579,8 +6579,8 @@ function renderMemberProfile(id, backTarget){
 
   <section class="member-detail-box application-box">
    <h3>PRIHLÁŠKA</h3>
-   <div class="application-main"><div class="app-icon">📄</div><div><b>${memberApplicationReceived(m)?'Prihláška prijatá':'Prihláška nebola prijatá'}</b><span>${memberApplicationReceived(m)?('Odovzdaná: '+(m.applicationDate||'—')):'—'}</span></div><button ${m.application?`onclick="showMemberApplication(${m.id})"`:'disabled'}>◉ &nbsp; ZOBRAZIŤ<br>PRIHLÁŠKU</button><span class="detail-chevron">›</span></div>
-   <div class="complete-line ${memberApplicationReceived(m)?'':'incomplete-line'}">${memberApplicationReceived(m)?'✓':'!'} <b>${memberApplicationReceived(m)?'Prihláška odovzdaná':'Prihláška chýba'}</b></div>
+   <div class="application-main"><div class="app-icon">📄</div><div><b>${(memberApplicationReceived(m)||m.applicationFile)?'Prihláška prijatá':'Prihláška nebola prijatá'}</b><span>${(memberApplicationReceived(m)||m.applicationFile)?('Odovzdaná: '+(m.applicationDate||'—')):'—'}</span></div><button type="button" onclick="showMemberApplication(${m.id})">◉ &nbsp; ZOBRAZIŤ<br>PRIHLÁŠKU</button><span class="detail-chevron">›</span></div>
+   <div class="complete-line ${(memberApplicationReceived(m)||m.applicationFile)?'':'incomplete-line'}">${(memberApplicationReceived(m)||m.applicationFile)?'✓':'!'} <b>${(memberApplicationReceived(m)||m.applicationFile)?'Prihláška odovzdaná':'Prihláška chýba'}</b></div>
   </section>
 
   <section class="member-detail-box payments-box">
@@ -6690,7 +6690,7 @@ function deleteMemberPaymentFromProfile(memberId,type,period){
 }
 async function showMemberApplication(id){
  const m=membersData.find(x=>Number(x.id)===Number(id));
- if(!m||!m.application){toast('Prihláška nie je evidovaná.');return;}
+ if(!m){toast('Člena sa nepodarilo nájsť.');return;}
  const show=(data,name)=>{
    if(!data){toast('Prihláška nemá uložený súbor.');return;}
    const old=document.getElementById('gtApplicationViewer'); if(old)old.remove();
@@ -6719,6 +6719,8 @@ async function showMemberApplication(id){
  let data=m.applicationFile||'';
  let name=m.applicationFileName||'Prihláška';
  if(data){show(data,name);return;}
+ // Stav profilu môže byť na inom zariadení starší než samotný súbor.
+ // Preto sa cloudový súbor načíta podľa ID člena aj pri m.application=false.
  // Druhé zariadenie: prihlášku načítaj z vlastného Firestore dokumentu.
  // Je to zámerne oddelené od veľkého spoločného dokumentu, aby sa obrázok
  // nestratil kvôli limitu veľkosti shared-db.

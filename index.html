@@ -4507,51 +4507,32 @@ function headHomeWeekStart(){
   const t=appToday(); const d=new Date(t.year,t.month-1,t.day); const dow=d.getDay(); const monday=new Date(d); monday.setDate(d.getDate()+(dow===0?-6:1-dow)); monday.setHours(0,0,0,0); return monday;
 }
 function headHomeMonthAttendance(){
-  // Zdrojom je presne rovnaký dataset a rovnaké filtrovanie ako v
-  // „Vyúčtovanie“ hlavného trénera. Každý finančný riadok = 1 účtovaný tréning.
+  // Hlavný tréner: účasť je presne to, čo bolo uložené pri konkrétnom
+  // tréningu. PRÍTOMNÍ + NOVÍ. Skupina sa nikdy nepresúva z B+C do C ani B.
   const t=appToday();
   const out={};
   getAdminGroupCodes().forEach(g=>{ out[String(g).trim().toUpperCase()]={sum:0,trainings:0,avg:0}; });
-  let rows=[];
-  try{ rows=getHeadTrainerRowsForMonth(t.month,t.year)||[]; }catch(e){ console.warn('headHomeMonthAttendance:',e); }
-  rows.forEach(r=>{
-    // getHeadTrainerRowsForMonth() už používa presne rovnaké záznamy,
-    // ktoré sa zobrazujú v hlavnom trénerovom Vyúčtovaní.
-    const trainerGroups=Array.isArray(r.groups)&&r.groups.length ? r.groups : [];
-    // Skupinu berieme z jednotlivých finančných riadkov, nie z profilu trénera,
-    // pretože tréner môže mať viac skupín a v rovnakom mesiaci ich účtuje samostatne.
-  });
-  // Priamo prejdeme rovnaké finančné riadky ako getHeadTrainerRowsForMonth,
-  // aby sa zachovala skupina každého konkrétneho účtovaného tréningu.
   const norm=v=>String(v||'').trim().toUpperCase();
-  (trainersData||[]).filter(tn=>norm(tn.role)!=='HLAVNÝ TRÉNER').forEach(tn=>{
-    const name=String(tn.full||tn.name||'').trim();
-    (monthlyBillingRecords||[]).forEach(r=>{
-      const d=parsePaymentDate(r.date);
-      if(!d || d.month!==Number(t.month) || d.year!==Number(t.year)) return;
-      const recordIso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-      if(recordIso<TRAINING_DATA_START_DATE) return;
-      if(norm(r.trainer||r.name)!==norm(name)) return;
-      if(r.substituteReference) return;
-      const g=norm(r.group);
-      if(!out[g]) return;
-      out[g].trainings += 1;
-      // Účasť hlavného trénera = PRÍTOMNÍ + NOVÍ.
-      // attendanceSnapshot obsahuje iba členov so stavom TRÉNING/ÚČET,
-      // preto je jeho dĺžka presný počet PRÍTOMNÝCH. Stav NOVÝ je uložený
-      // v trainingAttendanceByGroup pre konkrétny dátum a skupinu.
-      let present=Array.isArray(r.attendanceSnapshot) ? r.attendanceSnapshot.length : Number(r.paying||0);
-      if(!Number.isFinite(present)) present=0;
-      let newCount=0;
-      try{
-        const histKey=`${recordIso}|${String(r.group||'').trim()}`;
-        const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey]) || null;
-        if(hist && typeof hist==='object'){
-          newCount=Object.keys(hist).reduce((n,k)=>n+(hist[k] && hist[k].newMember ? 1 : 0),0);
-        }
-      }catch(e){}
-      out[g].sum += present + newCount;
-    });
+  const seen=new Set();
+  (monthlyBillingRecords||[]).forEach(r=>{
+    const d=parsePaymentDate(r.date);
+    if(!d || d.month!==Number(t.month) || d.year!==Number(t.year)) return;
+    const recordIso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    if(recordIso<TRAINING_DATA_START_DATE) return;
+    if(r.substituteReference) return;
+    const trainer=norm(r.trainer||r.name);
+    const group=norm(r.group);
+    if(!group || !out[group]) return;
+    const uniqueKey=`${trainer}|${recordIso}|${group}`;
+    if(seen.has(uniqueKey)) return;
+    seen.add(uniqueKey);
+    out[group].trainings += 1;
+    let present=Number(r.presentCount);
+    if(!Number.isFinite(present)) present=Array.isArray(r.attendanceSnapshot) ? r.attendanceSnapshot.length : Number(r.paying||0);
+    if(!Number.isFinite(present) || present<0) present=0;
+    let newCount=Number(r.newCount);
+    if(!Number.isFinite(newCount) || newCount<0) newCount=0;
+    out[group].sum += present + newCount;
   });
   Object.values(out).forEach(x=>x.avg=x.trainings?x.sum/x.trainings:0);
   return out;

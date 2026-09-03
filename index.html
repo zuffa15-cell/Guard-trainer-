@@ -11824,9 +11824,23 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   entries.sort((a,b)=>a.date.localeCompare(b.date));
 
   const memberCounts={};
+  // ÚČASŤ PODĽA SKUPÍN = PRÍTOMNÍ + NOVÍ.
+  // Noví sú samostatná účasť, preto ich pripočítame k počtu prítomných.
   const groupCounts={A:0,B:0,C:0,D:0,'D+':0};
   entries.forEach(e=>{
-    groupCounts[e.group]=(groupCounts[e.group]||0)+e.people.length;
+    const group=quickGroupCode(e.group);
+    const presentCount=e.people.length;
+    let newCount=Number(e.newCount||0);
+    // Ak je k dispozícii história dochádzky, použijeme jej presný počet NOVÝ.
+    try{
+      const histKey=`${e.date}|${group}`;
+      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey])||null;
+      if(hist && typeof hist==='object'){
+        const histNew=Object.values(hist).filter(v=>v && v.newMember).length;
+        if(histNew>=0) newCount=histNew;
+      }
+    }catch(err){}
+    groupCounts[group]=(groupCounts[group]||0)+presentCount+newCount;
     e.people.forEach(n=>memberCounts[n]=(memberCounts[n]||0)+1);
   });
   const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);

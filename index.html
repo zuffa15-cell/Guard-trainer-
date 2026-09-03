@@ -1,7 +1,7 @@
 <!doctype html>
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
-<!-- Guard Trainer v820: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
+<!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
 <head>
 
 <!-- FIREBASE SYNC v2 - FIXED (no reload loop) -->
@@ -44,7 +44,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-billing','gt-training-attendance','gt-substitution-offers'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers'];
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -97,9 +97,65 @@ function initCloudSync(){
     let changed = false;
     isApplyingRemote = true;
     try {
+      // v896: Dochádzka za konkrétny deň nesmie byť prepísaná starším
+      // cloudovým snapshotom. Pri v895 sa pri štarte mohla lokálna včerajšia
+      // dochádzka (vrátane NOVÝ) prepísať starším cloudovým stavom.
+      // Ukladáme timestamp posledného uloženia dátum|skupina a podľa neho
+      // rozhodneme, ktorý stav je novší.
+      const localAttendanceHistoryRaw = originalGetItem('gt-training-attendance-history');
+      const localAttendanceOrderRaw = originalGetItem('gt-attendance-save-order-v1');
+      let localAttendanceOrder = {};
+      let remoteAttendanceOrder = {};
+      try {
+        const x = localAttendanceOrderRaw ? JSON.parse(localAttendanceOrderRaw) : {};
+        if(x && typeof x==='object') localAttendanceOrder=x;
+      } catch(e){}
+      try {
+        const x = data['gt-attendance-save-order-v1'] ? JSON.parse(data['gt-attendance-save-order-v1']) : {};
+        if(x && typeof x==='object') remoteAttendanceOrder=x;
+      } catch(e){}
+
       SYNC_KEYS.forEach(k=>{
         if(isGTLocalAuthKey(k)) return;
-        if(data[k] && originalGetItem(k) !== data[k]) {
+        if(!data[k]) return;
+        if(k==='gt-training-attendance-history'){
+          const localRaw=localAttendanceHistoryRaw;
+          let remoteRaw=data[k];
+          let localHist={}, remoteHist={};
+          try{ const x=localRaw?JSON.parse(localRaw):{}; if(x&&typeof x==='object') localHist=x; }catch(e){}
+          try{ const x=remoteRaw?JSON.parse(remoteRaw):{}; if(x&&typeof x==='object') remoteHist=x; }catch(e){}
+          const merged={};
+          const keys=new Set([...Object.keys(localHist),...Object.keys(remoteHist)]);
+          keys.forEach(key=>{
+            const localAt=Number(localAttendanceOrder[key]||0);
+            const remoteAt=Number(remoteAttendanceOrder[key]||0);
+            if(localAt>remoteAt && localAt>0){
+              merged[key]=localHist[key]||{};
+            }else if(remoteHist[key]){
+              merged[key]=remoteHist[key];
+            }else if(localHist[key]){
+              merged[key]=localHist[key];
+            }
+          });
+          const mergedRaw=JSON.stringify(merged);
+          if(mergedRaw!==localRaw){ originalSetItem(k,mergedRaw); changed=true; }
+          return;
+        }
+        if(k==='gt-attendance-save-order-v1'){
+          // Merge timestampy z oboch zariadení, aby sa nestratila informácia
+          // o novšom lokálnom uložení dochádzky.
+          const merged={};
+          const localRaw=localAttendanceOrderRaw;
+          let localObj={}, remoteObj=remoteAttendanceOrder;
+          try{ const x=localRaw?JSON.parse(localRaw):{}; if(x&&typeof x==='object') localObj=x; }catch(e){}
+          new Set([...Object.keys(localObj),...Object.keys(remoteObj)]).forEach(key=>{
+            merged[key]=Math.max(Number(localObj[key]||0),Number(remoteObj[key]||0));
+          });
+          const raw=JSON.stringify(merged);
+          if(raw!==localRaw){ originalSetItem(k,raw); changed=true; }
+          return;
+        }
+        if(originalGetItem(k) !== data[k]) {
           originalSetItem(k, data[k]);
           changed = true;
         }

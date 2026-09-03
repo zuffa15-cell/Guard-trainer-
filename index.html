@@ -32,6 +32,7 @@ let lastCloudUpdate = 0;
 let cloudInitialSnapshotReady = false;
 let cloudInitialSnapshotReceived = false;
 let cloudInitialWaitStarted = false;
+let cloudPushQueued = false;
 // Firebase sync sa spúšťa okamžite pri načítaní HTML, súbežne s videom orla.
 // Splash teda iba čaká na výsledok už prebiehajúceho načítania databázy.
 let cloudSyncStartedAt = Date.now();
@@ -311,6 +312,10 @@ function initCloudSync(){
     } finally {
       isApplyingRemote = false;
     }
+    if(cloudPushQueued){
+      cloudPushQueued = false;
+      setTimeout(()=>pushToCloud(true), 100);
+    }
     try{ applyMemberApplicationFiles(); }catch(e){}
     cloudInitialSnapshotReady = true;
 
@@ -409,7 +414,11 @@ function initCloudSync(){
 
 function pushToCloud(force = false){
   if(!db || !cloudEnabled) return;
-  if(isApplyingRemote) return;
+  // Ak práve spracúvame prichádzajúci cloud snapshot, zápis administrátora
+  // nesmie ticho zaniknúť. Zaradíme ho a po skončení synchronizácie ho
+  // odošleme znova. Toto je dôležité najmä pri úprave dochádzky na druhom
+  // zariadení.
+  if(isApplyingRemote){ cloudPushQueued = true; return; }
   const uid = firebase.auth().currentUser?.uid;
   if(!uid && !force) return;
 
@@ -7972,9 +7981,12 @@ function saveCurrentTrainingAttendance(){
   });
   trainingAttendanceByGroup[key]=next;
   const changedAttendance=JSON.stringify(before||{})!==JSON.stringify(next||{});
-  if(changedAttendance && isAdmin()){
+  if(isAdmin()){
     try{
       const adminEdits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}');
+      // Každé explicitné uloženie administrátorom je autoritatívne pre daný
+      // dátum/skupinu. Timestamp zapisujeme aj vtedy, keď sa výsledný JSON
+      // náhodou nezmenil, aby neskorší cloud snapshot nemohol vrátiť starý stav.
       adminEdits[key]=Date.now();
       originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(adminEdits));
     }catch(e){}

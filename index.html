@@ -4049,19 +4049,35 @@ function quickMemberList(type){
   const all=homeMyGroupMembers();
   const paymentTypes=type==='membership'||type==='registration'||type==='debt';
   const todayGroups=paymentTypes?todayHomeVisibleGroupCodes():null;
+  const groupCodeOf=v=>{
+    const x=String(v||'').trim().toUpperCase();
+    const m=x.match(/^(A|B|C|D\+)\b/);
+    return m?m[1]:x;
+  };
   let arr=all;
   if(paymentTypes){
-    arr=all.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(String(g).trim().toUpperCase())));
+    // Platby rátaj iba členom, ktorí patria do dnešnej skupiny.
+    // Člen môže mať uloženú skupinu ako kód (C) alebo celý názov skupiny.
+    arr=all.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(groupCodeOf(g))));
   }
   const today=new Date();
   if(type==='membership') return arr.filter(m=>{
     const period=currentMembershipPeriod();
-    if(typeof membershipPaidForPeriod==='function' && membershipPaidForPeriod(m,period)) return false;
+    const year=appToday().year;
+    // Dôležité: kontroluj konkrétneho člena aj aktuálne obdobie.
+    // Staré pole m.membership nesmie označiť 2. polrok ako zaplatený.
+    if(typeof membershipPaymentForPeriod==='function' && membershipPaymentForPeriod(Number(m.id),period,year)) return false;
+    if(typeof membershipAccountForPeriod==='function' && membershipAccountForPeriod(Number(m.id),period,year)) return false;
     const legacyPeriod=membershipPeriodForDate(m.membershipDate||'');
-    if(m.membership && legacyPeriod===period) return false;
+    const legacyYear=Number(String(m.membershipDate||'').match(/(\d{4})/)?.[1]||0);
+    if(m.membership && Number(m.membershipAmount||0)>0 && legacyYear===Number(year) && legacyPeriod===Number(period)) return false;
     return true;
   });
-  if(type==='registration') return arr.filter(m=>typeof memberHasRegistration==='function'?!memberHasRegistration(m):!m.registration);
+  if(type==='registration') return arr.filter(m=>{
+    const id=Number(m.id);
+    const paid=registrationPayments.some(p=>Number(p.memberId)===id);
+    return !paid;
+  });
   if(type==='debt') return arr.filter(m=>Number(m.debt||0)>0);
   if(type==='birthday') return arr.filter(m=>{
     const x=String(m.dob||'').match(/(\d{1,2})\.\s*(\d{1,2})\./);
@@ -5751,7 +5767,7 @@ function currentMembershipPeriod(){ return membershipPeriodForDate(attendanceDat
 function membershipPaymentForPeriod(memberId,period,year=appToday().year){
   return membershipPayments.find(p=>{
     const py=Number(p.year||String(p.date||'').slice(0,4));
-    return p.memberId===memberId && Number(p.period)===Number(period) && py===Number(year);
+    return Number(p.memberId)===Number(memberId) && Number(p.period)===Number(period) && py===Number(year);
   });
 }
 function membershipProfilePaymentForPeriod(member,period,year=appToday().year){

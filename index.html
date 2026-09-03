@@ -325,6 +325,25 @@ function initCloudSync(){
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
         // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
         console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
+        // Ak administrátor upravil dochádzku, zariadenie trénera musí zmenu
+        // okamžite premietnuť aj do práve otvorenej obrazovky Dochádzka.
+        // Rozhodujeme podľa timestampu konkrétneho dátumu/skupiny: starší
+        // lokálny zápis nikdy neprepíše novší cloudový zápis, ale novšia
+        // zmena administrátora sa na obrazovke zobrazí bez ručného refreshu.
+        try{
+          if(location.hash==='#attendance' && typeof attendanceState!=='undefined' &&
+             typeof trainingAttendanceKey==='function' && typeof attendance==='function'){
+            const curKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
+            const localAt=Number(localAttendanceOrder[curKey]||0);
+            const remoteAt=Number(remoteAttendanceOrder[curKey]||0);
+            if(remoteAt>localAt){
+              attendanceState.billingPaymentSnapshot=null;
+              attendanceState.billingAttendanceSnapshot=null;
+              attendanceState.billingRecordSnapshot=null;
+              setTimeout(()=>{try{ attendance(); }catch(e){ console.warn('Attendance cloud refresh failed:',e); }},0);
+            }
+          }
+        }catch(e){ console.warn('Attendance screen cloud refresh check failed:',e); }
       }catch(err){console.error('cloud sync background error',err);}
     }
   });

@@ -4058,9 +4058,10 @@ function quickMemberList(type){
   }
   const today=new Date();
   if(type==='membership') return arr.filter(m=>{
-    const period=currentMembershipPeriod();
+    const period=membershipPeriodForDate(appToday().iso) || 2;
     const year=appToday().year;
-    // Aktuálny polrok: zohľadni platbu z histórie aj účet.
+    // Domov vždy počíta aktuálny polrok podľa dnešného dátumu,
+    // nikdy podľa dátumu naposledy otvorenej dochádzky.
     if(typeof membershipProfilePaymentForPeriod==='function' && membershipProfilePaymentForPeriod(m,period,year)) return false;
     return true;
   });

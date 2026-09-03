@@ -4831,7 +4831,7 @@ function getCalendarAttendanceCounts(dateLabel, groupCode, groupName){
       let present=0, newCount=0;
       Object.keys(hist).forEach(k=>{
         const v=hist[k]||{};
-        if(v.training) present++;
+        if(v.training && !v.newMember) present++;
         if(v.newMember) newCount++;
       });
       return {present,newCount};

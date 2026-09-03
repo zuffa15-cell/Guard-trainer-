@@ -4060,15 +4060,20 @@ function updateSubstitutionQuick(){
    <span class="qicon">⇄</span><span class="qtext"><b>ZASTUPOVANIE</b><small>${text}</small></span><strong>${count}</strong><span class="go">›</span>
  </button>`;
 }
-function getGroupMemberCount(code){
-  // Test data: each group starts with 10 members. Existing members are preserved.
-  // New members added later are appended to the same real member list.
-  normalizeAllMembers();
+function groupRosterCodes(code){
   const key=String(code||'').trim().toUpperCase();
-  if(!key || !Array.isArray(membersData)) return 0;
+  // A mixed B+C training contains the members of BOTH groups.
+  // Use a union so a member who belongs to both groups is counted only once.
+  if(key==='B+C' || key==='C+B') return ['B','C'];
+  return key ? [key] : [];
+}
+function getGroupMemberCount(code){
+  normalizeAllMembers();
+  const wanted=new Set(groupRosterCodes(code));
+  if(!wanted.size || !Array.isArray(membersData)) return 0;
   return membersData.filter(m=>{
     const groups=Array.isArray(m.groups)?m.groups:[m.group];
-    return groups.some(g=>String(g||'').trim().toUpperCase()===key);
+    return groups.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
   }).length;
 }
 function getGroupTrainingProgress(code){
@@ -4368,7 +4373,7 @@ function trainerOwnsTraining(item){
       (getCurrentTrainerGroups()||[]).forEach(x=>myGroups.add(String(x).trim().toUpperCase()));
     }catch(e){}
     const code=String(item.groupCode||item.code||item.group||'').trim().toUpperCase();
-    if(code && myGroups.has(code)) return true;
+    if(groupRosterCodes(code).some(c=>myGroups.has(c))) return true;
   }catch(e){}
 
   // Backward-compatible ownership for schedules that are not represented in
@@ -4968,7 +4973,7 @@ function dayRows(){
       ? new Set((getCurrentTrainerGroups()||[]).map(x=>String(x).trim().toUpperCase()))
       : (typeof getCurrentTestTrainerGroupCodes==='function' ? getCurrentTestTrainerGroupCodes() : null);
     const trainerGroups = testAllowed instanceof Set ? testAllowed : new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
-    const trainerAssigned=isAdmin() || isHeadTrainer() || trainerGroups.has(String(g.code||'').trim().toUpperCase());
+    const trainerAssigned=isAdmin() || isHeadTrainer() || groupRosterCodes(g.code||'').some(c=>trainerGroups.has(c));
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(g.code,dateLabel,g.time);
     const canOpen=trainerAssigned || acceptedSubstitution;
     const groupInactive=(!isHeadTrainer() && !isAdmin() && !canOpen);
@@ -7489,7 +7494,11 @@ function cleanAttendanceMember(m){
   };
 }
 function cleanAttendanceMembers(group){
-  return membersData.filter(m=>(m.groups||[m.group]).includes(group)).map(cleanAttendanceMember);
+  const wanted=new Set(groupRosterCodes(group));
+  return membersData.filter(m=>{
+    const groups=Array.isArray(m.groups)?m.groups:[m.group];
+    return groups.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
+  }).map(cleanAttendanceMember);
 }
 const attendanceState = {
   group:'B',
@@ -7558,9 +7567,10 @@ function syncAttendanceRecord(member){
 function loadAttendanceFromMembers(){
  const current=attendanceState.members||[];
  const byName=new Map(current.map(a=>[a.surname+'|'+a.name,a]));
+ const wantedGroups=new Set(groupRosterCodes(attendanceState.group));
  let selected=membersData.filter(m=>{
-   const gs=m.groups||[m.group];
-   return gs.includes(attendanceState.group);
+   const gs=Array.isArray(m.groups)?m.groups:[m.group];
+   return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
  });
  // Test mode: keep the original 10 test members visible, but NEVER
  // discard a real member who was added to this group.
@@ -7723,7 +7733,7 @@ function attendance(){
     const wantedTime=String(attendanceState.trainingTime||'');
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
     const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
-      String(x.code||'').toUpperCase()===wantedGroup &&
+      groupRosterCodes(x.code||'').some(c=>c===wantedGroup) &&
       (!wantedTime || String(x.time||'')===wantedTime) &&
       trainerOwnsTraining(x)
     );
@@ -11642,7 +11652,8 @@ function openHeadTrainerGroupReadOnly(code,name,time=''){
 function renderHeadTrainerAttendanceReadOnly(){
   const app=document.querySelector('.app'); if(!app)return false;
   const code=String(attendanceState.group||'').trim().toUpperCase();
-  const members=(membersData||[]).filter(m=>(Array.isArray(m.groups)?m.groups:[m.group]).some(g=>String(g||'').trim().toUpperCase()===code));
+  const wanted=new Set(groupRosterCodes(code));
+  const members=(membersData||[]).filter(m=>(Array.isArray(m.groups)?m.groups:[m.group]).some(g=>wanted.has(String(g||'').trim().toUpperCase())));
   app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content attendance-page attendance-readonly">
    <div class="calendar-head"><div class="section-title">☑ DOCHÁDZKA</div><div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div></div>

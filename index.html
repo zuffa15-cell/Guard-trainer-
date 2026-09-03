@@ -7813,11 +7813,23 @@ function applyBillingSnapshotToAttendance(){
   if(!attendanceState.billingRecordSnapshot) return;
   const snap=attendanceState.billingPaymentSnapshot||{};
   const present=new Set(Array.isArray(attendanceState.billingAttendanceSnapshot)?attendanceState.billingAttendanceSnapshot:[]);
+  // DÔLEŽITÉ: návrat z "Moje vyúčtovanie" nesmie prepísať stav NOVÝ.
+  // billing attendanceSnapshot obsahuje iba platených/prítomných členov,
+  // preto z neho nemožno odvodiť, že ostatní už nie sú NOVÍ. Pri návrate
+  // načítajme NOVÝ priamo z autoritatívnej histórie konkrétneho dátumu+skupiny.
+  const histKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
+  const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey]) || null;
   (attendanceState.members||[]).forEach(a=>{
     const key=a.surname+'|'+a.name;
     const p=snap[key];
-    a.training=present.has(key);
-    a.trainingAccount=!!(p&&p.trainingAccount);
+    const hv=hist && Object.prototype.hasOwnProperty.call(hist,key) ? (hist[key]||{}) : null;
+    if(hv && Object.prototype.hasOwnProperty.call(hv,'newMember')){
+      a.newMember=!!hv.newMember;
+      a.newMemberDate=a.newMember ? (a.newMemberDate||attendanceState.date) : '';
+    }
+    // Ak je člen NOVÝ, nesmie sa zároveň zobraziť ako platený TRÉNING.
+    a.training= a.newMember ? false : present.has(key);
+    a.trainingAccount= a.newMember ? false : !!(p&&p.trainingAccount);
     if(p){
       const mem=Number(p.membership||0);
       const reg=Number(p.registration||0);

@@ -7865,14 +7865,18 @@ function getAttendancePendingSaveAt(date,group){
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
   const before=trainingAttendanceByGroup[key]||null;
+  // Vždy vytvoríme nový kompletný snapshot a až potom ho priradíme ku kľúču.
+  // Starý kód zapisoval do trainingAttendanceByGroup[key] a následne tento
+  // objekt nahradil prázdnym "next", čím sa uložená dochádzka stratila.
   const next=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{
-    trainingAttendanceByGroup[key][a.surname+'|'+a.name]={
+    next[a.surname+'|'+a.name]={
       training:!!a.training,
       trainingAccount:!!a.trainingAccount,
       membershipAccountAmount:Number(a.membershipAccountAmount||0),membershipAccountDate:a.membershipAccountDate||'',
       registrationAccountAmount:Number(a.registrationAccountAmount||0),registrationAccountDate:a.registrationAccountDate||'',
-      newMember:!!a.newMember
+      newMember:!!a.newMember,
+      newMemberDate:a.newMember ? (a.newMemberDate||attendanceState.date) : ''
     };
   });
   trainingAttendanceByGroup[key]=next;
@@ -8152,23 +8156,34 @@ function applyBillingSnapshotToAttendance(){
   if(!attendanceState.billingRecordSnapshot) return;
   const snap=attendanceState.billingPaymentSnapshot||{};
   const present=new Set(Array.isArray(attendanceState.billingAttendanceSnapshot)?attendanceState.billingAttendanceSnapshot:[]);
-  // DÔLEŽITÉ: návrat z "Moje vyúčtovanie" nesmie prepísať stav NOVÝ.
-  // billing attendanceSnapshot obsahuje iba platených/prítomných členov,
-  // preto z neho nemožno odvodiť, že ostatní už nie sú NOVÍ. Pri návrate
-  // načítajme NOVÝ priamo z autoritatívnej histórie konkrétneho dátumu+skupiny.
-  const histKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
-  const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey]) || null;
+  const r=attendanceState.billingRecordSnapshot;
+  // Pri návrate z vyúčtovania je kompletný attendanceStateSnapshot z uloženého
+  // vyúčtovania autoritatívny. Nesmie ho prepisovať lokálna/stará história.
+  const full=Array.isArray(r.attendanceStateSnapshot) ? r.attendanceStateSnapshot : null;
+  const fullMap=full ? new Map(full.map(x=>[String(x.surname||'').trim()+'|'+String(x.name||'').trim(),x])) : null;
   (attendanceState.members||[]).forEach(a=>{
     const key=a.surname+'|'+a.name;
     const p=snap[key];
-    const hv=hist && Object.prototype.hasOwnProperty.call(hist,key) ? (hist[key]||{}) : null;
-    if(hv && Object.prototype.hasOwnProperty.call(hv,'newMember')){
-      a.newMember=!!hv.newMember;
-      a.newMemberDate=a.newMember ? (a.newMemberDate||attendanceState.date) : '';
+    const x=fullMap ? fullMap.get(key) : null;
+    if(x){
+      a.training=!!x.training;
+      a.trainingAccount=!!x.trainingAccount;
+      a.newMember=!!x.newMember;
+      a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
+      a.membershipAccountAmount=Number(x.membershipAccountAmount||0);
+      a.membershipAccountDate=x.membershipAccountDate||'';
+      a.registrationAccountAmount=Number(x.registrationAccountAmount||0);
+      a.registrationAccountDate=x.registrationAccountDate||'';
+    }else{
+      // Člen, ktorý v čase uloženia vyúčtovania nebol v zozname, musí zostať
+      // bez stavu; nesmieme mu privliecť dnešnú/stálu dochádzku.
+      a.training=false;
+      a.trainingAccount=false;
+      a.newMember=false;
+      a.newMemberDate='';
     }
-    // Ak je člen NOVÝ, nesmie sa zároveň zobraziť ako platený TRÉNING.
-    a.training= a.newMember ? false : present.has(key);
-    a.trainingAccount= a.newMember ? false : !!(p&&p.trainingAccount);
+    // Platby obnovíme zo snapshotu iba ak ich uložené vyúčtovanie obsahuje.
+    // Tým zostanú sumy pri návrate z vyúčtovania presne rovnaké.
     if(p){
       const mem=Number(p.membership||0);
       const reg=Number(p.registration||0);
@@ -8179,7 +8194,7 @@ function applyBillingSnapshotToAttendance(){
       a.registrationDate=reg>0?attendanceState.date:'';
       a.registrationAmount=reg;
       a.registrationPaidGroup=reg>0?attendanceState.group:'';
-    } else {
+    }else{
       a.membershipAmount=0;
       a.membershipDate='';
       a.membershipPaidGroup='';
@@ -8190,7 +8205,6 @@ function applyBillingSnapshotToAttendance(){
     }
   });
   // Keep the saved training-level amounts exactly as they were in the billing row.
-  const r=attendanceState.billingRecordSnapshot;
   attendanceState.otherPlus=Number(r.otherPlus||0);
   attendanceState.otherMinus=Number(r.otherMinus||0);
   attendanceState.otherPlusReason=String(r.otherPlusReason||'');

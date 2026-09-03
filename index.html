@@ -4029,19 +4029,29 @@ function todayTrainingGroups(){
   }catch(e){}
   return result;
 }
+function todayHomeVisibleGroupCodes(){
+  // Použi presne tie skupiny, ktoré sa zobrazujú v karte DNESNÉ TRÉNINGY
+  // na Domove. Rýchly prehľad teda ostáva viazaný iba na dnešný tréning.
+  const t=appToday();
+  const dynamic=typeof scheduleItemsForDate==='function'?scheduleItemsForDate(t.iso):[];
+  const base=(calendarDayGroups&&calendarDayGroups[t.iso])||[];
+  const items=[
+    ...base.map(g=>({...g,color:getGroupColor(g.code,g.color)})),
+    ...dynamic.map(g=>({...g,color:getGroupColor(g.code,g.color)}))
+  ].filter((g,i,a)=>a.findIndex(x=>
+    String(x.code||x.groupCode||'').toUpperCase()===String(g.code||g.groupCode||'').toUpperCase() &&
+    x.time===g.time && x.name===g.name
+  )===i);
+  const visible=typeof filterHomeItemsForCurrentRole==='function' ? filterHomeItemsForCurrentRole(items) : items;
+  return new Set(visible.map(g=>String(g.code||g.groupCode||'').trim().toUpperCase()).filter(Boolean));
+}
 function quickMemberList(type){
   const all=homeMyGroupMembers();
   const paymentTypes=type==='membership'||type==='registration'||type==='debt';
-  const todayGroups=paymentTypes?todayTrainingGroups():null;
+  const todayGroups=paymentTypes?todayHomeVisibleGroupCodes():null;
   let arr=all;
   if(paymentTypes){
     arr=all.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(String(g).trim().toUpperCase())));
-    // For a trainer, the quick overview must NEVER fall back to all club
-    // members. Use the exact test-role/profile groups as the hard boundary.
-    const roleGroups=getCurrentTestTrainerGroupCodes();
-    if(roleGroups instanceof Set){
-      arr=arr.filter(m=>(m.groups||[m.group]).some(g=>roleGroups.has(String(g).trim().toUpperCase())));
-    }
   }
   const today=new Date();
   if(type==='membership') return arr.filter(m=>{

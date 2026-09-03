@@ -4507,9 +4507,11 @@ function headHomeWeekStart(){
   const t=appToday(); const d=new Date(t.year,t.month-1,t.day); const dow=d.getDay(); const monday=new Date(d); monday.setDate(d.getDate()+(dow===0?-6:1-dow)); monday.setHours(0,0,0,0); return monday;
 }
 function headHomeMonthAttendance(){
-  // Hlavný tréner: mesačná účasť sa počíta LEN z reálne zapísaných
-  // dochádzok, ktoré zároveň patria ku konkrétnemu tréningu v kalendári.
-  // ÚČASŤ = PRÍTOMNÍ + NOVÍ. Staré/voľné záznamy v histórii sa ignorujú.
+  // Hlavný tréner: presný súčet účasti za mesiac.
+  // Priorita je záznam konkrétneho tréningu s explicitnými počtami
+  // PRÍTOMNÍ + NOVÍ. Je to dôležité preto, že historický snapshot môže
+  // obsahovať len platených/tréningových členov a NOVÝCH má uložených zvlášť.
+  // Pre každý tréning teda platí: ÚČASŤ = PRÍTOMNÍ + NOVÍ.
   const t=appToday();
   const out={};
   const norm=v=>String(v||'').trim().toUpperCase();
@@ -4524,24 +4526,83 @@ function headHomeMonthAttendance(){
     out[k]={sum:0,trainings:0,avg:0};
   });
 
-  const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup) || {};
-  const counted=new Set();
-  const daysInMonth=new Date(Number(t.year),Number(t.month),0).getDate();
-
-  // Prejdeme iba dni aktuálneho mesiaca a iba tréningy, ktoré sú v rozvrhu.
-  for(let day=1;day<=daysInMonth;day++){
-    const iso=`${t.year}-${String(t.month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-    let items=[];
-    try{ items=scheduleItemsForDate(iso)||[]; }catch(e){ items=[]; }
-    (items||[]).forEach(item=>{
-      if(!item || isTrainingCancelled(iso,item.code,item.time,item.name)) return;
-      const group=codeOf(item.code || item.groupCode || item.group || item.name);
+  // Najprv použijeme explicitné mesačné vyúčtovanie konkrétnych tréningov.
+  // Ak má záznam presentCount/newCount, je to autoritatívny počet pre daný tréning.
+  const explicit=new Set();
+  try{
+    (monthlyBillingRecords||[]).forEach(r=>{
+      if(!r || r.substituteReference) return;
+      const d=parsePaymentDate(r.date);
+      if(!d || d.month!==Number(t.month) || d.year!==Number(t.year)) return;
+      const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      if(iso<TRAINING_DATA_START_DATE) return;
+      const group=codeOf(r.group);
       if(!group || !out[group]) return;
-      const key=iso+'|'+norm(item.code || item.groupCode || item.group || group);
-      if(counted.has(key)) return;
+      if(!('presentCount' in r) && !('newCount' in r)) return;
+
+      let present=Number(r.presentCount);
+      let newCount=Number(r.newCount);
+      if(!Number.isFinite(present) || present<0) present=0;
+      if(!Number.isFinite(newCount) || newCount<0) newCount=0;
+
+      const key=iso+'|'+group;
+      if(explicit.has(key)) return;
+      explicit.add(key);
+      out[group].trainings += 1;
+      out[group].sum += present + newCount;
+    });
+  }catch(e){ console.warn('headHomeMonthAttendance explicit billing',e); }
+
+  // Ak konkrétny tréning nemá explicitné presentCount/newCount, dopočítame
+  // ho priamo z uloženej dochádzky. NOVÝ sa ráta ako účasť, ale nie ako prítomný.
+  try{
+    const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup) || {};
+    Object.keys(hist).forEach(key=>{
+      const parts=String(key).split('|');
+      const iso=parts[0]||'';
+      const rawGroup=parts.slice(1).join('|').trim();
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return;
+      const d=new Date(iso+'T12:00:00');
+      if(isNaN(d.getTime()) || d.getFullYear()!==Number(t.year) || d.getMonth()+1!==Number(t.month)) return;
+      if(iso<TRAINING_DATA_START_DATE) return;
+      // History alone is NOT enough: only count a record when the training
+      // was actually scheduled for that date/group and its scheduled time
+      // has already passed. This prevents future trainings (e.g. 3.9.) and
+      // stale/orphan history entries from inflating the monthly statistics.
+      const group=codeOf(rawGroup);
+      if(!group || !out[group]) return;
+      let scheduled=false;
+      try{
+        const items=scheduleItemsForDate(iso)||[];
+        scheduled=items.some(it=>{
+          const ic=codeOf(it.code||it.groupCode||it.group||'');
+          return ic===group;
+        });
+      }catch(e){}
+      if(!scheduled) return;
+      if(iso>t.iso) return;
+      if(iso===t.iso){
+        let started=false;
+        try{
+          const items=scheduleItemsForDate(iso)||[];
+          started=items.some(it=>{
+            const ic=codeOf(it.code||it.groupCode||it.group||'');
+            if(ic!==group)return false;
+            const tm=String(it.time||'').trim();
+            const m=tm.match(/(\d{1,2}):(\d{2})\s*[–—-]\s*(\d{1,2}):(\d{2})/);
+            if(!m)return false;
+            const endH=Number(m[3]), endM=Number(m[4]);
+            const now=new Date();
+            return now.getHours()>endH || (now.getHours()===endH && now.getMinutes()>=endM);
+          });
+        }catch(e){}
+        if(!started)return;
+      }
+      const uniqueKey=iso+'|'+group;
+      if(explicit.has(uniqueKey)) return;
       const rec=hist[key];
-      // Tréning sa započíta až vtedy, keď bola jeho dochádzka skutočne uložená.
       if(!rec || typeof rec!=='object' || !Object.keys(rec).length) return;
+      if(isTrainingCancelled(iso,rawGroup,'','')) return;
 
       let present=0, newCount=0;
       Object.keys(rec).forEach(name=>{
@@ -4549,11 +4610,10 @@ function headHomeMonthAttendance(){
         if(v.newMember) newCount++;
         else if(v.training) present++;
       });
-      counted.add(key);
       out[group].trainings += 1;
       out[group].sum += present + newCount;
     });
-  }
+  }catch(e){ console.warn('headHomeMonthAttendance history fallback',e); }
 
   Object.values(out).forEach(x=>x.avg=x.trainings?x.sum/x.trainings:0);
   return out;

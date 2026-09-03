@@ -6043,6 +6043,25 @@ function persistMemberApplicationFiles(){
   try{ originalSetItem(MEMBER_APPLICATION_FILES_KEY,JSON.stringify(memberApplicationFiles)); }
   catch(e){ console.warn('Guard Trainer: application files could not be persisted',e); }
 }
+const MEMBER_APPLICATION_CLOUD_COLLECTION='guard-trainer-applications';
+async function saveApplicationFileToCloud(memberId, fileRec){
+  try{
+    if(!db || !fileRec || !fileRec.data) return false;
+    await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(memberId)).set({
+      memberId:String(memberId), data:String(fileRec.data), name:String(fileRec.name||'Prihláška'), updatedAt:Number(fileRec.updatedAt||Date.now())
+    },{merge:true});
+    return true;
+  }catch(e){ console.warn('Guard Trainer: application file cloud save failed',e); return false; }
+}
+async function loadApplicationFileFromCloud(memberId){
+  try{
+    if(!db) return null;
+    const doc=await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(memberId)).get();
+    if(!doc.exists) return null;
+    const d=doc.data()||{};
+    return d.data ? {data:String(d.data),name:String(d.name||'Prihláška'),updatedAt:Number(d.updatedAt||0)} : null;
+  }catch(e){ console.warn('Guard Trainer: application file cloud load failed',e); return null; }
+}
 function applyMemberApplicationFiles(){
   try{ membersData.forEach(m=>{ const f=memberApplicationFiles[String(m.id)]; if(f&&f.data){m.application=true;m.applicationFile=f.data;m.applicationFileName=f.name||m.applicationFileName||'';} }); }catch(e){}
 }
@@ -6700,7 +6719,18 @@ async function showMemberApplication(id){
  let data=m.applicationFile||'';
  let name=m.applicationFileName||'Prihláška';
  if(data){show(data,name);return;}
- // Druhé zariadenie: načítaj súbor priamo zo spoločného cloudu.
+ // Druhé zariadenie: prihlášku načítaj z vlastného Firestore dokumentu.
+ // Je to zámerne oddelené od veľkého spoločného dokumentu, aby sa obrázok
+ // nestratil kvôli limitu veľkosti shared-db.
+ try{
+   const f=await loadApplicationFileFromCloud(id);
+   if(f&&f.data){
+     memberApplicationFiles[String(id)]=f; persistMemberApplicationFiles();
+     m.application=true; m.applicationFile=f.data; m.applicationFileName=f.name||name;
+     show(f.data,f.name||name); return;
+   }
+ }catch(e){console.warn('Guard Trainer: načítanie prihlášky z cloudu zlyhalo',e);}
+ // Spätná kompatibilita: skús ešte starý spoločný dokument.
  try{
    if(typeof db!=='undefined' && db && typeof db.collection==='function'){
      const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
@@ -6714,7 +6744,7 @@ async function showMemberApplication(id){
        show(f.data,f.name||name); return;
      }
    }
- }catch(e){console.warn('Guard Trainer: načítanie prihlášky z cloudu zlyhalo',e);}
+ }catch(e){console.warn('Guard Trainer: spätné načítanie prihlášky zlyhalo',e);}
  toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');
 }
 
@@ -6951,7 +6981,7 @@ function renderMemberEditForm(id,isNew=false){
 function deleteMemberApplication(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
  m.application=false; m.applicationDate=''; m.applicationFile=''; m.applicationFileName='';
- delete memberApplicationFiles[String(id)]; persistMemberApplicationFiles();
+ delete memberApplicationFiles[String(id)]; persistMemberApplicationFiles(); try{ if(db) db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(id)).delete().catch(()=>{}); }catch(e){}
  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),50); }catch(e){}
  // Po odstránení prihlášky už dátum členstva nie je dátum prihlášky.
  m.memberSince=''; m.memberSinceManual=false;
@@ -7059,6 +7089,9 @@ function saveNewMemberFromForm(id){
    if(preview && preview.dataset.fileData){
      m.applicationFile=preview.dataset.fileData;
      m.applicationFileName=preview.dataset.fileName||appFile.files[0].name;
+     memberApplicationFiles[String(m.id)]={data:m.applicationFile,name:m.applicationFileName,updatedAt:Date.now()};
+     persistMemberApplicationFiles();
+     try{ saveApplicationFileToCloud(m.id,memberApplicationFiles[String(m.id)]); }catch(e){}
    }
  }
 
@@ -7149,6 +7182,9 @@ function saveMemberProfile(id,isNew=false){
    if(preview && preview.dataset.fileData){
      m.applicationFile=preview.dataset.fileData;
      m.applicationFileName=preview.dataset.fileName||appFile.files[0].name;
+     memberApplicationFiles[String(m.id)]={data:m.applicationFile,name:m.applicationFileName,updatedAt:Date.now()};
+     persistMemberApplicationFiles();
+     try{ saveApplicationFileToCloud(m.id,memberApplicationFiles[String(m.id)]); }catch(e){}
    }
  }
 
@@ -8179,6 +8215,7 @@ function offerAttendanceApplicationPhoto(i){
          m.applicationFileName=file.name;
          memberApplicationFiles[String(m.id)]={data:dataUrl,name:file.name,updatedAt:Date.now()};
          persistMemberApplicationFiles();
+         try{ saveApplicationFileToCloud(m.id,memberApplicationFiles[String(m.id)]); }catch(e){}
          try{ if(typeof persistMembersData==='function') persistMembersData(m.id); }catch(e){}
          try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),100); }catch(e){}
        }

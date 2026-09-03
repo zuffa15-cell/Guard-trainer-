@@ -9442,8 +9442,15 @@ function saveTrainingBilling(saveButton){
   // Členské a registračné sa po potvrdení dochádzky nemenia – ich úpravu
   // riadi attendancePaymentEditGuard() a pri platbe zadanej Adminom je zákaz
   // ešte prísnejší.
+  // Pred uložením vyúčtovania vždy zapíšeme kompletný stav dochádzky.
+  // Je to autoritatívna kópia aj pre členov označených NOVÝ, ktorí nie sú
+  // súčasťou attendanceSnapshot (ten je určený pre platených/prítomných).
+  saveCurrentTrainingAttendance();
   commitMembershipDraftsForCurrentTraining();
   commitRegistrationDraftsForCurrentTraining();
+  // Po commitnutí platieb ešte raz uložíme stav, aby sa do histórie dostali
+  // aj všetky aktuálne zmeny z tejto obrazovky.
+  saveCurrentTrainingAttendance();
   const fee=trainingFee();
   const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
   const trainingPaid=attendanceState.members.filter(m=>m.training&&!m.newMember&&!m.trainingAccount).length;
@@ -9473,6 +9480,17 @@ function saveTrainingBilling(saveButton){
     attendanceSnapshot:(attendanceState.members||[])
       .filter(m=>m.training)
       .map(m=>m.surname+'|'+m.name),
+    // Kompletný snapshot konkrétnej dochádzky. Obsahuje aj NOVÝ členov,
+    // ktorí sa zámerne neukladajú do attendanceSnapshot.
+    attendanceStateSnapshot:(attendanceState.members||[]).map(m=>({
+      surname:m.surname, name:m.name,
+      training:!!m.training, trainingAccount:!!m.trainingAccount,
+      newMember:!!m.newMember, newMemberDate:m.newMemberDate||'',
+      membershipAccountAmount:Number(m.membershipAccountAmount||0),
+      membershipAccountDate:m.membershipAccountDate||'',
+      registrationAccountAmount:Number(m.registrationAccountAmount||0),
+      registrationAccountDate:m.registrationAccountDate||''
+    })),
     paymentSnapshot:(attendanceState.members||[])
       .map(m=>{
         const pt=currentMemberPaymentTotals(m);
@@ -11485,11 +11503,30 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
       const trainerCandidates=allCandidates.filter(r=>String(r.trainer||'').trim().toUpperCase()===trainer.toUpperCase());
       const candidates=trainerCandidates.length?trainerCandidates:allCandidates;
       const br=candidates.find(r=>Array.isArray(r.paymentSnapshot)) || candidates[0];
-      if(br && Array.isArray(br.paymentSnapshot)){
-        attendanceState.billingPaymentSnapshot={};
-        br.paymentSnapshot.forEach(x=>{
-          attendanceState.billingPaymentSnapshot[String(x.surname||'').trim()+'|'+String(x.name||'').trim()]=x;
-        });
+      if(br){
+        // Ak vyúčtovanie obsahuje kompletný snapshot, obnovíme z neho aj NOVÝ.
+        // Tým sa návrat z vyúčtovania neopiera o neúplný attendanceSnapshot.
+        if(Array.isArray(br.attendanceStateSnapshot)){
+          const full=new Map(br.attendanceStateSnapshot.map(x=>[String(x.surname||'').trim()+'|'+String(x.name||'').trim(),x]));
+          (attendanceState.members||[]).forEach(a=>{
+            const x=full.get(a.surname+'|'+a.name);
+            if(!x) return;
+            a.training=!!x.training;
+            a.trainingAccount=!!x.trainingAccount;
+            a.newMember=!!x.newMember;
+            a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
+            a.membershipAccountAmount=Number(x.membershipAccountAmount||0);
+            a.membershipAccountDate=x.membershipAccountDate||'';
+            a.registrationAccountAmount=Number(x.registrationAccountAmount||0);
+            a.registrationAccountDate=x.registrationAccountDate||'';
+          });
+        }
+        if(Array.isArray(br.paymentSnapshot)){
+          attendanceState.billingPaymentSnapshot={};
+          br.paymentSnapshot.forEach(x=>{
+            attendanceState.billingPaymentSnapshot[String(x.surname||'').trim()+'|'+String(x.name||'').trim()]=x;
+          });
+        }
         attendanceState.billingAttendanceSnapshot=Array.isArray(br.attendanceSnapshot)?br.attendanceSnapshot.slice():[];
         attendanceState.billingRecordSnapshot=br;
       }

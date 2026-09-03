@@ -4046,25 +4046,22 @@ function todayHomeVisibleGroupCodes(){
   return new Set(visible.map(g=>String(g.code||g.groupCode||'').trim().toUpperCase()).filter(Boolean));
 }
 function quickMemberList(type){
+  // Platobný prehľad na Domove je viazaný IBA na dnešný tréning,
+  // ktorý sa dnes zobrazuje. Nesmie sa ďalej filtrovať cez profilové skupiny,
+  // pretože tým sa pri reálnom trénerovi mohli členovia dnešnej skupiny stratiť.
   const all=homeMyGroupMembers();
   const paymentTypes=type==='membership'||type==='registration'||type==='debt';
   const todayGroups=paymentTypes?todayTrainingGroups():null;
   let arr=all;
   if(paymentTypes){
     arr=all.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(String(g).trim().toUpperCase())));
-    // For a trainer, the quick overview must NEVER fall back to all club
-    // members. Use the exact test-role/profile groups as the hard boundary.
-    const roleGroups=getCurrentTestTrainerGroupCodes();
-    if(roleGroups instanceof Set){
-      arr=arr.filter(m=>(m.groups||[m.group]).some(g=>roleGroups.has(String(g).trim().toUpperCase())));
-    }
   }
   const today=new Date();
   if(type==='membership') return arr.filter(m=>{
     const period=currentMembershipPeriod();
-    if(typeof membershipPaidForPeriod==='function' && membershipPaidForPeriod(m,period)) return false;
-    const legacyPeriod=membershipPeriodForDate(m.membershipDate||'');
-    if(m.membership && legacyPeriod===period) return false;
+    const year=appToday().year;
+    // Aktuálny polrok: zohľadni platbu z histórie aj účet.
+    if(typeof membershipProfilePaymentForPeriod==='function' && membershipProfilePaymentForPeriod(m,period,year)) return false;
     return true;
   });
   if(type==='registration') return arr.filter(m=>typeof memberHasRegistration==='function'?!memberHasRegistration(m):!m.registration);
@@ -7769,6 +7766,9 @@ function membershipPaidHereToday(m){
 }
 function memberHasRegistration(m){
   if(!m)return false;
+  // Pri importovaných členoch je boolean príznak v profile autoritatívny.
+  // História platieb sa použije ako fallback iba ak profil tento príznak nemá.
+  if(typeof m.registration==='boolean') return m.registration;
   const id=attendanceMemberId(m);
   return registrationPayments.some(p=>Number(p.memberId)===Number(id));
 }

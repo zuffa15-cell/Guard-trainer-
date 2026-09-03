@@ -48,7 +48,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -144,6 +144,54 @@ function initCloudSync(){
           });
           const mergedRaw=JSON.stringify(merged);
           if(mergedRaw!==localRaw){ originalSetItem(k,mergedRaw); changed=true; }
+          return;
+        }
+        if(k==='gt-monthly-billing-v221'){
+          // Vyúčtovanie je zdieľané medzi viacerými zariadeniami/rolami.
+          // Nikdy neprepíš celý zoznam starším snapshotom z iného zariadenia.
+          // Zlúč jednotlivé tréningy podľa tréner + dátum + skupina a pri
+          // konflikte ponechaj záznam s novším savedAt.
+          let localRows=[], remoteRows=[];
+          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localRows=p; }catch(e){}
+          try{ const x=data[k]?JSON.parse(data[k]):[]; if(Array.isArray(x)) remoteRows=x; }catch(e){}
+          const canon=r=>{
+            const d=parsePaymentDate(r&&r.date);
+            const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
+            return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
+          };
+          const mergedMap=new Map();
+          const put=row=>{
+            if(!row||!canon(row)) return;
+            const key=canon(row), prev=mergedMap.get(key);
+            if(!prev){ mergedMap.set(key,row); return; }
+            if(prev.substituteReference && !row.substituteReference){ mergedMap.set(key,row); return; }
+            if(!prev.substituteReference && row.substituteReference) return;
+            const pa=Number(prev.savedAt||0), ra=Number(row.savedAt||0);
+            if(ra>=pa) mergedMap.set(key,row);
+          };
+          localRows.forEach(put); remoteRows.forEach(put);
+          const mergedRows=Array.from(mergedMap.values());
+          const mergedRaw=JSON.stringify(mergedRows);
+          if(mergedRaw!==originalGetItem(k)){ originalSetItem(k,mergedRaw); changed=true; }
+          return;
+        }
+        if(k==='gt-club-handover-v1'){
+          // Stav odovzdania musí byť spoločný pre trénera, hlavného trénera
+          // aj administrátora. Zlúčime všetky potvrdenia po jednotlivých
+          // tréneroch/mesiacoch namiesto prepísania celého objektu.
+          let localObj={}, remoteObj={};
+          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localObj=p; }catch(e){}
+          try{ const p=data[k]?JSON.parse(data[k]):{}; if(p&&typeof p==='object') remoteObj=p; }catch(e){}
+          const merged={...localObj};
+          Object.keys(remoteObj).forEach(key=>{
+            const l=merged[key], r=remoteObj[key];
+            if(!l){ merged[key]=r; return; }
+            const lt=new Date(l.receivedAt||0).getTime()||0;
+            const rt=new Date(r?.receivedAt||0).getTime()||0;
+            if(rt>=lt) merged[key]=r;
+          });
+          const mergedRaw=JSON.stringify(merged);
+          if(mergedRaw!==originalGetItem(k)){ originalSetItem(k,mergedRaw); changed=true; }
           return;
         }
         if(k==='gt-attendance-save-order-v1'){
@@ -9087,6 +9135,7 @@ function confirmClubHandover(trainerName,month,year,amount){
       receivedAt:now.toISOString()
     };
     persistClubHandoverStatuses();
+    try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
 
     // Okamžitá vizuálna zmena v aktuálnej karte. Používame porovnanie atribútu,
     // nie CSS selector, aby fungovalo aj pri menách so špeciálnymi znakmi.
@@ -9151,6 +9200,7 @@ window.confirmClubHandover=confirmClubHandover;
         amount:amount, receivedAt:new Date().toISOString()
       };
       persistClubHandoverStatuses();
+      try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
       if(typeof toast==='function') toast('✓ PRIJATÉ – peniaze boli potvrdené.');
     }catch(err){
       console.error('Uloženie potvrdenia odovzdania:',err);

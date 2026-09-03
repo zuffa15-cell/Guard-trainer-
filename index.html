@@ -6672,55 +6672,66 @@ function deleteMemberPaymentFromProfile(memberId,type,period){
 async function showMemberApplication(id){
  const m=membersData.find(x=>Number(x.id)===Number(id));
  if(!m||!m.application){toast('Prihláška nie je evidovaná.');return;}
- // Okno otvoríme okamžite, aby mobilný prehliadač nezablokoval popup.
- const w=window.open('about:blank','_blank');
- const openData=(data,name)=>{
-   if(!data){
-     if(w){ try{w.close();}catch(e){} }
-     toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');
-     return;
+ // Prihlášku zobrazujeme priamo v aplikácii. Nepoužívame window.open(),
+ // pretože mobilný prehliadač môže nové okno otvoriť iba ako bielu stránku.
+ const renderApplication=(data,name)=>{
+   if(!data){toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');return;}
+   const old=document.getElementById('gtApplicationViewer'); if(old)old.remove();
+   const viewer=document.createElement('div');
+   viewer.id='gtApplicationViewer';
+   viewer.style.cssText='position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.96);display:flex;flex-direction:column;box-sizing:border-box;';
+   const head=document.createElement('div');
+   head.style.cssText='height:58px;min-height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;box-sizing:border-box;background:#111;border-bottom:1px solid #444;color:#fff;';
+   const title=document.createElement('div');
+   title.textContent=name||'Prihláška';
+   title.style.cssText='font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:12px;';
+   const close=document.createElement('button');
+   close.type='button'; close.textContent='✕';
+   close.style.cssText='border:0;background:#333;color:#fff;border-radius:9px;width:42px;height:38px;font-size:20px;flex:none;';
+   close.onclick=()=>viewer.remove();
+   head.append(title,close); viewer.appendChild(head);
+   const body=document.createElement('div');
+   body.style.cssText='flex:1;min-height:0;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:10px;box-sizing:border-box;';
+   const lower=String(name||'').toLowerCase();
+   const isPdf=String(data).startsWith('data:application/pdf') || lower.endsWith('.pdf');
+   if(isPdf){
+     const frame=document.createElement('iframe');
+     frame.src=data; frame.title='Prihláška';
+     frame.style.cssText='width:100%;height:100%;border:0;background:#fff;';
+     body.appendChild(frame);
+   }else{
+     const img=document.createElement('img');
+     img.src=data; img.alt='Prihláška';
+     img.style.cssText='display:block;max-width:100%;width:auto;height:auto;object-fit:contain;';
+     img.onerror=()=>{body.innerHTML='<div style="color:#fff;text-align:center;padding:30px;font-size:16px">Prihlášku sa nepodarilo zobraziť.</div>';};
+     body.appendChild(img);
    }
-   try{
-     if(w){
-       if(String(data).startsWith('data:image')){
-         w.document.open();
-         w.document.write('<!doctype html><html><head><title>Prihláška</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#111;display:flex;justify-content:center;align-items:flex-start"><img src="'+data+'" style="max-width:100%;height:auto"></body></html>');
-         w.document.close();
-       }else{
-         w.location.href=data;
-       }
-       return;
-     }
-   }catch(e){}
-   // Ak popup zablokuje prehliadač, skúsime ešte priamu navigáciu.
-   try{ window.location.href=data; }catch(e){ toast(name||'Prihláška'); }
+   viewer.appendChild(body);
+   viewer.addEventListener('click',e=>{if(e.target===viewer)viewer.remove();});
+   document.body.appendChild(viewer);
  };
- // Lokálna kópia má prednosť.
  let data=m.applicationFile||'';
  let name=m.applicationFileName||'Prihláška';
- if(data){ openData(data,name); return; }
+ if(data){renderApplication(data,name);return;}
  // Na druhom zariadení môže byť súbor iba v spoločnom cloude.
  try{
-   if(db && typeof db.collection==='function'){
+   if(typeof db!=='undefined' && db && typeof db.collection==='function'){
      const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
      const raw=doc.exists?doc.data()?.[MEMBER_APPLICATION_FILES_KEY]:null;
      let files=raw;
-     if(typeof raw==='string'){
-       try{files=JSON.parse(raw);}catch(e){files=null;}
-     }
-     const f=files && files[String(id)];
+     if(typeof raw==='string'){try{files=JSON.parse(raw);}catch(e){files=null;}}
+     const f=files&&files[String(id)];
      if(f&&f.data){
        memberApplicationFiles[String(id)]=f;
-       persistMemberApplicationFiles();
+       try{persistMemberApplicationFiles();}catch(e){}
        m.application=true;
        m.applicationFile=f.data;
        m.applicationFileName=f.name||name;
-       openData(f.data,f.name||name);
+       renderApplication(f.data,f.name||name);
        return;
      }
    }
- }catch(e){ console.warn('Guard Trainer: načítanie prihlášky z cloudu zlyhalo',e); }
- if(w){ try{w.close();}catch(e){} }
+ }catch(e){console.warn('Guard Trainer: načítanie prihlášky z cloudu zlyhalo',e);}
  toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');
 }
 

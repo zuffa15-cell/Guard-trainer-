@@ -24,6 +24,13 @@ let cloudEnabled = false;
 let syncEnabled = false;
 let isApplyingRemote = false;
 let lastCloudUpdate = 0;
+// v895: Aplikácia nesmie vykresliť lokálnu/starú dochádzku skôr, než
+// príde prvý aktuálny stav zo spoločného cloudu. Na pomalom mobile sa
+// predtým najprv zobrazil starý localStorage a až po ručnom veľkom refreshi
+// bol viditeľný správny cloudový stav.
+let cloudInitialSnapshotReady = false;
+let cloudInitialSnapshotReceived = false;
+let cloudInitialWaitStarted = false;
 
 try {
   firebase.initializeApp(firebaseConfig);
@@ -83,6 +90,10 @@ function initCloudSync(){
     }
     
     console.log("📥 Prišla zmena z cloudu");
+    // Toto je prvý potvrdený snapshot spoločnej databázy. Označ ho ešte
+    // pred ďalším UI spracovaním, aby showApp vedel, že môže bezpečne
+    // vykresliť aktuálne dáta.
+    cloudInitialSnapshotReceived = true;
     let changed = false;
     isApplyingRemote = true;
     try {
@@ -104,6 +115,7 @@ function initCloudSync(){
     } finally {
       isApplyingRemote = false;
     }
+    cloudInitialSnapshotReady = true;
 
         if(changed) {
       window.dispatchEvent(new Event('cloud-sync-update'));
@@ -161,9 +173,15 @@ function initCloudSync(){
   // 2. Ak je cloud prázdny, nahraj lokálne dáta (len raz)
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
     if(!doc.exists){
+      // Prázdny cloud = lokálne dáta sú v tejto chvíli zdrojom pravdy.
+      cloudInitialSnapshotReceived = true;
+      cloudInitialSnapshotReady = true;
       console.log("Cloud prázdny - nahrávam lokálne dáta");
       pushToCloud(true);
     }
+  }).catch(()=>{
+    // Sieť nie je dostupná. Po maximálnom čakacom čase dovolíme aplikácii
+    // pokračovať z lokálnych dát namiesto nekonečného splashu.
   });
 
   // v846: staré cloudové member kľúče sa NESMÚ migrovať.
@@ -12296,6 +12314,24 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   function app(){return document.querySelector('.app')}
   function splash(){return document.getElementById('gtSplashV319')||document.getElementById('gtSplash')||document.querySelector('[id*="Splash"]')}
   function showApp(){
+    // Po prihlásení počkaj na prvý Firebase snapshot. Bez tohto kroku sa na
+    // prvý pohľad zobrazí stará dochádzka z localStorage a cloud ju dorovná
+    // až neskôr; používateľ potom musí robiť veľký refresh.
+    // Maximum je 5 sekúnd, takže pri výpadku internetu aplikácia nezostane
+    // visieť na splash obrazovke.
+    if(typeof cloudInitialSnapshotReady!=='undefined' && !cloudInitialSnapshotReady){
+      if(!cloudInitialWaitStarted){
+        cloudInitialWaitStarted=true;
+        window._gtCloudWaitStartedAt=Date.now();
+      }
+      const elapsed=Date.now()-Number(window._gtCloudWaitStartedAt||Date.now());
+      if(elapsed<5000){
+        setTimeout(showApp,150);
+        return;
+      }
+      console.warn('Firebase prvý snapshot neprišiel do 5 s – pokračujem z lokálnych dát');
+      cloudInitialSnapshotReady=true;
+    }
     console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');
     localStorage.setItem('gt-auth-initialized','true');
 

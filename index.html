@@ -3392,6 +3392,11 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 }
 .member-delete-btn:active{background:#dc2626;color:#fff}
 </style>
+<style id="gt-topbar-logged-user-v902">
+.topbar .brand.gt-brand-with-user{display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:1px!important;line-height:1.05!important;}
+.topbar .brand.gt-brand-with-user .logged-user-small{display:block!important;font-size:10px!important;font-weight:500!important;letter-spacing:.15px!important;opacity:.72!important;line-height:1.1!important;white-space:nowrap!important;max-width:70vw!important;overflow:hidden!important;text-overflow:ellipsis!important;}
+@media(max-width:420px){.topbar .brand.gt-brand-with-user{font-size:23px!important}.topbar .brand.gt-brand-with-user .logged-user-small{font-size:9px!important;max-width:68vw!important;}}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -3590,7 +3595,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 </div>
 <div class="app">
 <header class="topbar home-topbar">
-  <div class="brand home-brand">GUARD TRAINER<span class="logged-trainer-name" data-logged-trainer></span></div>
+  <div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small" data-logged-trainer></span></div>
 </header>
 
 <main class="content">
@@ -4519,7 +4524,7 @@ function renderHeadHomeList(title,rows,kind){
   }catch(e){}
   const app=document.querySelector('.app');
   const body=kind==='new'?rows.map(m=>`<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${m.memberSince||m.newMemberDate||'—'}</span></div>`).join(''):rows.map(m=>{const d=headHomeLastVisit(m);return `<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${d?d.toLocaleDateString('sk-SK'):'Žiadna návšteva'}</span></div>`}).join('');
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
 
 function getHeadHomeAttendancePaymentTotals(month,year){
@@ -4587,13 +4592,21 @@ function renderHeadHome(){
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
   const birthdayRows=birthdays.map(m=>`<div class="birthday-row"><span class="birthday-name">${m.surname} ${m.name} <strong class="birthday-age">— ${m.age} rokov</strong></span><span class="birthday-group">${headHomeGroupShort((m.groups||[m.group])[0])}</span><span class="birthday-date">${m.next.getDate()}. ${m.next.getMonth()+1}.</span></div>`).join('');
-  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand">GUARD TRAINER<span class="logged-trainer-name">${getLoggedTrainerDisplayName()}</span></div></header><main class="content head-home-dashboard">
+  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content head-home-dashboard">
   <section class="head-welcome-card"><div class="welcome-small">${greeting}</div><div class="welcome-big">HLAVNÝ TRÉNER</div><div class="welcome-date">${t.day}. ${skMonths[t.month-1]} ${t.year}</div></section>
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
   <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
   <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
   </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+}
+function getTopbarLoggedUserLabel(){
+  try{
+    const name=String(getCurrentTrainerDisplayName()||getLoggedTrainerDisplayName()||'').trim();
+    if(isAdmin()) return 'Administrátor';
+    if(isHeadTrainer()) return name ? `Hlavný tréner ${name}` : 'Hlavný tréner';
+    return name ? `Tréner ${name}` : '';
+  }catch(e){ return ''; }
 }
 function getLoggedTrainerDisplayName(){
   try{
@@ -4624,8 +4637,8 @@ function renderHome(){
     .filter((g,i,a)=>a.findIndex(x=>String(x.code).toUpperCase()===String(g.code).toUpperCase()&&x.time===g.time&&x.name===g.name)===i);
   const items=filterHomeItemsForCurrentRole(allHomeItems).sort((a,b)=>{const ta=String(a.time||'').match(/(\d{1,2}):(\d{2})/);const tb=String(b.time||'').match(/(\d{1,2}):(\d{2})/);const ma=ta ? Number(ta[1])*60+Number(ta[2]) : 9999;const mb=tb ? Number(tb[1])*60+Number(tb[2]) : 9999;return ma-mb || String(a.code||'').localeCompare(String(b.code||''),'sk',{numeric:true,sensitivity:'base'}) || String(a.name||'').localeCompare(String(b.name||''),'sk');});
   let html=HOME_HTML;
-  html=html.replace('<div class="brand">GUARD TRAINER</div>',
-    `<div class="brand home-brand">GUARD TRAINER<span class="logged-trainer-name">${getLoggedTrainerDisplayName()}</span></div>`);
+  html=html.replace('<div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>',
+    `<div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>`);
   html=html.replace(/<button class="menu"[^>]*>☰<\/button>/, '');
   html=html.replace(/<div class="date">[\s\S]*?<\/div>/,`<div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>`);
   const listHtml=items.length ? items.map(g=>{const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};const homeDate=appToday().iso;const cancelled=isTrainingCancelled(homeDate,g.code,g.time,g.name);const headInactive = isHeadTrainer();return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:'${g.code}',name:'${String(g.name||'').replace(/'/g,"\\'")}',substitutionInactive:${!!g.substitutionInactive},substitutionBy:'${String(g.substitutionBy||'').replace(/'/g,"\\'")}',scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`}" data-group-code="${g.code}" data-group-name="${g.name}"><div class="badge ${g.code.toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}${g.substitutionLabel?`<small class="sub-home-label">${g.substitutionLabel}${g.substitutionBy?` · ${g.substitutionBy}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${g.time}<br><i>⌖</i>${g.location||'Watsonova 4'}${g.trainer?`<br><i>♟</i>${g.trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;}).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;
@@ -4643,7 +4656,7 @@ function renderCalendar(){
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const currentMonthLabel=monthNames[selectedCalendarMonth]+' '+selectedCalendarYear;
   app.innerHTML=`
-    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand">GUARD TRAINER</div></header>
+    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
     <main class="content">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">▣</span> KALENDÁR</div>
@@ -5192,7 +5205,7 @@ function renderTrainers(){
  const app=document.querySelector('.app');
  const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainers-page">
   <div class="trainer-head"><div><span class="trainer-head-icon">♟</span><div><h2>TRÉNERI</h2><small>${isAdmin()?'Správa trénerov a ich oprávnení':'Prehľad všetkých trénerov – iba na čítanie'}</small></div></div>${isAdmin()?`<button onclick="newTrainer()">＋ PRIDAŤ TRÉNERA</button>`:''}</div>
   <div class="trainer-stats"><div><b>${trainerList.length}</b><span>Tréneri spolu</span></div><div><b>${active}</b><span>Aktívni</span></div><div><b>0</b><span>Platnosť čoskoro vyprší</span></div><div><b>0</b><span>Platnosť vypršala</span></div></div>
@@ -5242,7 +5255,7 @@ function renderTrainerProfile(id){
  }
  const app=document.querySelector('.app');
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainer-profile-page">
   <div class="profile-title-row">
     <div><h2>PROFIL TRÉNERA</h2><small>Osobné údaje, licencia a oprávnenia</small></div>
@@ -5418,7 +5431,7 @@ function renderInviteTrainer(){
   const app=document.querySelector('.app');
   const groups=getAdminCreatedGroups();
   app.innerHTML=`
-   <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand">GUARD TRAINER</div></header>
+   <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
    <main class="content trainer-profile-page">
     <div class="profile-title-row"><div><h2>VYTVORIŤ TRÉNERA</h2><small>Vyplň údaje trénera a odošli mu pozvánku</small></div></div>
     <section class="profile-box">
@@ -5547,7 +5560,7 @@ function renderNewTrainerDirect(){
  const groups=getAdminCreatedGroups();
  const templateGroups=['A','B','C','D','D+'].filter(c=>groups.some(g=>String(g[0]).toUpperCase()===c));
  document.querySelector('.app').innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content trainer-profile-page">
    <div class="profile-title-row"><div><h2>NOVÝ TRÉNER</h2><small>Vytvorené podľa vzoru „VZOROVÝ TRÉNER“</small></div></div>
    <section class="profile-box"><h3>OSOBNÉ ÚDAJE</h3><div class="profile-grid">
@@ -5998,7 +6011,7 @@ function renderMembers(){
  const active=membersData.length;
  const unpaidM=membersData.filter(m=>!m.membership).length, unpaidR=membersData.filter(m=>!m.registration).length, debts=membersData.filter(m=>m.debt>0).length;
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content members-page">
   <div class="members-head"><div><h2>ČLENOVIA <span class="member-count">(${active})</span></h2><small>Správa členov klubu</small></div><button onclick="createMemberFromMembers()">＋ NOVÝ ČLEN</button></div>
   <div class="member-filters"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
@@ -6896,7 +6909,7 @@ function openRoleTesting(){
   const app=document.querySelector('.app');
   if(!app) return;
   const options=[['admin','ADMIN','Celý pohľad administrátora'],['head','HLAVNÝ TRÉNER','Pohľad hlavného trénera'],['trainer1','TRÉNER 1','Pohľad trénera 1'],['trainer2','TRÉNER 2','Pohľad trénera 2']];
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><div class="more-page-title"><div class="section-title">🧪 TESTOVANIE APLIKÁCIE</div><small>Administrátor si môže vyskúšať jednotlivé pohľady.</small></div><div class="more-buttons">${options.map(o=>`<button type="button" class="more-menu-item role-test-button" data-test-role="${o[0]}" onclick="return startAdminTestRole('${o[0]}')"><span><b>${o[1]}</b><small>${o[2]}</small></span>›</button>`).join('')}<button class="more-menu-item" onclick="exitAdminTesting()"><span><b>UKONČIŤ TESTOVANIE</b><small>Návrat na administrátora</small></span>›</button></div></main>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="more-page-title"><div class="section-title">🧪 TESTOVANIE APLIKÁCIE</div><small>Administrátor si môže vyskúšať jednotlivé pohľady.</small></div><div class="more-buttons">${options.map(o=>`<button type="button" class="more-menu-item role-test-button" data-test-role="${o[0]}" onclick="return startAdminTestRole('${o[0]}')"><span><b>${o[1]}</b><small>${o[2]}</small></span>›</button>`).join('')}<button class="more-menu-item" onclick="exitAdminTesting()"><span><b>UKONČIŤ TESTOVANIE</b><small>Návrat na administrátora</small></span>›</button></div></main>`;
 }
 function startAdminTestRole(role){
   const allowed=['admin','head','trainer1','trainer2'];
@@ -6954,7 +6967,7 @@ function openScheduleManager(){
  const schedules=getSavedSchedules();
  const app=document.querySelector('.app');
  app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content schedule-page">
    <div class="section-title">📅 ROZVRH</div>
    <small>Uložené tréningy – admin ich môže upraviť alebo vymazať.</small>
@@ -7078,7 +7091,7 @@ function openCreateSchedule(editId=null){
  app.innerHTML=`
   <header class="topbar">
    <button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button>
-   <div class="brand">GUARD TRAINER</div>
+   <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
   </header>
   <main class="content schedule-page">
    <div class="section-title">📅 VYTVORIŤ ROZVRH</div>
@@ -7194,7 +7207,7 @@ function renderMore(){
  app.innerHTML=`
    <header class="topbar">
      <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-     <div class="brand">GUARD TRAINER</div>
+     <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
    </header>
    <main class="content">
      <div class="more-page-title">
@@ -7530,7 +7543,7 @@ function renderCancelledAttendance(){
   const app=document.querySelector('.app');
   const color=getGroupColor(attendanceState.group,'gold');
   app.innerHTML=`
-    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand">GUARD TRAINER</div></header>
+    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
     <main class="content attendance-page cancelled-attendance-page">
       <div class="calendar-head"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
         <button class="month-btn" onclick="openAttendanceDatePicker()">${formatAttendanceDate(attendanceState.date)}⌄</button></div>
@@ -7592,7 +7605,7 @@ function attendanceChooser(){
       <div class="group-people"><b>${getGroupMemberCount(code)}</b><span>členov</span></div>
     </article>`;
   }).join(''):`<div class="empty-state"><b>DNES NIE JE NAPLANOVANÝ ŽIADNY TRÉNING</b><small>Dochádzka sa dá otvoriť iba pre aktuálne naplánovaný tréning.</small></div>`;
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast" class="toast"></div>`;
 }
 
 function applyBillingSnapshotToAttendance(){
@@ -7678,7 +7691,7 @@ function attendance(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand">GUARD TRAINER</div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content attendance-page ${(isAttendanceFullyLocked()||isHeadTrainer())?'attendance-readonly':''}">
       <div class="calendar-head">
@@ -9114,7 +9127,7 @@ function trainingBilling(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand">GUARD TRAINER</div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content billing-page">
       <div class="section-title">VYÚČTOVANIE TRÉNINGU</div>
@@ -9355,7 +9368,7 @@ function renderYearlyBilling(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand">GUARD TRAINER</div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content yearly-billing-page">
       <div class="monthly-trainer-card">
@@ -9591,7 +9604,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'MÁJ';
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page">
     <div class="monthly-trainer-card">
       <div class="trainer-avatar">${String(trainerName||'T').charAt(0)}</div>
@@ -9660,7 +9673,7 @@ function showHeadTrainerDetailSummary(trainerName,month=appToday().month,year=ap
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[Number(month)-1]||'';
   const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
   <div class="section-title monthly-title">▣ &nbsp; SÚHRN – <b>${mName} ${year}</b></div>
   <div class="head-detail-summary">
@@ -9714,7 +9727,7 @@ function renderHeadTrainerYearFor(trainerName){
     const unfinished=i===currentMonth-1;
     return `<tr class="${unfinished?'year-unfinished':''}"><td>${name}</td><td>${amount} €</td></tr>`;
   }).join('');
-  app.innerHTML=`<header class="topbar"><button type="button" class="menu" onclick="window.renderHeadTrainerBilling(); return false;" aria-label="Späť na ročné vyúčtovanie">‹</button><div class="brand">GUARD TRAINER</div></header>
+  app.innerHTML=`<header class="topbar"><button type="button" class="menu" onclick="window.renderHeadTrainerBilling(); return false;" aria-label="Späť na ročné vyúčtovanie">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page annual-trainer-compact"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
   <div class="section-title monthly-title">📊 ROČNÉ VYÚČTOVANIE – <b>${year}</b></div>
   <div class="year-trainer-name">${trainerName}</div>
@@ -10123,7 +10136,7 @@ function renderHeadTrainerBilling(){
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'';
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing">
     <section class="head-profile head-profile-main"><div class="head-avatar">${headName.charAt(0)}</div><div class="head-trainer-title"><b>HLAVNÝ TRÉNER</b><span>${headName}</span></div><button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button></section>
     <div class="head-title-row"><h2>▣ &nbsp; VYÚČTOVANIE – <b>${mName} ${year}</b></h2><div class="head-month-nav"><button onclick="shiftHeadTrainerBillingMonth(-1)" aria-label="Predchádzajúci mesiac">‹</button><button onclick="resetHeadTrainerBillingMonth()" aria-label="Aktuálny mesiac">▣</button><button onclick="shiftHeadTrainerBillingMonth(1)" aria-label="Nasledujúci mesiac">›</button></div></div>
@@ -10857,7 +10870,7 @@ function renderTrainerYearDetail(trainerName){
   const vals=approved[trainerName]||[];
   const total=vals.reduce((a,v)=>a+v,0);
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content trainer-year-approved">
     <section class="head-profile"><div class="head-avatar">T</div><div><b>${trainerName}</b><span>TRÉNER</span></div><div class="head-groups"><small>SKUPINY</small><div><i>B</i><i>D</i></div></div></section>
     <div class="section-title monthly-title">▣ &nbsp; ROČNÉ VYÚČTOVANIE – 2026</div>
@@ -10999,7 +11012,7 @@ function renderHeadTrainerYear(view='trainers'){
   const allRows=months.map((m,i)=>`<tr><td>${m}</td><td class="club-amount">${money(sums[i])}</td></tr>`).join('');
 
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing annual-screen">
     <section class="head-profile head-profile-main">
       <div class="head-avatar">M</div>
@@ -11401,7 +11414,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand">GUARD TRAINER</div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content monthly-billing-page">
       <div class="monthly-trainer-card">
@@ -11561,7 +11574,7 @@ function renderHeadTrainerAttendanceReadOnly(){
   const app=document.querySelector('.app'); if(!app)return false;
   const code=String(attendanceState.group||'').trim().toUpperCase();
   const members=(membersData||[]).filter(m=>(Array.isArray(m.groups)?m.groups:[m.group]).some(g=>String(g||'').trim().toUpperCase()===code));
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content attendance-page attendance-readonly">
    <div class="calendar-head"><div class="section-title">☑ DOCHÁDZKA</div><div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div></div>
    <div class="att-group"><span>${code}</span><b>${attendanceState.name||code}</b></div>
@@ -11823,7 +11836,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const medals=['🥇','🥈','🥉'];
 
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content stats-page">
     <div class="section-title">📊 ŠTATISTIKY – CELÝ KLUB</div>
     <div class="stats-period">

@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v951: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -96,6 +96,38 @@ function initCloudSync(){
       // _updatedAt môže byť vyšší, hoci admin-edit pre konkrétny tréning
       // je novší.
       let newerAttendance=false;
+      let newerMembers=false;
+      // Členovia majú vlastný timestamp podľa ID. Globálny _updatedAt nesmie
+      // zablokovať prijatie nového člena z administrátorského zariadenia.
+      try{
+        const remoteMembers=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];
+        const remoteOrder=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};
+        const localOrder=originalGetItem('gt-member-save-order-v1')?JSON.parse(originalGetItem('gt-member-save-order-v1')):{};
+        const localMembersRaw=originalGetItem('gt-members-real-2026-v847');
+        const localMembers=localMembersRaw?JSON.parse(localMembersRaw):[];
+        const localById=new Map(Array.isArray(localMembers)?localMembers.filter(m=>m&&m.id!=null).map(m=>[String(m.id),m]):[]);
+        const localDeleteRaw=originalGetItem('gt-member-delete-order-v1');
+        const localDelete=localDeleteRaw?JSON.parse(localDeleteRaw):{};
+        // Vymazanie člena môže byť v cloude reprezentované iba tombstonom
+        // (člen už v remoteMembers nie je). Preto musí globálny stale-check
+        // kontrolovať aj vzdialený delete timestamp. Inak tréner s novším
+        // lokálnym _updatedAt zahodil adminovo vymazanie a člena nechal visieť.
+        const remoteDeleteRaw=data['gt-member-delete-order-v1'];
+        const remoteDelete=remoteDeleteRaw?JSON.parse(remoteDeleteRaw):{};
+        if(remoteDelete && typeof remoteDelete==='object'){
+          newerMembers=Object.keys(remoteDelete).some(id=>
+            Number(remoteDelete[id]||0)>Number(localDelete[id]||0)
+          );
+        }
+        if(!newerMembers && Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>{
+          if(!m||m.id==null) return false;
+          const id=String(m.id), local=localById.get(id);
+          if(Number(localDelete[id]||0)>0 && Number(remoteOrder[id]||0)<=Number(localDelete[id]||0)) return false;
+          if(!local) return true;
+          if(Number(remoteOrder[id]||0)>Math.max(Number(localOrder[id]||0),Number(localDelete[id]||0))) return true;
+          try{return JSON.stringify(local)!==JSON.stringify(m);}catch(e){return false;}
+        });
+      }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
         const localAdmin=originalGetItem('gt-attendance-admin-edits-v1')?JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')):{};
@@ -112,8 +144,9 @@ function initCloudSync(){
           });
         }
       }catch(e){}
-      if(!newerAttendance) return;
-      console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
+      if(!newerAttendance && !newerMembers) return;
+      if(newerMembers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších členov – prijímam');
+      else console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
     }
     
     console.log("📥 Prišla zmena z cloudu");
@@ -153,6 +186,7 @@ function initCloudSync(){
       } catch(e){}
 
       let memberSyncHandled=false;
+      let memberDataChanged=false;
       SYNC_KEYS.forEach(k=>{
         if(isGTLocalAuthKey(k)) return;
         if((k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') && memberSyncHandled) return;
@@ -242,6 +276,40 @@ function initCloudSync(){
           if(mergedRaw!==originalGetItem(k)){ originalSetItem(k,mergedRaw); changed=true; }
           return;
         }
+        if(k==='gt-trainers'){
+          // TRÉNERI: union lokálnych a cloudových profilov, nie slepé prepísanie.
+          let localTs=[], remoteTs=[];
+          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localTs=p; }catch(e){}
+          try{ const p=data[k]?JSON.parse(data[k]):[]; if(Array.isArray(p)) remoteTs=p; }catch(e){}
+          const norm=n=>String(n||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+          const score=t=>!t||typeof t!=='object'?-1:Object.keys(t).filter(x=>t[x]!==''&&t[x]!=null).length+(t.loginPassword?20:0)+(Array.isArray(t.groups)?t.groups.length:0);
+          const merged=[], byName=new Map(), byId=new Map();
+          const put=t=>{
+            if(!t||typeof t!=='object') return;
+            const name=norm(t.full||t.name), id=String(t.id??''); let i=-1;
+            if(name&&byName.has(name)) i=byName.get(name); else if(id&&byId.has(id)) i=byId.get(id);
+            if(i<0){ i=merged.length; merged.push({...t}); if(name)byName.set(name,i); if(id)byId.set(id,i); return; }
+            const cur=merged[i]; merged[i]=score(t)>score(cur)?{...cur,...t}:{...t,...cur};
+          };
+          localTs.forEach(put); remoteTs.forEach(put);
+          const raw=JSON.stringify(merged);
+          if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
+          try{ if(Array.isArray(trainersData)){ trainersData.splice(0,trainersData.length,...merged); } }catch(e){}
+          try{ ensureKnownRealTrainerNames(); }catch(e){}
+          return;
+        }
+        if(k==='gt-trainer-login-passwords'){
+          let l={},r={};
+          try{l=JSON.parse(originalGetItem(k)||'{}')||{};}catch(e){}
+          try{r=JSON.parse(data[k]||'{}')||{};}catch(e){}
+          const m={...l};
+          Object.keys(r).forEach(id=>{
+            if(!m[id]) m[id]=r[id];
+            else { const ls=Object.keys(m[id]||{}).length+(m[id]?.password?20:0), rs=Object.keys(r[id]||{}).length+(r[id]?.password?20:0); if(rs>=ls)m[id]={...m[id],...r[id]}; }
+          });
+          const raw=JSON.stringify(m); if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
+          return;
+        }
         if(k==='gt-attendance-admin-edits-v1'){
           // Samostatný register úprav administrátora. Slúži iba na to,
           // aby zariadenie trénera vedelo, že konkrétny deň/skupinu zmenil
@@ -271,6 +339,15 @@ function initCloudSync(){
           if(raw!==localRaw){ originalSetItem(k,raw); changed=true; }
           return;
         }
+        if(k==='gt-member-delete-order-v1'){
+          let localDel={}, remoteDel={};
+          try{const x=originalGetItem(k);const p=x?JSON.parse(x):{};if(p&&typeof p==='object')localDel=p;}catch(e){}
+          try{const p=data[k]?JSON.parse(data[k]):{};if(p&&typeof p==='object')remoteDel=p;}catch(e){}
+          const merged={...localDel};
+          Object.keys(remoteDel).forEach(id=>merged[id]=Math.max(Number(merged[id]||0),Number(remoteDel[id]||0)));
+          const raw=JSON.stringify(merged); if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
+          return;
+        }
         if(k==='gt-member-application-files-v1'){
           let localObj={}, remoteObj={};
           try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localObj=p; }catch(e){}
@@ -281,37 +358,33 @@ function initCloudSync(){
           memberApplicationFiles=merged; applyMemberApplicationFiles(); return;
         }
         if(k==='gt-member-save-order-v1'){
-          // Každý člen má vlastný čas poslednej zmeny. Zabránime tomu,
-          // aby starší cloudový zoznam prepísal novšie údaje člena
-          // (napr. dátum narodenia, telefón alebo prihlášku).
-          let localOrder={}, remoteOrder={};
-          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localOrder=p; }catch(e){}
-          try{ const p=data[k]?JSON.parse(data[k]):{}; if(p&&typeof p==='object') remoteOrder=p; }catch(e){}
-          let localMembers=[], remoteMembers=[];
-          try{ const x=originalGetItem('gt-members-real-2026-v847'); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localMembers=p; }catch(e){}
+          // ČLENOVIA: spoločný cloudový zoznam je jediný zdroj pravdy.
+          // Lokálne členy sa tu už NESMÚ pridávať späť do zoznamu, pretože
+          // práve to spôsobovalo, že každé zariadenie malo svojich vlastných
+          // členov. Nový člen sa do cloudu zapisuje transakciou v
+          // syncMemberChangeToSharedCloud(); po prijatí snapshotu zobrazíme
+          // presne ten istý spoločný zoznam na všetkých zariadeniach.
+          let remoteMembers=[], remoteOrder={}, remoteDelete={};
           try{ const p=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[]; if(Array.isArray(p)) remoteMembers=p; }catch(e){}
-          remoteMembers.forEach(m=>{if(m){delete m.applicationFile;delete m.applicationFileName;}});
-          localMembers.forEach(m=>{if(m&&m.id!=null){const f=memberApplicationFiles[String(m.id)];if(f&&f.data){m.applicationFile=f.data;m.applicationFileName=f.name||'';}}});
-          const byId=new Map();
-          localMembers.forEach(m=>{ if(m&&m.id!=null) byId.set(String(m.id),m); });
-          remoteMembers.forEach(m=>{
-            if(!m||m.id==null)return;
-            const id=String(m.id), l=byId.get(id);
-            const lt=Number(localOrder[id]||0), rt=Number(remoteOrder[id]||0);
-            if(!l || rt>=lt) byId.set(id,m);
-          });
-          // Členov, ktorí existujú iba lokálne, nikdy nemaž kvôli staršiemu
-          // snapshotu cloudu.
-          const mergedMembers=Array.from(byId.values());
-          const mergedOrder={};
-          new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>{
-            mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0));
-          });
-          const membersRaw=JSON.stringify(mergedMembers);
-          const orderRaw=JSON.stringify(mergedOrder);
-          if(membersRaw!==originalGetItem('gt-members-real-2026-v847')){ originalSetItem('gt-members-real-2026-v847',membersRaw); changed=true; }
+          try{ const p=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{}; if(p&&typeof p==='object') remoteOrder=p; }catch(e){}
+          try{ const p=data['gt-member-delete-order-v1']?JSON.parse(data['gt-member-delete-order-v1']):{}; if(p&&typeof p==='object') remoteDelete=p; }catch(e){}
+          const cleanMembers=remoteMembers.filter(m=>{
+            if(!m||m.id==null) return false;
+            return Number(remoteDelete[String(m.id)]||0)<=0;
+          }).map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;});
+          const membersRaw=JSON.stringify(cleanMembers);
+          const orderRaw=JSON.stringify(remoteOrder);
+          const deleteRaw=JSON.stringify(remoteDelete);
+          if(membersRaw!==originalGetItem('gt-members-real-2026-v847')){ originalSetItem('gt-members-real-2026-v847',membersRaw); changed=true; memberDataChanged=true; }
           if(orderRaw!==originalGetItem(k)){ originalSetItem(k,orderRaw); changed=true; }
+          if(deleteRaw!==originalGetItem('gt-member-delete-order-v1')){ originalSetItem('gt-member-delete-order-v1',deleteRaw); changed=true; }
           memberSyncHandled=true;
+          return;
+        }
+        if((k==='gt-attendance' || k==='gt-training-attendance' || k==='gt-trainer-login-passwords') && !String(data[k]||'').trim() && String(originalGetItem(k)||'').trim()) return;
+        if(/^gt-trainers-v\d+$/.test(k)){
+          const raw=JSON.stringify(mergeTrainerRegistersSafe(originalGetItem(k),data[k]));
+          if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
           return;
         }
         if(originalGetItem(k) !== data[k]) {
@@ -323,7 +396,8 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        if(/^gt-trainers-v\d+$/.test(k)) return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -338,6 +412,22 @@ function initCloudSync(){
       setTimeout(()=>pushToCloud(true), 100);
     }
     try{ applyMemberApplicationFiles(); }catch(e){}
+    try{ ensureKnownRealTrainerNames(); }catch(e){}
+    try{ syncTrainerGroupsFromSchedules(); }catch(e){}
+    // v970: UI aj cloud používajú aj historický kľúč gt-trainers. Po každom
+    // snapshote ho zosúladíme s hlavným v395 registrom, aby sa profily
+    // Viktor Žuffa, Peter Onuščák a Anatolii Kuhal nemohli stratiť.
+    try{
+      const raw395=originalGetItem(TRAINERS_STORAGE_KEY)||'[]';
+      const merged=mergeTrainerRegistersSafe(raw395,originalGetItem('gt-trainers')||'[]');
+      originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(merged));
+      originalSetItem('gt-trainers',JSON.stringify(merged));
+      if(typeof trainersData!=='undefined'){ trainersData.splice(0,trainersData.length,...merged); }
+      ensureKnownRealTrainerNames();
+      syncTrainerGroupsFromSchedules();
+      originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(trainersData));
+      originalSetItem('gt-trainers',JSON.stringify(trainersData));
+    }catch(e){}
     cloudInitialSnapshotReady = true;
 
         if(changed) {
@@ -383,6 +473,16 @@ function initCloudSync(){
           }
         }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
+        // Po cloudovom pridaní člena treba obnoviť aj otvorený attendanceState.members.
+        // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
+        try{
+          if(memberDataChanged && location.hash==='#attendance' && typeof attendance==='function'){
+            setTimeout(()=>{try{ attendance(); }catch(e){ console.warn('Member cloud refresh failed:',e); }},0);
+          }
+          if(memberDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
+            setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member list cloud refresh failed:',e); }},0);
+          }
+        }catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
         // Cloud synchronizácia nesmie meniť otvorenú obrazovku na tomto zariadení.
         // Dáta sa iba aktualizujú na pozadí; navigáciu ovláda výhradne používateľ.
@@ -452,6 +552,16 @@ function initCloudSync(){
     syncEnabled = true;
 }
 
+function mergeTrainerRegistersSafe(localRaw, remoteRaw){
+  let L=[],R=[];
+  try{const x=localRaw?JSON.parse(localRaw):[];if(Array.isArray(x))L=x;}catch(e){}
+  try{const x=remoteRaw?JSON.parse(remoteRaw):[];if(Array.isArray(x))R=x;}catch(e){}
+  const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const out=[]; const byId=new Map(); const byName=new Map();
+  const add=t=>{if(!t||typeof t!=='object')return;const id=t.id!=null?String(t.id):'';const n=norm(t.full||t.name);if(id&&byId.has(id)){const i=byId.get(id);out[i]={...out[i],...t};return;}if(n&&byName.has(n)){const i=byName.get(n);out[i]={...out[i],...t};return;}const i=out.length;out.push({...t});if(id)byId.set(id,i);if(n)byName.set(n,i);};
+  L.forEach(add);R.forEach(add);return out;
+}
+
 function pushToCloud(force = false){
   if(!db || !cloudEnabled) return;
   // Ak práve spracúvame prichádzajúci cloud snapshot, zápis administrátora
@@ -487,12 +597,64 @@ function pushToCloud(force = false){
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
     try{
       const remote=doc.exists?doc.data():{};
+      // TRÉNERI: zlúč lokálnu a cloudovú kópiu, aby neúplné zariadenie nikdy
+      // neprepísalo reálnych trénerov v spoločnej databáze.
+      {
+        let localTs=[], remoteTs=[];
+        try{ const x=payload['gt-trainers']?JSON.parse(payload['gt-trainers']):[]; if(Array.isArray(x)) localTs=x; }catch(e){}
+        try{ const x=remote['gt-trainers']?JSON.parse(remote['gt-trainers']):[]; if(Array.isArray(x)) remoteTs=x; }catch(e){}
+        // Hlavný profilový register je gt-trainers-v395; zlúč ho tiež.
+        try{
+          const merged395=mergeTrainerRegistersSafe(originalGetItem(TRAINERS_STORAGE_KEY)||'[]',remote[TRAINERS_STORAGE_KEY]||'[]');
+          payload[TRAINERS_STORAGE_KEY]=JSON.stringify(merged395);
+          localTs=merged395;
+        }catch(e){}
+        const norm=n=>String(n||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+        const score=t=>!t||typeof t!=='object'?-1:Object.keys(t).filter(x=>t[x]!==''&&t[x]!=null).length+(t.loginPassword?20:0)+(Array.isArray(t.groups)?t.groups.length:0);
+        const merged=[], byName=new Map(), byId=new Map();
+        const put=t=>{
+          if(!t||typeof t!=='object') return;
+          const name=norm(t.full||t.name), id=String(t.id??''); let i=-1;
+          if(name&&byName.has(name)) i=byName.get(name); else if(id&&byId.has(id)) i=byId.get(id);
+          if(i<0){ i=merged.length; merged.push({...t}); if(name)byName.set(name,i); if(id)byId.set(id,i); return; }
+          const cur=merged[i]; merged[i]=score(t)>score(cur)?{...cur,...t}:{...t,...cur};
+        };
+        localTs.forEach(put); remoteTs.forEach(put);
+        payload['gt-trainers']=JSON.stringify(merged);
+      }
+      // Login register trénerov: union, nikdy neprázdni účty na inom zariadení.
+      {
+        let l={},r={}; try{l=JSON.parse(payload['gt-trainer-login-passwords']||'{}')||{};}catch(e){} try{r=JSON.parse(remote['gt-trainer-login-passwords']||'{}')||{};}catch(e){}
+        const m={...r,...l}; Object.keys(r).forEach(id=>{if(!l[id])m[id]=r[id];});
+        payload['gt-trainer-login-passwords']=JSON.stringify(m);
+      }
       const mergeJsonMaps=(localRaw,remoteRaw)=>{
         let l={},r={};
         try{const x=localRaw?JSON.parse(localRaw):{};if(x&&typeof x==='object')l=x;}catch(e){}
         try{const x=remoteRaw?JSON.parse(remoteRaw):{};if(x&&typeof x==='object')r=x;}catch(e){}
         return {l,r};
       };
+      // ČLENOVIA: zlúčenie po ID + tombstone pre vymazanie.
+      {
+        let localMembers=[], remoteMembers=[], localOrder={}, remoteOrder={}, localDel={}, remoteDel={};
+        try{const x=payload['gt-members-real-2026-v847']?JSON.parse(payload['gt-members-real-2026-v847']):[];if(Array.isArray(x))localMembers=x;}catch(e){}
+        try{const x=remote['gt-members-real-2026-v847']?JSON.parse(remote['gt-members-real-2026-v847']):[];if(Array.isArray(x))remoteMembers=x;}catch(e){}
+        try{localOrder=JSON.parse(payload['gt-member-save-order-v1']||'{}')||{};}catch(e){}
+        try{remoteOrder=JSON.parse(remote['gt-member-save-order-v1']||'{}')||{};}catch(e){}
+        try{localDel=JSON.parse(payload['gt-member-delete-order-v1']||'{}')||{};}catch(e){}
+        try{remoteDel=JSON.parse(remote['gt-member-delete-order-v1']||'{}')||{};}catch(e){}
+        const del={...remoteDel}; Object.keys(localDel).forEach(id=>del[id]=Math.max(Number(del[id]||0),Number(localDel[id]||0)));
+        const byId=new Map(); localMembers.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
+        remoteMembers.forEach(m=>{if(!m||m.id==null)return;const id=String(m.id);if(Number(del[id]||0)>0)return;const local=byId.get(id);const lt=Number(localOrder[id]||0),rt=Number(remoteOrder[id]||0);if(!local||rt>lt)byId.set(id,m);});
+        Object.keys(del).forEach(id=>{if(Number(del[id]||0)>0)byId.delete(id);});
+        payload['gt-members-real-2026-v847']=JSON.stringify(Array.from(byId.values()).map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;}));
+        const mergedOrder={}; new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0)));
+        payload['gt-member-save-order-v1']=JSON.stringify(mergedOrder); payload['gt-member-delete-order-v1']=JSON.stringify(del);
+      }
+
+      ['gt-attendance','gt-training-attendance'].forEach(k=>{
+        if(!String(payload[k]||'').trim() && String(remote[k]||'').trim()) payload[k]=remote[k];
+      });
       // Save-order timestampy: vždy zachovaj union oboch zariadení.
       {
         const {l,r}=mergeJsonMaps(payload['gt-attendance-save-order-v1'],remote['gt-attendance-save-order-v1']);
@@ -5486,6 +5648,42 @@ function persistTrainersData(){
   catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
 }
 
+/* v968 – REÁLNI TRÉNERI NESMÚ ZMIZNÚŤ. Obnova z rozvrhu je iba poistka;
+   dochádzka je samostatná podľa dátumu/skupiny a nikdy sa nemaže s profilom. */
+function ensureKnownRealTrainerNames(){
+  try{
+    const known=[
+      {full:'Viktor Žuffa',role:'TRÉNER'},
+      {full:'Peter Onuščák',role:'TRÉNER'},
+      {full:'Anatolii Kuhal',role:'TRÉNER'}
+    ];
+    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    let nextId=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1, changed=false;
+    known.forEach(k=>{
+      if(!(trainersData||[]).some(t=>norm(t.full||t.name)===norm(k.full))){
+        trainersData.push({id:nextId++,name:k.full,full:k.full,role:k.role,email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA',isTemplate:false});
+        changed=true;
+      }
+    });
+    if(changed) persistTrainersData();
+  }catch(e){}
+}
+(function recoverTrainersFromSchedules(){
+  try{
+    const schedules=JSON.parse(originalGetItem('gt-schedule')||'[]')||[];
+    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    let nextId=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1, changed=false;
+    const add=v=>{
+      const full=String(v||'').trim(); if(!full || /^(tr|éner|trener)\s*[12]$/i.test(full)) return;
+      if((trainersData||[]).some(t=>norm(t.full||t.name)===norm(full))) return;
+      trainersData.push({id:nextId++,name:full,full,role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA',isTemplate:false}); changed=true;
+    };
+    (Array.isArray(schedules)?schedules:[]).forEach(x=>{add(x.trainer);if(Array.isArray(x.trainers))x.trainers.forEach(add);});
+    if(changed) persistTrainersData();
+  }catch(e){}
+})();
+ensureKnownRealTrainerNames();
+
 /* v531 – synchronizácia priradenia tréner ↔ skupina.
    Zdrojom sú uložené rozvrhy (trainerIds + groupCode). Profil trénera
    sa automaticky doplní o skupiny, ku ktorým je v rozvrhu priradený. */
@@ -6223,6 +6421,70 @@ function persistMemberApplicationFiles(){
   catch(e){ console.warn('Guard Trainer: application files could not be persisted',e); }
 }
 const MEMBER_APPLICATION_CLOUD_COLLECTION='guard-trainer-applications';
+// v960: členovia majú aj samostatný Firestore kanál. Spoločný dokument
+// zostáva zachovaný ako kompatibilita, ale vytvorenie/úprava/vymazanie člena
+// sa už nespolieha iba na veľký spoločný snapshot.
+// v963: ČLENOVIA sú výhradne spoločný zoznam v guard-trainer-data/shared-db.
+// Nepoužívame druhú Firestore kolekciu. Zmena jedného člena sa zapisuje
+// transakčne do spoločného dokumentu, takže dve zariadenia nemôžu navzájom
+// prepísať svoje nové členstvo.
+async function syncMemberChangeToSharedCloud(member, deleted=false){
+  try{
+    if(!db || !member || member.id==null) return false;
+    const id=String(member.id);
+    const uid=firebase.auth().currentUser?.uid || 'unknown';
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    let stamp=Date.now();
+    try{
+      const so=JSON.parse(originalGetItem('gt-member-save-order-v1')||'{}')||{};
+      const de=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
+      stamp=deleted ? Number(de[id]||Date.now()) : Number(so[id]||Date.now());
+    }catch(e){}
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let members=[], saveOrder={}, deleteOrder={};
+      try{const x=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];if(Array.isArray(x))members=x;}catch(e){}
+      try{const x=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};if(x&&typeof x==='object')saveOrder=x;}catch(e){}
+      try{const x=data['gt-member-delete-order-v1']?JSON.parse(data['gt-member-delete-order-v1']):{};if(x&&typeof x==='object')deleteOrder=x;}catch(e){}
+      const byId=new Map();
+      members.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
+      if(deleted){
+        // Vymazanie je tombstone. Starší klient už tohto člena nesmie obnoviť.
+        deleteOrder[id]=Math.max(Number(deleteOrder[id]||0),stamp);
+        delete saveOrder[id];
+        byId.delete(id);
+      }else{
+        const deletedAt=Number(deleteOrder[id]||0);
+        const savedAt=Number(saveOrder[id]||0);
+        // DELETE má prednosť pred starým alebo rovnako starým SAVE.
+        if(deletedAt>0 && deletedAt>=stamp && deletedAt>=savedAt){
+          byId.delete(id);
+        }else{
+          const clean={...member}; delete clean.applicationFile; delete clean.applicationFileName;
+          byId.set(id,clean);
+          saveOrder[id]=stamp;
+          if(Number(deleteOrder[id]||0)<stamp) delete deleteOrder[id];
+        }
+      }
+      // Vždy odstráň všetky ID, ktoré majú aktívny tombstone.
+      Object.keys(deleteOrder).forEach(x=>{if(Number(deleteOrder[x]||0)>0)byId.delete(String(x));});
+      tx.set(ref,{
+        'gt-members-real-2026-v847':JSON.stringify(Array.from(byId.values())),
+        'gt-member-save-order-v1':JSON.stringify(saveOrder),
+        'gt-member-delete-order-v1':JSON.stringify(deleteOrder),
+        _lastUpdateBy:uid,
+        _updatedAt:Date.now()
+      },{merge:true});
+    });
+    console.log('☁️ Spoločný zoznam členov uložený',id,deleted?'DELETE':'SAVE');
+    return true;
+  }catch(e){
+    console.warn('Guard Trainer: shared member transaction failed',e);
+    return false;
+  }
+}
+
 async function saveApplicationFileToCloud(memberId, fileRec){
   try{
     if(!db || !fileRec || !fileRec.data) return false;
@@ -6276,7 +6538,20 @@ function persistMembersData(changedMemberId=null){
       });
     }
     localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
-    changedIds.forEach(id=>markMemberSaved(id));
+    changedIds.forEach(id=>{
+      // Každá zmena člena sa zapisuje do spoločného Firestore dokumentu transakčne.
+      // Toto je jediný zdroj synchronizácie zoznamu členov medzi zariadeniami.
+      const deletedAt = (()=>{
+        try{ const d=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{}; return Number(d[String(id)]||0); }catch(e){ return 0; }
+      })();
+      if(deletedAt>0){
+        const old=previous.find(m=>String(m?.id)===String(id));
+        if(old) syncMemberChangeToSharedCloud(old,true);
+      }else{
+        const saved=membersData.find(m=>String(m?.id)===String(id));
+        if(saved){ markMemberSaved(id); syncMemberChangeToSharedCloud(saved,false); }
+      }
+    });
   }
   catch(e){ console.warn('Guard Trainer: members could not be persisted',e); }
 }
@@ -6286,7 +6561,6 @@ function loadPersistedMembers(){
     if(Array.isArray(raw) && raw.length){
       membersData.splice(0,membersData.length,...raw);
       normalizeAllMembers();
-      persistMembersData();
       return true;
     }
   }catch(e){ console.warn('Guard Trainer: saved members could not be loaded',e); }
@@ -6294,10 +6568,14 @@ function loadPersistedMembers(){
   // v847: pri prvom spustení je zdrojom členov výhradne aktuálny Excel import.
   // Žiadne staré gt-members kľúče sa nesmú použiť.
   normalizeAllMembers();
-  persistMembersData();
   return false;
 }
 loadPersistedMembers();
+try{
+  const raw=originalGetItem('gt-member-delete-order-v1'); const dels=raw?JSON.parse(raw):{};
+  if(dels&&typeof dels==='object') membersData=membersData.filter(m=>!(m&&m.id!=null&&Number(dels[String(m.id)]||0)>0));
+  originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+}catch(e){}
 applyMemberApplicationFiles();
 persistMemberApplicationFiles();
 persistPaymentHistory();
@@ -6457,7 +6735,7 @@ function memberRows(arr){
 }
 
 
-function deleteMemberFromList(id){
+async function deleteMemberFromList(id){
  const allowed=(typeof isAdmin==='function'&&isAdmin()) || (typeof isHeadTrainer==='function'&&isHeadTrainer());
  if(!allowed){ toast('Nemáš oprávnenie vymazať člena'); return false; }
  const idx=membersData.findIndex(x=>Number(x.id)===Number(id));
@@ -6474,7 +6752,14 @@ function deleteMemberFromList(id){
 
  membersData.splice(idx,1);
  normalizeAllMembers();
- persistMembersData();
+ try{
+   const raw=originalGetItem('gt-member-delete-order-v1');
+   const dels=raw?JSON.parse(raw):{};
+   dels[String(id)]=Date.now();
+   originalSetItem('gt-member-delete-order-v1',JSON.stringify(dels));
+ }catch(e){ console.warn('Guard Trainer: member delete tombstone failed',e); }
+ persistMembersData(id);
+ try{syncMemberChangeToSharedCloud(m,true);}catch(e){}
  try{pushToCloud(true);}catch(e){}
  renderMembers();
  toast('Člen bol presunutý do archívu');

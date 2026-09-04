@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v950: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v951: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -4335,6 +4335,17 @@ function groupRosterCodes(code){
   if(key==='B+C' || key==='C+B') return ['B','C'];
   return key ? [key] : [];
 }
+function trainerGroupMatches(trainingCode, assignedGroups){
+  const code=String(trainingCode||'').trim().toUpperCase();
+  if(!code || !assignedGroups) return false;
+  const allowed = assignedGroups instanceof Set
+    ? assignedGroups
+    : new Set((Array.isArray(assignedGroups)?assignedGroups:[]).map(x=>String(x||'').trim().toUpperCase()).filter(Boolean));
+  if(allowed.has(code)) return true;
+  // B+C is a real shared training. A trainer assigned to B or C can open it,
+  // while an assignment of B+C remains compatible with the exact shared slot.
+  return groupRosterCodes(code).some(c=>allowed.has(c));
+}
 function getGroupMemberCount(code){
   normalizeAllMembers();
   const wanted=new Set(groupRosterCodes(code));
@@ -4433,7 +4444,7 @@ function todayTrainingGroups(){
 
   if(allowed===null) return all;
 
-  const result=new Set([...all].filter(c=>allowed.has(c)));
+  const result=new Set([...all].filter(c=>trainerGroupMatches(c,allowed)));
 
   // A trainer who accepted a substitution must also see that substituted
   // group in today's quick overview.
@@ -8002,7 +8013,7 @@ function getAttendancePendingSaveAt(date,group){
   }catch(e){ return 0; }
 }
 
-// v950: Admin dochádzka je autoritatívny samostatný Firestore záznam pre trénerov.
+// v949: Admin dochádzka je autoritatívny samostatný Firestore záznam pre trénerov.
 // Nepoužíva sa na bežný sync celej databázy, preto ju nemôže prepísať
 // neúplná lokálna kópia trénera.
 const ATTENDANCE_DIRECT_COLLECTION = 'guard-trainer-attendance';
@@ -8305,7 +8316,7 @@ function attendanceChooser(){
       const me=getCurrentTrainerDisplayName();
       const trainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim()===String(me||'').trim());
       const allowed=new Set((trainer?.groups||[]).map(g=>String(g).trim().toUpperCase()));
-      items=allItems.filter(x=>allowed.has(String(x.code||'').trim().toUpperCase()));
+      items=allItems.filter(x=>trainerGroupMatches(x.code||'',allowed));
     }
   }
 

@@ -6284,38 +6284,43 @@ async function syncMemberChangeToSharedCloud(member, deleted=false){
   try{
     if(!db || !member || member.id==null) return false;
     const id=String(member.id);
+    const uid=firebase.auth().currentUser?.uid || 'unknown';
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
     let stamp=Date.now();
     try{
       const so=JSON.parse(originalGetItem('gt-member-save-order-v1')||'{}')||{};
       const de=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
-      stamp=Math.max(Number(so[id]||0),Number(de[id]||0),stamp);
+      stamp=deleted ? Number(de[id]||Date.now()) : Number(so[id]||Date.now());
     }catch(e){}
-    const uid=firebase.auth().currentUser?.uid || 'unknown';
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
     await db.runTransaction(async tx=>{
       const snap=await tx.get(ref);
       const data=snap.exists?(snap.data()||{}):{};
-      let members=[];
-      let saveOrder={};
-      let deleteOrder={};
+      let members=[], saveOrder={}, deleteOrder={};
       try{const x=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];if(Array.isArray(x))members=x;}catch(e){}
       try{const x=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};if(x&&typeof x==='object')saveOrder=x;}catch(e){}
       try{const x=data['gt-member-delete-order-v1']?JSON.parse(data['gt-member-delete-order-v1']):{};if(x&&typeof x==='object')deleteOrder=x;}catch(e){}
       const byId=new Map();
       members.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
       if(deleted){
+        // Vymazanie je tombstone. Starší klient už tohto člena nesmie obnoviť.
         deleteOrder[id]=Math.max(Number(deleteOrder[id]||0),stamp);
+        delete saveOrder[id];
         byId.delete(id);
       }else{
-        const clean={...member}; delete clean.applicationFile; delete clean.applicationFileName;
-        const old=byId.get(id);
-        const oldAt=Math.max(Number(saveOrder[id]||0),Number(deleteOrder[id]||0));
-        if(!old || stamp>=oldAt){
+        const deletedAt=Number(deleteOrder[id]||0);
+        const savedAt=Number(saveOrder[id]||0);
+        // DELETE má prednosť pred starým alebo rovnako starým SAVE.
+        if(deletedAt>0 && deletedAt>=stamp && deletedAt>=savedAt){
+          byId.delete(id);
+        }else{
+          const clean={...member}; delete clean.applicationFile; delete clean.applicationFileName;
           byId.set(id,clean);
           saveOrder[id]=stamp;
-          if(Number(deleteOrder[id]||0)<=stamp) delete deleteOrder[id];
+          if(Number(deleteOrder[id]||0)<stamp) delete deleteOrder[id];
         }
       }
+      // Vždy odstráň všetky ID, ktoré majú aktívny tombstone.
+      Object.keys(deleteOrder).forEach(x=>{if(Number(deleteOrder[x]||0)>0)byId.delete(String(x));});
       tx.set(ref,{
         'gt-members-real-2026-v847':JSON.stringify(Array.from(byId.values())),
         'gt-member-save-order-v1':JSON.stringify(saveOrder),
@@ -6582,7 +6587,7 @@ function memberRows(arr){
 }
 
 
-function deleteMemberFromList(id){
+async function deleteMemberFromList(id){
  const allowed=(typeof isAdmin==='function'&&isAdmin()) || (typeof isHeadTrainer==='function'&&isHeadTrainer());
  if(!allowed){ toast('Nemáš oprávnenie vymazať člena'); return false; }
  const idx=membersData.findIndex(x=>Number(x.id)===Number(id));

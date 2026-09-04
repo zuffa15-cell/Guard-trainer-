@@ -45,12 +45,13 @@ try {
     console.log("✅ Firebase pripojené - sync zapnutý");
     initCloudSync();
     setTimeout(()=>{try{ensureMemberCloudInitialized();}catch(e){}},100);
+    setTimeout(()=>{try{ensureTrainerCloudInitialized();}catch(e){}},150);
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-deleted-trainers-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-authoritative-v1','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-deleted-trainers-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -129,6 +130,100 @@ function applyAuthoritativeRemoteMembers(data){
   }catch(e){ console.warn('Guard Trainer: prijatie serverového zoznamu členov zlyhalo',e); return false; }
 }
 
+async function ensureTrainerCloudInitialized(){
+  // TRÉNERI: server je zdroj pravdy. Lokálna štvorica sa použije iba pri
+  // prvom vytvorení autoritatívneho registra na serveri.
+  try{
+    if(!db || !cloudEnabled) return false;
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      if(Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1')) return;
+      let local=[];
+      try{ const x=JSON.parse(originalGetItem(TRAINERS_STORAGE_KEY)||'[]'); if(Array.isArray(x)) local=x; }catch(e){}
+      const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+      const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
+      const clean=wanted.map((w,idx)=>{
+        const hit=local.find(t=>t&&norm(t.full||t.name)===norm(w[0]));
+        const base=hit?{...hit}:{};
+        return {...base,id:base.id!=null?base.id:(idx+1),name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?[...base.groups]:[]};
+      });
+      tx.set(ref,{
+        'gt-trainers-authoritative-v1':JSON.stringify(clean),
+        'gt-trainers':JSON.stringify(clean),
+        [TRAINERS_STORAGE_KEY]:JSON.stringify(clean),
+        _lastUpdateBy:firebase.auth().currentUser?.uid||'unknown',
+        _updatedAt:Date.now()
+      },{merge:true});
+    });
+    return true;
+  }catch(e){ console.warn('Guard Trainer: inicializácia trénerov na serveri zlyhala',e); return false; }
+}
+
+function applyAuthoritativeRemoteTrainers(data){
+  try{
+    if(!data || !Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1')) return false;
+    let remote=[];
+    try{ const x=JSON.parse(data['gt-trainers-authoritative-v1']||'[]'); if(Array.isArray(x)) remote=x; }catch(e){}
+    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
+    const exact=wanted.map((w,idx)=>{
+      const hit=remote.find(t=>t&&norm(t.full||t.name)===norm(w[0]));
+      const base=hit?{...hit}:{};
+      return {...base,id:base.id!=null?base.id:(idx+1),name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?[...base.groups]:[]};
+    });
+    trainersData.splice(0,trainersData.length,...exact);
+    originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(exact));
+    originalSetItem('gt-trainers',JSON.stringify(exact));
+    console.log('📥 TRÉNERI: server je zdroj pravdy – lokálny zoznam nahradený serverovým');
+    return true;
+  }catch(e){ console.warn('Guard Trainer: prijatie serverových trénerov zlyhalo',e); return false; }
+}
+
+async function syncTrainerProfileToCloud(trainer){
+  try{
+    if(!db || !cloudEnabled || !trainer || trainer.id==null) return false;
+    const id=String(trainer.id), uid=firebase.auth().currentUser?.uid||'unknown';
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let current=[];
+      try{ const x=JSON.parse(data['gt-trainers-authoritative-v1']||'[]'); if(Array.isArray(x)) current=x; }catch(e){}
+      if(!current.length){
+        try{ const x=JSON.parse(data[TRAINERS_STORAGE_KEY]||'[]'); if(Array.isArray(x)) current=x; }catch(e){}
+      }
+      const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
+      const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+      const byId=new Map(current.filter(x=>x&&x.id!=null).map(x=>[String(x.id),x]));
+      const byName=new Map(current.filter(x=>x).map(x=>[norm(x.full||x.name),x]));
+      const base=byId.get(id)||byName.get(norm(trainer.full||trainer.name));
+      const updated={...(base||{}),...trainer};
+      // ID, meno a funkcia zostávajú kanonické.
+      const canonical=wanted.find(w=>norm(w[0])===norm(updated.full||updated.name));
+      if(canonical){ updated.name=canonical[0]; updated.full=canonical[0]; updated.role=canonical[1]; }
+      updated.active=true; updated.status='AKTÍVNA';
+      const result=[];
+      wanted.forEach((w,idx)=>{
+        const existing=current.find(x=>x&&norm(x.full||x.name)===norm(w[0]));
+        let x=existing?{...existing}:{id:idx+1,name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:[]};
+        if(norm(w[0])===norm(updated.full||updated.name)) x={...x,...updated};
+        x.name=w[0]; x.full=w[0]; x.role=w[1]; x.active=true; x.status='AKTÍVNA'; x.groups=Array.isArray(x.groups)?x.groups:[];
+        result.push(x);
+      });
+      tx.set(ref,{
+        'gt-trainers-authoritative-v1':JSON.stringify(result),
+        'gt-trainers':JSON.stringify(result),
+        [TRAINERS_STORAGE_KEY]:JSON.stringify(result),
+        _lastUpdateBy:uid,
+        _updatedAt:Date.now()
+      },{merge:true});
+    });
+    return true;
+  }catch(e){ console.warn('Guard Trainer: uloženie trénera na server zlyhalo',e); return false; }
+}
+
 function initCloudSync(){
   if(!db) return;
   
@@ -142,7 +237,9 @@ function initCloudSync(){
     // Tento krok musí prebehnúť ešte pred globálnym stale-checkom, aby starší
     // _updatedAt dokumentu nikdy nezablokoval nové členstvo.
     const hasRemoteMembers=Object.prototype.hasOwnProperty.call(data,'gt-members-real-2026-v847');
+    const hasRemoteTrainers=Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1');
     if(hasRemoteMembers && data._lastUpdateBy !== myUid) applyAuthoritativeRemoteMembers(data);
+    if(hasRemoteTrainers && data._lastUpdateBy !== myUid) applyAuthoritativeRemoteTrainers(data);
     if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
       // moje vlastné zmeny - ignoruj
       return;
@@ -333,8 +430,13 @@ function initCloudSync(){
           if(mergedRaw!==originalGetItem(k)){ originalSetItem(k,mergedRaw); changed=true; }
           return;
         }
+        if(k==='gt-trainers-authoritative-v1'){
+          // Autoritatívny register trénerov sa prijíma celý zo servera.
+          applyAuthoritativeRemoteTrainers(data);
+          return;
+        }
         if(k==='gt-trainers'){
-          // TRÉNERI: union lokálnych a cloudových profilov, nie slepé prepísanie.
+          // Starý kompatibilný register – autoritatívny register má prednosť.
           let localTs=[], remoteTs=[];
           try{ const x=originalGetItem(k); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localTs=p; }catch(e){}
           try{ const p=data[k]?JSON.parse(data[k]):[]; if(Array.isArray(p)) remoteTs=p; }catch(e){}
@@ -453,7 +555,7 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1' || k==='gt-trainers-authoritative-v1' || k==='gt-trainers' || k===TRAINERS_STORAGE_KEY) return;
         if(/^gt-trainers-v\d+$/.test(k)) return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
@@ -471,20 +573,8 @@ function initCloudSync(){
     try{ applyMemberApplicationFiles(); }catch(e){}
     try{ canonicalizeTrainers(); }catch(e){}
     try{ syncTrainerGroupsFromSchedules(); }catch(e){}
-    // v970: UI aj cloud používajú aj historický kľúč gt-trainers. Po každom
-    // snapshote ho zosúladíme s hlavným v395 registrom, aby sa profily
-    // Viktor Žuffa, Peter Onuščák a Anatolii Kuhal nemohli stratiť.
-    try{
-      const raw395=originalGetItem(TRAINERS_STORAGE_KEY)||'[]';
-      const merged=mergeTrainerRegistersSafe(raw395,originalGetItem('gt-trainers')||'[]');
-      originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(merged));
-      originalSetItem('gt-trainers',JSON.stringify(merged));
-      if(typeof trainersData!=='undefined'){ trainersData.splice(0,trainersData.length,...merged); }
-      canonicalizeTrainers();
-      syncTrainerGroupsFromSchedules();
-      originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(trainersData));
-      originalSetItem('gt-trainers',JSON.stringify(trainersData));
-    }catch(e){}
+    // Autoritatívni tréneri: po snapshote používaj presne serverový register.
+    try{ if(Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1')) applyAuthoritativeRemoteTrainers(data); }catch(e){}
     cloudInitialSnapshotReady = true;
 
         if(changed) {
@@ -663,7 +753,7 @@ function pushToCloud(force = false){
   SYNC_KEYS.forEach(k=>{
     // ČLENOVIA sa nikdy neposielajú cez všeobecný pushToCloud.
     // Zápis člena robí výhradne syncMemberChangeToSharedCloud() transakčne po ID.
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1') return;
+    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY) return;
     let v = originalGetItem(k);
     if(k==='gt-members-real-2026-v847' && v){
       try{ const arr=JSON.parse(v); if(Array.isArray(arr)) v=JSON.stringify(arr.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})); }catch(e){}
@@ -672,7 +762,7 @@ function pushToCloud(force = false){
   });
   Object.keys(localStorage).forEach(k=>{
     if(isGTLocalAuthKey(k)) return;
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1') return;
+    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY) return;
     if(k.startsWith('gt-') && !payload[k]){
       const v=originalGetItem(k);
       if(v) payload[k]=v;
@@ -687,31 +777,8 @@ function pushToCloud(force = false){
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
     try{
       const remote=doc.exists?doc.data():{};
-      // TRÉNERI: zlúč lokálnu a cloudovú kópiu, aby neúplné zariadenie nikdy
-      // neprepísalo reálnych trénerov v spoločnej databáze.
-      {
-        let localTs=[], remoteTs=[];
-        try{ const x=payload['gt-trainers']?JSON.parse(payload['gt-trainers']):[]; if(Array.isArray(x)) localTs=x; }catch(e){}
-        try{ const x=remote['gt-trainers']?JSON.parse(remote['gt-trainers']):[]; if(Array.isArray(x)) remoteTs=x; }catch(e){}
-        // Hlavný profilový register je gt-trainers-v395; zlúč ho tiež.
-        try{
-          const merged395=mergeTrainerRegistersSafe(originalGetItem(TRAINERS_STORAGE_KEY)||'[]',remote[TRAINERS_STORAGE_KEY]||'[]');
-          payload[TRAINERS_STORAGE_KEY]=JSON.stringify(merged395);
-          localTs=merged395;
-        }catch(e){}
-        const norm=n=>String(n||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-        const score=t=>!t||typeof t!=='object'?-1:Object.keys(t).filter(x=>t[x]!==''&&t[x]!=null).length+(t.loginPassword?20:0)+(Array.isArray(t.groups)?t.groups.length:0);
-        const merged=[], byName=new Map(), byId=new Map();
-        const put=t=>{
-          if(!t||typeof t!=='object') return;
-          const name=norm(t.full||t.name), id=String(t.id??''); let i=-1;
-          if(name&&byName.has(name)) i=byName.get(name); else if(id&&byId.has(id)) i=byId.get(id);
-          if(i<0){ i=merged.length; merged.push({...t}); if(name)byName.set(name,i); if(id)byId.set(id,i); return; }
-          const cur=merged[i]; merged[i]=score(t)>score(cur)?{...cur,...t}:{...t,...cur};
-        };
-        localTs.forEach(put); remoteTs.forEach(put);
-        payload['gt-trainers']=JSON.stringify(merged);
-      }
+      // TRÉNERI: autoritatívny register sa zapisuje výhradne transakciou
+      // syncTrainerProfileToCloud(). Všeobecný push ho nesmie prepísať.
       // Login register trénerov: union, nikdy neprázdni účty na inom zariadení.
       {
         let l={},r={}; try{l=JSON.parse(payload['gt-trainer-login-passwords']||'{}')||{};}catch(e){} try{r=JSON.parse(remote['gt-trainer-login-passwords']||'{}')||{};}catch(e){}
@@ -4068,6 +4135,17 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
          if(finished)return;
          const data=doc.exists?doc.data():{};
 
+         // 0) Autoritatívny profilový register zo servera.
+         try{
+           if(data['gt-trainers-authoritative-v1']){
+             const ar=JSON.parse(data['gt-trainers-authoritative-v1']||'[]');
+             if(Array.isArray(ar)){
+               const hit=ar.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
+               if(hit){ finish(hit); return; }
+             }
+           }
+         }catch(e){}
+
          // 1) Primárne vyhľadaj v samostatnom zozname hesiel.
          try{
            if(data['gt-trainer-login-passwords']){
@@ -6018,7 +6096,7 @@ function lockTrainerProfileForTrainer(){
     el.onclick=null;
   });
 }
-function saveTrainerProfile(id){
+async function saveTrainerProfile(id){
  try{
    if(!canEditTrainerProfile()){toast('Údaje trénera môže meniť iba administrátor');return;}
    const list=visibleTrainerProfiles();
@@ -6076,17 +6154,12 @@ function saveTrainerProfile(id){
      }catch(e){}
    }
    persistTrainersData();
-   // Heslo trénera musí ísť okamžite aj do existujúceho Firebase cloudu,
-   // aby ho vedelo použiť druhé zariadenie.
-   try{
-     if(typeof pushToCloud==='function'){
-       setTimeout(()=>{try{pushToCloud()}catch(e){}},500);
-       setTimeout(()=>{try{pushToCloud()}catch(e){}},2500);
-       setTimeout(()=>{try{pushToCloud()}catch(e){}},5000);
-     }
-   }catch(e){}
-
-
+   // Profil trénera zapisuj transakčne podľa ID. Server je jediný zdroj pravdy.
+   const serverSaved = await syncTrainerProfileToCloud(t);
+   if(!serverSaved){
+     toast('Profil trénera sa nepodarilo uložiť na server');
+     return;
+   }
    const btn=document.getElementById('trainerProfileSaveBtn');
    if(btn){
      btn.style.setProperty('background','#27c93f','important');

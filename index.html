@@ -108,7 +108,18 @@ function initCloudSync(){
         const localById=new Map(Array.isArray(localMembers)?localMembers.filter(m=>m&&m.id!=null).map(m=>[String(m.id),m]):[]);
         const localDeleteRaw=originalGetItem('gt-member-delete-order-v1');
         const localDelete=localDeleteRaw?JSON.parse(localDeleteRaw):{};
-        if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>{
+        // Vymazanie člena môže byť v cloude reprezentované iba tombstonom
+        // (člen už v remoteMembers nie je). Preto musí globálny stale-check
+        // kontrolovať aj vzdialený delete timestamp. Inak tréner s novším
+        // lokálnym _updatedAt zahodil adminovo vymazanie a člena nechal visieť.
+        const remoteDeleteRaw=data['gt-member-delete-order-v1'];
+        const remoteDelete=remoteDeleteRaw?JSON.parse(remoteDeleteRaw):{};
+        if(remoteDelete && typeof remoteDelete==='object'){
+          newerMembers=Object.keys(remoteDelete).some(id=>
+            Number(remoteDelete[id]||0)>Number(localDelete[id]||0)
+          );
+        }
+        if(!newerMembers && Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>{
           if(!m||m.id==null) return false;
           const id=String(m.id), local=localById.get(id);
           if(Number(localDelete[id]||0)>0 && Number(remoteOrder[id]||0)<=Number(localDelete[id]||0)) return false;

@@ -352,7 +352,7 @@ function initCloudSync(){
           const raw=JSON.stringify(merged);
           if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
           try{ if(Array.isArray(trainersData)){ trainersData.splice(0,trainersData.length,...merged); } }catch(e){}
-          try{ ensureKnownRealTrainerNames(); }catch(e){}
+          try{ canonicalizeTrainers(); }catch(e){}
           return;
         }
         if(k==='gt-trainer-login-passwords'){
@@ -469,7 +469,7 @@ function initCloudSync(){
       setTimeout(()=>pushToCloud(true), 100);
     }
     try{ applyMemberApplicationFiles(); }catch(e){}
-    try{ ensureKnownRealTrainerNames(); }catch(e){}
+    try{ canonicalizeTrainers(); }catch(e){}
     try{ syncTrainerGroupsFromSchedules(); }catch(e){}
     // v970: UI aj cloud používajú aj historický kľúč gt-trainers. Po každom
     // snapshote ho zosúladíme s hlavným v395 registrom, aby sa profily
@@ -480,7 +480,7 @@ function initCloudSync(){
       originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(merged));
       originalSetItem('gt-trainers',JSON.stringify(merged));
       if(typeof trainersData!=='undefined'){ trainersData.splice(0,trainersData.length,...merged); }
-      ensureKnownRealTrainerNames();
+      canonicalizeTrainers();
       syncTrainerGroupsFromSchedules();
       originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(trainersData));
       originalSetItem('gt-trainers',JSON.stringify(trainersData));
@@ -639,15 +639,13 @@ function mergeTrainerRegistersSafe(localRaw, remoteRaw){
   try{const x=localRaw?JSON.parse(localRaw):[];if(Array.isArray(x))L=x;}catch(e){}
   try{const x=remoteRaw?JSON.parse(remoteRaw):[];if(Array.isArray(x))R=x;}catch(e){}
   const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const out=[]; const byId=new Map(); const byName=new Map();
-  const add=t=>{
-    if(!t||typeof t!=='object'||isTrainerDeleted(t))return;
-    const id=t.id!=null?String(t.id):'';const n=norm(t.full||t.name);
-    if(id&&byId.has(id)){const i=byId.get(id);out[i]={...out[i],...t};return;}
-    if(n&&byName.has(n)){const i=byName.get(n);out[i]={...out[i],...t};return;}
-    const i=out.length;out.push({...t});if(id)byId.set(id,i);if(n)byName.set(n,i);
-  };
-  L.forEach(add);R.forEach(add);return out;
+  const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
+  const all=[...L,...R];
+  return wanted.map((w,idx)=>{
+    const hits=all.filter(x=>x&&norm(x.full||x.name)===norm(w[0])&&!isTrainerDeleted(x));
+    const base=hits.length?{...hits[hits.length-1]}:{};
+    return {...base,id:base.id!=null?base.id:(idx+1),name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?base.groups:[]};
+  });
 }
 
 function pushToCloud(force = false){
@@ -5686,9 +5684,10 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
- {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
- {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
+ {id:1,name:'Peter Onuščák',full:'Peter Onuščák',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
+ {id:2,name:'Viktor Žuffa',full:'Viktor Žuffa',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
+ {id:3,name:'Anatolii Kuhal',full:'Anatolii Kuhal',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
+ {id:4,name:'Hlavný tréner',full:'Hlavný tréner',role:'HLAVNÝ TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'}
 ];
 const TRAINERS_STORAGE_KEY='gt-trainers-v395';
 try{
@@ -5716,9 +5715,8 @@ try{
     })).filter(t=>t.full||t.name);
     const legacyDemo=new Set(['Martin Lukáč','Tomáš Varga','Ivana Kováčová','Róbert Horváth','Martin L.','Tomáš V.','Ivana K.','Róbert H.']);
     const cleaned=normalized.filter(t=>!legacyDemo.has(String(t.full||t.name||'').trim()));
-    if(!cleaned.some(t=>String(t.full||t.name||'').trim()==='Tréner 1')) cleaned.push({id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'});
-    if(!cleaned.some(t=>String(t.full||t.name||'').trim()==='Tréner 2')) cleaned.push({id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'});
     trainersData.splice(0,trainersData.length,...cleaned);
+    canonicalizeTrainers();
     persistTrainersData();
   }
 }catch(e){ console.warn('Načítanie trénerov z pamäte sa nepodarilo',e); }
@@ -5727,43 +5725,43 @@ function persistTrainersData(){
   catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
 }
 
-/* v968 – REÁLNI TRÉNERI NESMÚ ZMIZNÚŤ. Obnova z rozvrhu je iba poistka;
-   dochádzka je samostatná podľa dátumu/skupiny a nikdy sa nemaže s profilom. */
-function ensureKnownRealTrainerNames(){
+/* v975 – KANONICKÝ ZOZNAM TRÉNEROV: v aplikácii sú iba 4 profily. */
+function canonicalizeTrainers(){
   try{
-    const known=[
-      {full:'Viktor Žuffa',role:'TRÉNER'},
+    const wanted=[
       {full:'Peter Onuščák',role:'TRÉNER'},
-      {full:'Anatolii Kuhal',role:'TRÉNER'}
+      {full:'Viktor Žuffa',role:'TRÉNER'},
+      {full:'Anatolii Kuhal',role:'TRÉNER'},
+      {full:'Hlavný tréner',role:'HLAVNÝ TRÉNER'}
     ];
     const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    let nextId=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1, changed=false;
-    known.forEach(k=>{
-      if(isTrainerDeleted(k)) return;
-      if(!(trainersData||[]).some(t=>norm(t.full||t.name)===norm(k.full))){
-        trainersData.push({id:nextId++,name:k.full,full:k.full,role:k.role,email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA',isTemplate:false});
-        changed=true;
-      }
+    const old=Array.isArray(trainersData)?trainersData:[];
+    const next=wanted.map((w,idx)=>{
+      const hit=old.find(x=>norm(x.full||x.name)===norm(w.full));
+      const base=hit?{...hit}:{};
+      return {...base,id:hit?.id!=null?hit.id:(idx+1),name:w.full,full:w.full,role:w.role,active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?base.groups:[]};
     });
-    if(changed) persistTrainersData();
-  }catch(e){}
+    trainersData.splice(0,trainersData.length,...next);
+    return next;
+  }catch(e){ return trainersData; }
 }
-(function recoverTrainersFromSchedules(){
+canonicalizeTrainers();
+persistTrainersData();
+
+(function cleanupTrainerSchedules(){
   try{
     const schedules=JSON.parse(originalGetItem('gt-schedule')||'[]')||[];
     const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    let nextId=Math.max(0,...(trainersData||[]).map(t=>Number(t.id)||0))+1, changed=false;
-    const add=v=>{
-      const full=String(v||'').trim(); if(!full || /^(tr|éner|trener)\s*[12]$/i.test(full)) return;
-      if(isTrainerDeleted({full})) return;
-      if((trainersData||[]).some(t=>norm(t.full||t.name)===norm(full))) return;
-      trainersData.push({id:nextId++,name:full,full,role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA',isTemplate:false}); changed=true;
-    };
-    (Array.isArray(schedules)?schedules:[]).forEach(x=>{add(x.trainer);if(Array.isArray(x.trainers))x.trainers.forEach(add);});
-    if(changed) persistTrainersData();
+    const allowed=new Set(['peter onuscak','viktor zuffa','anatolii kuhal','hlavny trener']);
+    schedules.forEach(s=>{
+      if(Array.isArray(s.trainers)) s.trainers=s.trainers.filter(n=>allowed.has(norm(n)));
+      if(s.trainer && !allowed.has(norm(s.trainer))) s.trainer='';
+      if(Array.isArray(s.trainerIds)) s.trainerIds=s.trainerIds.filter(id=>(trainersData||[]).some(x=>Number(x.id)===Number(id)));
+      if(s.trainerId!=null && !(trainersData||[]).some(x=>Number(x.id)===Number(s.trainerId))) s.trainerId=null;
+    });
+    originalSetItem('gt-schedule',JSON.stringify(schedules));
   }catch(e){}
 })();
-ensureKnownRealTrainerNames();
 
 /* v531 – synchronizácia priradenia tréner ↔ skupina.
    Zdrojom sú uložené rozvrhy (trainerIds + groupCode). Profil trénera
@@ -5884,6 +5882,8 @@ function ensureTemplateTrainer(){
   }catch(e){return null;}
 }
 function renderTrainers(){
+ canonicalizeTrainers();
+ persistTrainersData();
  ensureTemplateTrainer();
  // Profile assignments are authoritative. Do not overwrite them from the
  // schedule when the trainer list is opened.

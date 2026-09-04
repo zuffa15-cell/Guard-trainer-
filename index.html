@@ -4328,23 +4328,27 @@ function updateSubstitutionQuick(){
    <span class="qicon">⇄</span><span class="qtext"><b>ZASTUPOVANIE</b><small>${text}</small></span><strong>${count}</strong><span class="go">›</span>
  </button>`;
 }
+function normalizeGroupCode(value){
+  return String(value||'').trim().toUpperCase().replace(/\s*\+\s*/g,'+');
+}
 function groupRosterCodes(code){
-  const key=String(code||'').trim().toUpperCase();
-  // A mixed B+C training contains the members of BOTH groups.
-  // Use a union so a member who belongs to both groups is counted only once.
+  const key=normalizeGroupCode(code);
+  // B+C is one shared training and contains the roster of both B and C.
   if(key==='B+C' || key==='C+B') return ['B','C'];
   return key ? [key] : [];
 }
 function trainerGroupMatches(trainingCode, assignedGroups){
-  const code=String(trainingCode||'').trim().toUpperCase();
+  const code=normalizeGroupCode(trainingCode);
   if(!code || !assignedGroups) return false;
-  const allowed = assignedGroups instanceof Set
-    ? assignedGroups
-    : new Set((Array.isArray(assignedGroups)?assignedGroups:[]).map(x=>String(x||'').trim().toUpperCase()).filter(Boolean));
+  const raw = assignedGroups instanceof Set ? [...assignedGroups] : (Array.isArray(assignedGroups)?assignedGroups:[]);
+  // Expand the trainer assignment too. This is important when the profile
+  // stores the assignment as B+C, B + C, or C+B.
+  const allowed=new Set();
+  raw.forEach(x=>groupRosterCodes(x).forEach(c=>allowed.add(normalizeGroupCode(c))));
+  raw.forEach(x=>{ const v=normalizeGroupCode(x); if(v) allowed.add(v); });
   if(allowed.has(code)) return true;
-  // B+C is a real shared training. A trainer assigned to B or C can open it,
-  // while an assignment of B+C remains compatible with the exact shared slot.
-  return groupRosterCodes(code).some(c=>allowed.has(c));
+  // A shared B+C training is accessible to a trainer assigned to B, C, or B+C.
+  return groupRosterCodes(code).some(c=>allowed.has(normalizeGroupCode(c)));
 }
 function getGroupMemberCount(code){
   normalizeAllMembers();
@@ -4651,7 +4655,7 @@ function trainerOwnsTraining(item){
     try{
       (getCurrentTrainerGroups()||[]).forEach(x=>myGroups.add(String(x).trim().toUpperCase()));
     }catch(e){}
-    const code=String(item.groupCode||item.code||item.group||'').trim().toUpperCase();
+    const code=normalizeGroupCode(item.groupCode||item.code||item.group||'');
     if(groupRosterCodes(code).some(c=>myGroups.has(c))) return true;
   }catch(e){}
 
@@ -4681,7 +4685,7 @@ function filterHomeItemsForCurrentRole(items){
     const me=getCurrentTrainerDisplayName();
     const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
     return (items||[]).filter(g=>{
-      const code=String(g?.code||'').trim().toUpperCase();
+      const code=normalizeGroupCode(g?.code||'');
       const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
       return trainerGroupMatches(code, allowed) || incoming;
     });
@@ -4709,7 +4713,7 @@ function filterHomeItemsForCurrentRole(items){
 function hasAcceptedSubstitutionAccess(code,date,time=''){
   try{
     const me=String(getCurrentTrainerDisplayName()||'').trim();
-    const wantedCode=String(code||'').trim().toUpperCase();
+    const wantedCode=normalizeGroupCode(code);
     const wantedDate=String(date||'');
     const wantedTime=String(time||'').trim();
     if(!me || !wantedCode || !wantedDate) return false;

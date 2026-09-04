@@ -46,12 +46,13 @@ try {
     initCloudSync();
     setTimeout(()=>{try{ensureMemberCloudInitialized();}catch(e){}},100);
     setTimeout(()=>{try{ensureTrainerCloudInitialized();}catch(e){}},150);
+    setTimeout(()=>{try{ensurePaymentHistoryCloudInitialized();}catch(e){}},200);
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-authoritative-v1','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-deleted-trainers-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-authoritative-v1','gt-member-payment-history-real-2026-v847','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-deleted-trainers-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -240,6 +241,7 @@ function initCloudSync(){
     const hasRemoteTrainers=Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1');
     if(hasRemoteMembers && data._lastUpdateBy !== myUid) applyAuthoritativeRemoteMembers(data);
     if(hasRemoteTrainers && data._lastUpdateBy !== myUid) applyAuthoritativeRemoteTrainers(data);
+    if(Object.prototype.hasOwnProperty.call(data,PAYMENT_HISTORY_SYNC_KEY) && data._lastUpdateBy !== myUid) applyAuthoritativeRemotePaymentHistory(data);
     if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
       // moje vlastné zmeny - ignoruj
       return;
@@ -738,6 +740,100 @@ function mergeTrainerRegistersSafe(localRaw, remoteRaw){
   });
 }
 
+
+const PAYMENT_HISTORY_SYNC_KEY='gt-member-payment-history-real-2026-v847';
+
+async function ensurePaymentHistoryCloudInitialized(){
+  // Platby členského/registrácie boli doteraz uložené iba v localStorage.
+  // Pri prechode na serverovú pravdu ich preto raz prenesieme do spoločného
+  // dokumentu. Ak server pole už má, lokálne údaje ho nesmú prepísať.
+  try{
+    if(!db || !cloudEnabled) return false;
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      if(Object.prototype.hasOwnProperty.call(data,PAYMENT_HISTORY_SYNC_KEY)) return;
+      let local={membership:[],registration:[]};
+      try{
+        const x=JSON.parse(originalGetItem(PAYMENT_HISTORY_SYNC_KEY)||originalGetItem('gt-member-payment-history-real-2026-v847')||'null');
+        if(x&&typeof x==='object') local={membership:Array.isArray(x.membership)?x.membership:[],registration:Array.isArray(x.registration)?x.registration:[]};
+      }catch(e){}
+      tx.set(ref,{
+        [PAYMENT_HISTORY_SYNC_KEY]:JSON.stringify(local),
+        _lastUpdateBy:firebase.auth().currentUser?.uid||'unknown',
+        _updatedAt:Date.now()
+      },{merge:true});
+    });
+    return true;
+  }catch(e){ console.warn('Guard Trainer: inicializácia histórie platieb na serveri zlyhala',e); return false; }
+}
+
+function applyAuthoritativeRemotePaymentHistory(data){
+  try{
+    if(!data || !Object.prototype.hasOwnProperty.call(data,PAYMENT_HISTORY_SYNC_KEY)) return false;
+    let remote={membership:[],registration:[]};
+    try{
+      const x=JSON.parse(data[PAYMENT_HISTORY_SYNC_KEY]||'{}');
+      if(x&&typeof x==='object') remote={membership:Array.isArray(x.membership)?x.membership:[],registration:Array.isArray(x.registration)?x.registration:[]};
+    }catch(e){}
+    // membershipPayments/registrationPayments sú referencie na paymentHistoryStore,
+    // preto ich aktualizujeme cez splice a neničíme referencie používané UI kódom.
+    if(typeof membershipPayments!=='undefined' && Array.isArray(membershipPayments)){
+      membershipPayments.splice(0,membershipPayments.length,...remote.membership);
+    }
+    if(typeof registrationPayments!=='undefined' && Array.isArray(registrationPayments)){
+      registrationPayments.splice(0,registrationPayments.length,...remote.registration);
+    }
+    try{ originalSetItem(PAYMENT_HISTORY_SYNC_KEY,JSON.stringify(remote)); }catch(e){}
+    try{ localStorage.setItem(PAYMENT_HISTORY_SYNC_KEY,JSON.stringify(remote)); }catch(e){}
+    try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
+    try{ if(typeof renderCurrentView==='function') renderCurrentView(); }catch(e){}
+    console.log('📥 PLATBY: serverová história platieb nahradila lokálnu kópiu');
+    return true;
+  }catch(e){ console.warn('Guard Trainer: prijatie serverovej histórie platieb zlyhalo',e); return false; }
+}
+
+async function syncPaymentHistoryToCloud(){
+  try{
+    if(!db || !cloudEnabled) return false;
+    const uid=firebase.auth().currentUser?.uid||'unknown';
+    let local={membership:[],registration:[]};
+    try{
+      const x=JSON.parse(originalGetItem(PAYMENT_HISTORY_SYNC_KEY)||'null');
+      if(x&&typeof x==='object') local={membership:Array.isArray(x.membership)?x.membership:[],registration:Array.isArray(x.registration)?x.registration:[]};
+    }catch(e){}
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let remote={membership:[],registration:[]};
+      try{
+        const x=JSON.parse(data[PAYMENT_HISTORY_SYNC_KEY]||'{}');
+        if(x&&typeof x==='object') remote={membership:Array.isArray(x.membership)?x.membership:[],registration:Array.isArray(x.registration)?x.registration:[]};
+      }catch(e){}
+      // Zlúčenie jednotlivých evidenčných platieb. Tým sa platba jedného
+      // zariadenia nestratí, keď druhé zariadenie uloží inú platbu.
+      const key=p=>[
+        Number(p?.memberId)||0,String(p?.type||''),Number(p?.period)||0,Number(p?.year)||0,
+        String(p?.date||''),String(p?.paidGroup||''),Number(p?.amount)||0
+      ].join('|');
+      const merge=(a,b)=>{
+        const map=new Map();
+        [...a,...b].forEach(p=>{if(p&&p.memberId!=null) map.set(key(p),p);});
+        return Array.from(map.values());
+      };
+      const merged={membership:merge(remote.membership,local.membership),registration:merge(remote.registration,local.registration)};
+      tx.set(ref,{
+        [PAYMENT_HISTORY_SYNC_KEY]:JSON.stringify(merged),
+        _lastUpdateBy:uid,
+        _updatedAt:Date.now()
+      },{merge:true});
+    });
+    return true;
+  }catch(e){ console.warn('Guard Trainer: synchronizácia histórie platieb zlyhala',e); return false; }
+}
+
 function pushToCloud(force = false){
   if(!db || !cloudEnabled) return;
   // Ak práve spracúvame prichádzajúci cloud snapshot, zápis administrátora
@@ -753,7 +849,7 @@ function pushToCloud(force = false){
   SYNC_KEYS.forEach(k=>{
     // ČLENOVIA sa nikdy neposielajú cez všeobecný pushToCloud.
     // Zápis člena robí výhradne syncMemberChangeToSharedCloud() transakčne po ID.
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY) return;
+    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY || k===PAYMENT_HISTORY_SYNC_KEY) return;
     let v = originalGetItem(k);
     if(k==='gt-members-real-2026-v847' && v){
       try{ const arr=JSON.parse(v); if(Array.isArray(arr)) v=JSON.stringify(arr.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})); }catch(e){}
@@ -762,7 +858,7 @@ function pushToCloud(force = false){
   });
   Object.keys(localStorage).forEach(k=>{
     if(isGTLocalAuthKey(k)) return;
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY) return;
+    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY || k===PAYMENT_HISTORY_SYNC_KEY) return;
     if(k.startsWith('gt-') && !payload[k]){
       const v=originalGetItem(k);
       if(v) payload[k]=v;
@@ -6789,7 +6885,10 @@ try{
 const membershipPayments=paymentHistoryStore.membership;
 const registrationPayments=paymentHistoryStore.registration;
 function persistPaymentHistory(){
-  try{localStorage.setItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:membershipPayments,registration:registrationPayments}));}catch(e){}
+  const raw=JSON.stringify({membership:membershipPayments,registration:registrationPayments});
+  try{localStorage.setItem(PAYMENT_HISTORY_KEY,raw);}catch(e){}
+  try{originalSetItem(PAYMENT_HISTORY_SYNC_KEY,raw);}catch(e){}
+  try{setTimeout(()=>{syncPaymentHistoryToCloud();},0);}catch(e){}
 }
 function recordMembershipPayment(member,amount,date,group,period=membershipPeriodForDate(date)){
   membershipPayments.push({

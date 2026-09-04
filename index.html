@@ -4333,8 +4333,16 @@ function normalizeGroupCode(value){
 }
 function groupRosterCodes(code){
   const key=normalizeGroupCode(code);
-  // B+C is a standalone group. It is NOT the same as B or C.
-  // Members/trainer assignments for B+C must therefore remain separate.
+  // B+C is a standalone TRAINING/permission group. It is NOT the same as B or C.
+  // Therefore permissions, schedule ownership and attendance access stay exact.
+  return key ? [key] : [];
+}
+function groupMemberRosterCodes(code){
+  const key=normalizeGroupCode(code);
+  // B+C is trained as one shared group, but its roster is the union of
+  // members assigned to B and members assigned to C. Keep the B+C group
+  // itself separate for permissions and scheduling.
+  if(key==='B+C') return ['B','C','B+C'];
   return key ? [key] : [];
 }
 function trainerGroupMatches(trainingCode, assignedGroups){
@@ -4345,7 +4353,7 @@ function trainerGroupMatches(trainingCode, assignedGroups){
 }
 function getGroupMemberCount(code){
   normalizeAllMembers();
-  const wanted=new Set(groupRosterCodes(code));
+  const wanted=new Set(groupMemberRosterCodes(code));
   if(!wanted.size || !Array.isArray(membersData)) return 0;
   return membersData.filter(m=>{
     const groups=Array.isArray(m.groups)?m.groups:[m.group];
@@ -8144,7 +8152,7 @@ function cleanAttendanceMember(m){
   };
 }
 function cleanAttendanceMembers(group){
-  const wanted=new Set(groupRosterCodes(group));
+  const wanted=new Set(groupMemberRosterCodes(group));
   return membersData.filter(m=>{
     const groups=Array.isArray(m.groups)?m.groups:[m.group];
     return groups.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
@@ -8217,7 +8225,7 @@ function syncAttendanceRecord(member){
 function loadAttendanceFromMembers(){
  const current=attendanceState.members||[];
  const byName=new Map(current.map(a=>[a.surname+'|'+a.name,a]));
- const wantedGroups=new Set(groupRosterCodes(attendanceState.group));
+ const wantedGroups=new Set(groupMemberRosterCodes(attendanceState.group));
  let selected=membersData.filter(m=>{
    const gs=Array.isArray(m.groups)?m.groups:[m.group];
    return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
@@ -12481,7 +12489,7 @@ function openHeadTrainerGroupReadOnly(code,name,time=''){
 function renderHeadTrainerAttendanceReadOnly(){
   const app=document.querySelector('.app'); if(!app)return false;
   const code=String(attendanceState.group||'').trim().toUpperCase();
-  const wanted=new Set(groupRosterCodes(code));
+  const wanted=new Set(groupMemberRosterCodes(code));
   const members=(membersData||[]).filter(m=>(Array.isArray(m.groups)?m.groups:[m.group]).some(g=>wanted.has(String(g||'').trim().toUpperCase())));
   app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content attendance-page attendance-readonly">

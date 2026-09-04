@@ -96,6 +96,15 @@ function initCloudSync(){
       // _updatedAt môže byť vyšší, hoci admin-edit pre konkrétny tréning
       // je novší.
       let newerAttendance=false;
+      let newerMembers=false;
+      // Členovia majú vlastný timestamp podľa ID. Globálny _updatedAt nesmie
+      // zablokovať prijatie nového člena z administrátorského zariadenia.
+      try{
+        const remoteMembers=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];
+        const remoteOrder=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};
+        const localOrder=originalGetItem('gt-member-save-order-v1')?JSON.parse(originalGetItem('gt-member-save-order-v1')):{};
+        if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>m&&m.id!=null && Number(remoteOrder[String(m.id)]||0)>Number(localOrder[String(m.id)]||0));
+      }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
         const localAdmin=originalGetItem('gt-attendance-admin-edits-v1')?JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')):{};
@@ -112,8 +121,9 @@ function initCloudSync(){
           });
         }
       }catch(e){}
-      if(!newerAttendance) return;
-      console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
+      if(!newerAttendance && !newerMembers) return;
+      if(newerMembers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších členov – prijímam');
+      else console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
     }
     
     console.log("📥 Prišla zmena z cloudu");

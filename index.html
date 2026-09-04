@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -103,7 +103,16 @@ function initCloudSync(){
         const remoteMembers=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];
         const remoteOrder=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};
         const localOrder=originalGetItem('gt-member-save-order-v1')?JSON.parse(originalGetItem('gt-member-save-order-v1')):{};
-        if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>m&&m.id!=null && Number(remoteOrder[String(m.id)]||0)>Number(localOrder[String(m.id)]||0));
+        const localMembersRaw=originalGetItem('gt-members-real-2026-v847');
+        const localMembers=localMembersRaw?JSON.parse(localMembersRaw):[];
+        const localById=new Map(Array.isArray(localMembers)?localMembers.filter(m=>m&&m.id!=null).map(m=>[String(m.id),m]):[]);
+        if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>{
+          if(!m||m.id==null) return false;
+          const id=String(m.id), local=localById.get(id);
+          if(!local) return true;
+          if(Number(remoteOrder[id]||0)>Number(localOrder[id]||0)) return true;
+          try{return JSON.stringify(local)!==JSON.stringify(m);}catch(e){return false;}
+        });
       }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
@@ -282,6 +291,15 @@ function initCloudSync(){
           if(raw!==localRaw){ originalSetItem(k,raw); changed=true; }
           return;
         }
+        if(k==='gt-member-delete-order-v1'){
+          let localDel={}, remoteDel={};
+          try{const x=originalGetItem(k);const p=x?JSON.parse(x):{};if(p&&typeof p==='object')localDel=p;}catch(e){}
+          try{const p=data[k]?JSON.parse(data[k]):{};if(p&&typeof p==='object')remoteDel=p;}catch(e){}
+          const merged={...localDel};
+          Object.keys(remoteDel).forEach(id=>merged[id]=Math.max(Number(merged[id]||0),Number(remoteDel[id]||0)));
+          const raw=JSON.stringify(merged); if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
+          return;
+        }
         if(k==='gt-member-application-files-v1'){
           let localObj={}, remoteObj={};
           try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localObj=p; }catch(e){}
@@ -334,7 +352,7 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -399,6 +417,9 @@ function initCloudSync(){
         try{
           if(memberDataChanged && location.hash==='#attendance' && typeof attendance==='function'){
             setTimeout(()=>{try{ attendance(); }catch(e){ console.warn('Member cloud refresh failed:',e); }},0);
+          }
+          if(memberDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
+            setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member list cloud refresh failed:',e); }},0);
           }
         }catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
@@ -511,45 +532,22 @@ function pushToCloud(force = false){
         try{const x=remoteRaw?JSON.parse(remoteRaw):{};if(x&&typeof x==='object')r=x;}catch(e){}
         return {l,r};
       };
-      // ČLENOVIA: nikdy neprepíš cloudový zoznam novšou požiadavkou zo
-      // zariadenia, ktoré ešte nemá nového člena. Zlúčime členov po ID podľa
-      // individuálneho času uloženia. Toto je dôležité najmä vtedy, keď
-      // administrátor pridá člena priamo cez Dochádzku a tréner má otvorenú
-      // staršiu lokálnu kópiu zoznamu.
+      // ČLENOVIA: zlúčenie po ID + tombstone pre vymazanie.
       {
-        let localMembers=[], remoteMembers=[];
-        let localOrder={}, remoteOrder={};
-        try{
-          const x=payload['gt-members-real-2026-v847']?JSON.parse(payload['gt-members-real-2026-v847']):[];
-          if(Array.isArray(x)) localMembers=x;
-        }catch(e){}
-        try{
-          const x=remote['gt-members-real-2026-v847']?JSON.parse(remote['gt-members-real-2026-v847']):[];
-          if(Array.isArray(x)) remoteMembers=x;
-        }catch(e){}
-        try{ localOrder=JSON.parse(payload['gt-member-save-order-v1']||'{}')||{}; }catch(e){}
-        try{ remoteOrder=JSON.parse(remote['gt-member-save-order-v1']||'{}')||{}; }catch(e){}
-        const byId=new Map();
-        localMembers.forEach(m=>{if(m&&m.id!=null) byId.set(String(m.id),m);});
-        remoteMembers.forEach(m=>{
-          if(!m||m.id==null)return;
-          const id=String(m.id);
-          const local=byId.get(id);
-          const lt=Number(localOrder[id]||0);
-          const rt=Number(remoteOrder[id]||0);
-          if(!local || rt>lt) byId.set(id,m);
-        });
-        // Zachovaj aj informáciu o odstránených členoch. Ak je člen v lokálnom
-        // zozname novší než cloud, lokálny stav má prednosť.
-        const mergedMembers=Array.from(byId.values());
-        const mergedOrder={};
-        new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>{
-          mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0));
-        });
-        payload['gt-members-real-2026-v847']=JSON.stringify(
-          mergedMembers.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})
-        );
-        payload['gt-member-save-order-v1']=JSON.stringify(mergedOrder);
+        let localMembers=[], remoteMembers=[], localOrder={}, remoteOrder={}, localDel={}, remoteDel={};
+        try{const x=payload['gt-members-real-2026-v847']?JSON.parse(payload['gt-members-real-2026-v847']):[];if(Array.isArray(x))localMembers=x;}catch(e){}
+        try{const x=remote['gt-members-real-2026-v847']?JSON.parse(remote['gt-members-real-2026-v847']):[];if(Array.isArray(x))remoteMembers=x;}catch(e){}
+        try{localOrder=JSON.parse(payload['gt-member-save-order-v1']||'{}')||{};}catch(e){}
+        try{remoteOrder=JSON.parse(remote['gt-member-save-order-v1']||'{}')||{};}catch(e){}
+        try{localDel=JSON.parse(payload['gt-member-delete-order-v1']||'{}')||{};}catch(e){}
+        try{remoteDel=JSON.parse(remote['gt-member-delete-order-v1']||'{}')||{};}catch(e){}
+        const del={...remoteDel}; Object.keys(localDel).forEach(id=>del[id]=Math.max(Number(del[id]||0),Number(localDel[id]||0)));
+        const byId=new Map(); localMembers.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
+        remoteMembers.forEach(m=>{if(!m||m.id==null)return;const id=String(m.id);if(Number(del[id]||0)>0)return;const local=byId.get(id);const lt=Number(localOrder[id]||0),rt=Number(remoteOrder[id]||0);if(!local||rt>lt)byId.set(id,m);});
+        Object.keys(del).forEach(id=>{if(Number(del[id]||0)>0)byId.delete(id);});
+        payload['gt-members-real-2026-v847']=JSON.stringify(Array.from(byId.values()).map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;}));
+        const mergedOrder={}; new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0)));
+        payload['gt-member-save-order-v1']=JSON.stringify(mergedOrder); payload['gt-member-delete-order-v1']=JSON.stringify(del);
       }
 
       // Save-order timestampy: vždy zachovaj union oboch zariadení.
@@ -6357,6 +6355,11 @@ function loadPersistedMembers(){
   return false;
 }
 loadPersistedMembers();
+try{
+  const raw=originalGetItem('gt-member-delete-order-v1'); const dels=raw?JSON.parse(raw):{};
+  if(dels&&typeof dels==='object') membersData=membersData.filter(m=>!(m&&m.id!=null&&Number(dels[String(m.id)]||0)>0));
+  originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+}catch(e){}
 applyMemberApplicationFiles();
 persistMemberApplicationFiles();
 persistPaymentHistory();
@@ -6533,6 +6536,12 @@ function deleteMemberFromList(id){
 
  membersData.splice(idx,1);
  normalizeAllMembers();
+ try{
+   const raw=originalGetItem('gt-member-delete-order-v1');
+   const dels=raw?JSON.parse(raw):{};
+   dels[String(id)]=Date.now();
+   originalSetItem('gt-member-delete-order-v1',JSON.stringify(dels));
+ }catch(e){ console.warn('Guard Trainer: member delete tombstone failed',e); }
  persistMembersData();
  try{pushToCloud(true);}catch(e){}
  renderMembers();

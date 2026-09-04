@@ -5428,57 +5428,55 @@ function getLoggedTrainerDisplayName(){
 }
 
 function renderHome(){
+  const app=document.querySelector('.app');
+  if(!app) return;
   try{
-    if(!isAdmin() && !isHeadTrainer()){
-      try{
-        const p=getCurrentTestTrainerProfile();
-        if(p) MY_TRAINER_GROUPS=Array.isArray(p.groups)?[...p.groups]:getCurrentTrainerGroups();
-      }catch(e){}
+    // Home must always render, even if one optional cloud/schedule helper is unavailable.
+    let t;
+    try{ t=appToday(); }catch(e){
+      const d=new Date();
+      t={year:d.getFullYear(),month:d.getMonth()+1,day:d.getDate(),iso:d.toISOString().slice(0,10)};
     }
-    if(isHeadTrainer()){ renderHeadHome(); return; }
-
-    const app=document.querySelector('.app');
-    if(!app) return;
-    const t=appToday();
     const d=new Date(t.year,t.month-1,t.day);
-    const dayName=skDays[d.getDay()];
-    const monthName=skMonths[t.month-1];
-    const homeDynamic=typeof scheduleItemsForDate==='function'?scheduleItemsForDate(t.iso):[];
-    const homeBase=(calendarDayGroups&&calendarDayGroups[t.iso])||[];
-    const allHomeItems=[...homeBase.map(g=>({...g,color:getGroupColor(g.code,g.color)})),...homeDynamic.map(g=>({...g,color:getGroupColor(g.code,g.color)}))]
-      .filter((g,i,a)=>a.findIndex(x=>String(x.code).toUpperCase()===String(g.code).toUpperCase()&&x.time===g.time&&x.name===g.name)===i);
-    const items=filterHomeItemsForCurrentRole(allHomeItems).sort((a,b)=>{
+    const dayName=(typeof skDays!=='undefined'&&skDays[d.getDay()])||'';
+    const monthName=(typeof skMonths!=='undefined'&&skMonths[t.month-1])||'';
+
+    let homeBase=[];
+    let homeDynamic=[];
+    try{ homeBase=(typeof calendarDayGroups!=='undefined' && calendarDayGroups[t.iso])||[]; }catch(e){}
+    try{ homeDynamic=typeof scheduleItemsForDate==='function' ? (scheduleItemsForDate(t.iso)||[]) : []; }catch(e){ console.warn('Domov – rozvrh:',e); }
+    const allHomeItems=[...(Array.isArray(homeBase)?homeBase:[]).map(g=>({...g,color:safeGroupColor(g)})),...(Array.isArray(homeDynamic)?homeDynamic:[]).map(g=>({...g,color:safeGroupColor(g)}))]
+      .filter((g,i,a)=>a.findIndex(x=>String(x.code||'').toUpperCase()===String(g.code||'').toUpperCase()&&x.time===g.time&&x.name===g.name)===i);
+
+    let items=allHomeItems;
+    try{ items=filterHomeItemsForCurrentRole(allHomeItems)||[]; }catch(e){ console.warn('Domov – filtrovanie skupín:',e); items=allHomeItems; }
+    items=items.slice().sort((a,b)=>{
       const ta=String(a.time||'').match(/(\d{1,2}):(\d{2})/),tb=String(b.time||'').match(/(\d{1,2}):(\d{2})/);
       const ma=ta?Number(ta[1])*60+Number(ta[2]):9999, mb=tb?Number(tb[1])*60+Number(tb[2]):9999;
       return ma-mb || String(a.code||'').localeCompare(String(b.code||''),'sk',{numeric:true,sensitivity:'base'}) || String(a.name||'').localeCompare(String(b.name||''),'sk');
     });
 
-    const userLabel=escapeHtml(getTopbarLoggedUserLabel()||'');
+    let userLabel='';
+    try{ userLabel=escapeHtml(getTopbarLoggedUserLabel()||''); }catch(e){}
     const listHtml=items.length ? items.map(g=>{
-      const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};
-      const cancelled=isTrainingCancelled(t.iso,g.code,g.time,g.name);
-      const headInactive=isHeadTrainer();
-      const code=escapeHtml(g.code||'');
-      const name=escapeHtml(g.name||'');
-      const time=escapeHtml(g.time||'');
-      const location=escapeHtml(g.location||'Watsonova 4');
-      const trainer=escapeHtml(g.trainer||'');
-      const color=escapeHtml(getGroupColor(g.code,g.color)||'#555');
-      const onclick=cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:${JSON.stringify(String(g.code||''))},name:${JSON.stringify(String(g.name||''))},substitutionInactive:${!!g.substitutionInactive},substitutionBy:${JSON.stringify(String(g.substitutionBy||''))},scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`;
-      return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${onclick}" data-group-code="${code}" data-group-name="${name}"><div class="badge" style="background:${color} !important;background-image:none !important;">${code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${name}${cancelled?'<small class="cancelled-label">ZRUŠENÝ</small>':''}${g.substitutionLabel?`<small class="sub-home-label">${escapeHtml(g.substitutionLabel)}${g.substitutionBy?` · ${escapeHtml(g.substitutionBy)}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${time}<br><i>⌖</i>${location}${trainer?`<br><i>♟</i>${trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;
+      let progress={current:0,total:0};
+      try{ if(typeof getGroupTrainingProgress==='function') progress=getGroupTrainingProgress(g.code)||progress; }catch(e){}
+      let cancelled=false;
+      try{ cancelled=typeof isTrainingCancelled==='function' ? !!isTrainingCancelled(t.iso,g.code,g.time,g.name) : false; }catch(e){}
+      const code=esc(g.code||''), name=esc(g.name||''), time=esc(g.time||''), location=esc(g.location||'Watsonova 4'), trainer=esc(g.trainer||'');
+      const color=esc(safeGroupColor(g));
+      let onclick='return false;';
+      try{
+        const blocked=cancelled || (typeof isHeadTrainer==='function'&&isHeadTrainer());
+        if(!blocked) onclick=`return openHomeTodayTraining({code:${JSON.stringify(String(g.code||''))},name:${JSON.stringify(String(g.name||''))},substitutionInactive:${!!g.substitutionInactive},substitutionBy:${JSON.stringify(String(g.substitutionBy||''))},scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`;
+      }catch(e){}
+      return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${onclick}" data-group-code="${code}" data-group-name="${name}"><div class="badge" style="background:${color} !important;background-image:none !important;">${code}</div><div class="info"><div class="title"><span>${Number(progress.current)||0}/${Number(progress.total)||0}</span> ${name}${cancelled?'<small class="cancelled-label">ZRUŠENÝ</small>':''}${g.substitutionLabel?`<small class="sub-home-label">${esc(g.substitutionLabel)}${g.substitutionBy?` · ${esc(g.substitutionBy)}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${time}<br><i>⌖</i>${location}${trainer?`<br><i>♟</i>${trainer}`:''}</div></div><div class="people"><div class="num">${safeMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;
     }).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;
 
-    // Domov sa skladá nanovo. Nepoužíva sa už statická HOME_HTML šablóna,
-    // takže staré dátumy, skupiny ani počty nemôžu zostať na obrazovke.
     app.innerHTML=`
-      <header class="topbar home-topbar">
-        <div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${userLabel}</span></div>
-      </header>
+      <header class="topbar home-topbar"><div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${userLabel}</span></div></header>
       <main class="content">
-        <div class="section-head">
-          <div class="section-title"><span class="calendar-icon">▣</span> DNEŠNÉ TRÉNINGY</div>
-          <div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>
-        </div>
+        <div class="section-head"><div class="section-title"><span class="calendar-icon">▣</span> DNEŠNÉ TRÉNINGY</div><div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div></div>
         <section class="training-list">${listHtml}</section>
         <div class="quick-title">RÝCHLY PREHĽAD (MOJE SKUPINY)</div>
         <section class="quick">
@@ -5489,7 +5487,7 @@ function renderHome(){
           <button type="button" class="q green" onclick="showQuickMembers('birthday')"><span class="qicon">🎁</span><span class="qtext">Dnešné narodeniny</span><strong id="quickBirthdayCount">0</strong><span class="go">›</span></button>
         </section>
         <section class="actions">
-          ${isAdmin()?`<button class="action" onclick="toast('Nový tréning – admin')">⊕ &nbsp; NOVÝ TRÉNING</button>`:''}
+          ${safeIsAdmin()?`<button class="action" onclick="toast('Nový tréning – admin')">⊕ &nbsp; NOVÝ TRÉNING</button>`:''}
           <button class="action substitution-action" onclick="openSubstitutionOffer()">⇄ &nbsp; ZASTUPOVANIE</button>
           <button class="action" onclick="nav('calendar')">▣ &nbsp; KALENDÁR</button>
           <button class="action" onclick="nav('attendance')">♟ &nbsp; DOCHÁDZKA</button>
@@ -5508,13 +5506,19 @@ function renderHome(){
     try{ updateHomeGroupCounts(); updateHomeQuickOverview(); }catch(e){ console.warn('Domov – aktualizácia prehľadu:',e); }
   }catch(err){
     console.error('GUARD TRAINER DOMOV:',err);
-    // Bezpečná poistka: nikdy nezostane stará statická obrazovka.
+    // Last-resort Home: never leave the user on a blank/loading screen.
     try{
-      const app=document.querySelector('.app');
-      if(app){app.innerHTML='<main class="content"><div class="empty-day" style="padding:40px;text-align:center">Načítavam Domov…</div></main>';app.classList.remove('gt-home-pending');app.classList.add('gt-home-ready');}
+      const d=new Date();
+      app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand">GUARD TRAINER</div></header><main class="content"><div class="section-head"><div class="section-title"><span class="calendar-icon">▣</span> DOMOV</div><div class="date"><b>${d.getDate()}. ${d.toLocaleString('sk-SK',{month:'long'})} ${d.getFullYear()}</b></div></div><div class="empty-day" style="padding:40px;text-align:center">Domov sa načítava. Skúste obnoviť aplikáciu.</div></main><nav class="bottom"><a class="nav active" href="#home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a></nav>`;
+      app.classList.remove('gt-home-pending');app.classList.add('gt-home-ready');
     }catch(e){}
   }
 }
+function esc(v){ try{return escapeHtml(String(v??''));}catch(e){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));} }
+function safeGroupColor(g){ try{return typeof getGroupColor==='function' ? (getGroupColor(g?.code,g?.color)||'#555') : (g?.color||'#555');}catch(e){return g?.color||'#555';} }
+function safeMemberCount(code){ try{return typeof getGroupMemberCount==='function' ? (getGroupMemberCount(code)||0) : 0;}catch(e){return 0;} }
+function safeIsAdmin(){ try{return typeof isAdmin==='function'&&isAdmin();}catch(e){return false;} }
+
 function renderCalendar(){
   const t=appToday();
   if(typeof selectedCalendarMonth!=='number' || typeof selectedCalendarYear!=='number'){

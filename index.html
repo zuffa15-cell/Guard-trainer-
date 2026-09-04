@@ -13715,6 +13715,30 @@ window.addEventListener('resize',updateAttendanceStickyTop);
 window.addEventListener('scroll',updateAttendanceStickyTop,{passive:true});
 
 
+/* v986 – robustná spodná navigácia po prekreslení Domova.
+   Každá karta navigácie dostane priamy capture handler, takže funguje aj
+   keď Domov práve nahradil celý obsah .app. */
+(function installBottomNavigationFix(){
+  if(window.__gtBottomNavigationFixInstalled) return;
+  window.__gtBottomNavigationFixInstalled=true;
+  document.addEventListener('click',function(e){
+    const el=e.target && e.target.closest ? e.target.closest('.bottom .nav') : null;
+    if(!el) return;
+    const href=String(el.getAttribute('href')||'').trim();
+    let route=href.charAt(0)==='#' ? href.slice(1) : String(el.getAttribute('data-nav')||'');
+    if(!route && el.querySelector('.nav-label')) route=String(el.querySelector('.nav-label').textContent||'').trim().toLowerCase();
+    const map={'domov':'home','kalendár':'calendar','dochádzka':'attendance','členovia':'members','vyúčtovanie':'billing','viac':'more'};
+    route=map[route]||route;
+    if(!['home','calendar','attendance','members','billing','more'].includes(route)) return;
+    e.preventDefault();
+    if(e.stopImmediatePropagation) e.stopImmediatePropagation();
+    try{ nav(route); }catch(err){
+      console.error('Navigácia v986:',err);
+      try{ toast('Chyba otvorenia obrazovky'); }catch(_){}
+    }
+  },true);
+})();
+
 document.addEventListener('click',function(e){
   const el=e.target.closest('[data-nav]');
   if(el){

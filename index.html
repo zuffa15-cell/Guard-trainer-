@@ -5739,7 +5739,7 @@ function canonicalizeTrainers(){
     const next=wanted.map((w,idx)=>{
       const hit=old.find(x=>norm(x.full||x.name)===norm(w.full));
       const base=hit?{...hit}:{};
-      return {...base,id:hit?.id!=null?hit.id:(idx+1),name:w.full,full:w.full,role:w.role,active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?base.groups:[]};
+      return {...base,id:hit?.id!=null?hit.id:(idx+1),name:w.full,full:w.full,role:w.role,email:String(base.email||''),phone:String(base.phone||''),license:String(base.license||''),valid:String(base.valid||''),active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?base.groups:[]};
     });
     trainersData.splice(0,trainersData.length,...next);
     return next;
@@ -5876,7 +5876,7 @@ function renderTrainers(){
  persistTrainersData();
  // Profilové priradenia sú autoritatívne. Zoznam trénerov obsahuje presne 4 profily.
  const app=document.querySelector('.app');
- const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
+ const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>{ const vv=String(t.valid||'').trim(); const d=vv?new Date(vv.split('.').reverse().join('-')):null; return !t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && (!d || isNaN(d.getTime()) || d>=new Date()); }).length;
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainers-page">

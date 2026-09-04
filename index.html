@@ -4333,22 +4333,15 @@ function normalizeGroupCode(value){
 }
 function groupRosterCodes(code){
   const key=normalizeGroupCode(code);
-  // B+C is one shared training and contains the roster of both B and C.
-  if(key==='B+C' || key==='C+B') return ['B','C'];
+  // B+C is a standalone group. It is NOT the same as B or C.
+  // Members/trainer assignments for B+C must therefore remain separate.
   return key ? [key] : [];
 }
 function trainerGroupMatches(trainingCode, assignedGroups){
   const code=normalizeGroupCode(trainingCode);
   if(!code || !assignedGroups) return false;
   const raw = assignedGroups instanceof Set ? [...assignedGroups] : (Array.isArray(assignedGroups)?assignedGroups:[]);
-  // Expand the trainer assignment too. This is important when the profile
-  // stores the assignment as B+C, B + C, or C+B.
-  const allowed=new Set();
-  raw.forEach(x=>groupRosterCodes(x).forEach(c=>allowed.add(normalizeGroupCode(c))));
-  raw.forEach(x=>{ const v=normalizeGroupCode(x); if(v) allowed.add(v); });
-  if(allowed.has(code)) return true;
-  // A shared B+C training is accessible to a trainer assigned to B, C, or B+C.
-  return groupRosterCodes(code).some(c=>allowed.has(normalizeGroupCode(c)));
+  return raw.some(x=>normalizeGroupCode(x)===code);
 }
 function getGroupMemberCount(code){
   normalizeAllMembers();

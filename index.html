@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v949: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v950: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -4672,7 +4672,7 @@ function filterHomeItemsForCurrentRole(items){
     return (items||[]).filter(g=>{
       const code=String(g?.code||'').trim().toUpperCase();
       const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
-      return allowed.has(code) || incoming;
+      return trainerGroupMatches(code, allowed) || incoming;
     });
   }
   const allowed=getCurrentTestTrainerGroupCodes();
@@ -4688,7 +4688,7 @@ function filterHomeItemsForCurrentRole(items){
     return match ? {...g,substitutionInactive:true,substitutionLabel:'ZASTUPOVANÝ TRÉNING',substitutionBy:match.acceptedBy} : g;
   }).filter(g=>{
     const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
-    return allowed.has(String(g.code||'').toUpperCase()) || incoming;
+    return trainerGroupMatches(String(g.code||'').toUpperCase(), allowed) || incoming;
   }).map(g=>{
     const incoming=incomingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
     return incoming ? {...g,substitutionActive:false,substitutionLabel:'',substitutionBy:''} : g;
@@ -4720,7 +4720,7 @@ function openHomeTodayTraining(g){
     const code=String(g?.code||g?.group||'').toUpperCase();
     const today=appToday().iso;
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(code,today,String(g?.time||''));
-    if(code && myGroups.has(code)){
+    if(code && trainerGroupMatches(code, myGroups)){
       // Tréner má skupinu pridelenú.
     }else if(acceptedSubstitution){
       // PRIJATÝ ZÁSTUP: dočasný prístup k tomuto konkrétnemu tréningu,
@@ -5290,7 +5290,7 @@ function dayRows(){
       ? new Set((getCurrentTrainerGroups()||[]).map(x=>String(x).trim().toUpperCase()))
       : (typeof getCurrentTestTrainerGroupCodes==='function' ? getCurrentTestTrainerGroupCodes() : null);
     const trainerGroups = testAllowed instanceof Set ? testAllowed : new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
-    const trainerAssigned=isAdmin() || isHeadTrainer() || groupRosterCodes(g.code||'').some(c=>trainerGroups.has(c));
+    const trainerAssigned=isAdmin() || isHeadTrainer() || trainerGroupMatches(g.code||'', trainerGroups);
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(g.code,dateLabel,g.time);
     const canOpen=trainerAssigned || acceptedSubstitution;
     const groupInactive=(!isHeadTrainer() && !isAdmin() && !canOpen);
@@ -8002,7 +8002,7 @@ function getAttendancePendingSaveAt(date,group){
   }catch(e){ return 0; }
 }
 
-// v949: Admin dochádzka je autoritatívny samostatný Firestore záznam pre trénerov.
+// v950: Admin dochádzka je autoritatívny samostatný Firestore záznam pre trénerov.
 // Nepoužíva sa na bežný sync celej databázy, preto ju nemôže prepísať
 // neúplná lokálna kópia trénera.
 const ATTENDANCE_DIRECT_COLLECTION = 'guard-trainer-attendance';

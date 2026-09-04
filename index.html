@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v951: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -153,6 +153,7 @@ function initCloudSync(){
       } catch(e){}
 
       let memberSyncHandled=false;
+      let memberDataChanged=false;
       SYNC_KEYS.forEach(k=>{
         if(isGTLocalAuthKey(k)) return;
         if((k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') && memberSyncHandled) return;
@@ -309,7 +310,7 @@ function initCloudSync(){
           });
           const membersRaw=JSON.stringify(mergedMembers);
           const orderRaw=JSON.stringify(mergedOrder);
-          if(membersRaw!==originalGetItem('gt-members-real-2026-v847')){ originalSetItem('gt-members-real-2026-v847',membersRaw); changed=true; }
+          if(membersRaw!==originalGetItem('gt-members-real-2026-v847')){ originalSetItem('gt-members-real-2026-v847',membersRaw); changed=true; memberDataChanged=true; }
           if(orderRaw!==originalGetItem(k)){ originalSetItem(k,orderRaw); changed=true; }
           memberSyncHandled=true;
           return;
@@ -383,6 +384,13 @@ function initCloudSync(){
           }
         }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
+        // Po cloudovom pridaní člena treba obnoviť aj otvorený attendanceState.members.
+        // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
+        try{
+          if(memberDataChanged && location.hash==='#attendance' && typeof attendance==='function'){
+            setTimeout(()=>{try{ attendance(); }catch(e){ console.warn('Member cloud refresh failed:',e); }},0);
+          }
+        }catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
         // Cloud synchronizácia nesmie meniť otvorenú obrazovku na tomto zariadení.
         // Dáta sa iba aktualizujú na pozadí; navigáciu ovláda výhradne používateľ.

@@ -968,7 +968,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
 <style id="gtHomeNoLegacyFlash">
 /* v981: statická stará obrazovka Domov sa nesmie ani na okamih zobraziť.
    Domov sa zobrazí až po vykreslení aktuálnych serverových/rozvrhových údajov. */
-.app.gt-home-pending{visibility:hidden;}
+.app.gt-home-pending{visibility:hidden!important;opacity:0!important;pointer-events:none!important;}
 .app.gt-home-ready{visibility:visible;}
 </style>
 </style>
@@ -4438,6 +4438,8 @@ function formatAppDate(date){
 
 let toastTimer;
 const HOME_HTML = document.querySelector('.app').innerHTML;
+// v982: hardcoded legacy Home must never be shown; renderHome() is the only renderer.
+try{ const __gtInitialApp=document.querySelector('.app'); if(__gtInitialApp) __gtInitialApp.innerHTML=''; }catch(e){}
 
 
 function getCurrentTrainerGroups(){

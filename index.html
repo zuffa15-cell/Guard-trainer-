@@ -8614,6 +8614,48 @@ function saveAdminAttendanceDirectCloud(key, history, savedAt){
   }catch(e){ console.warn('Priamy cloud zápis admin dochádzky zlyhal',e); }
 }
 
+// v960: Priame transakčné uloženie konkrétnej dochádzky na server.
+// Nečaká na všeobecný localStorage sync a nikdy neposiela späť celý lokálny
+// register. Zapíše iba aktuálny dátum + skupinu do serverového registra.
+async function saveAttendanceHistoryKeyToCloud(key, history, savedAt){
+  try{
+    if(!db || !cloudEnabled) return false;
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    const uid=firebase.auth().currentUser?.uid || 'unknown';
+    const at=Number(savedAt||Date.now());
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let remoteHistory={};
+      let remoteOrder={};
+      let remoteAdmin={};
+      try{ const x=data['gt-training-attendance-history']?JSON.parse(data['gt-training-attendance-history']):{}; if(x&&typeof x==='object') remoteHistory=x; }catch(e){}
+      try{ const x=data['gt-attendance-save-order-v1']?JSON.parse(data['gt-attendance-save-order-v1']):{}; if(x&&typeof x==='object') remoteOrder=x; }catch(e){}
+      try{ const x=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{}; if(x&&typeof x==='object') remoteAdmin=x; }catch(e){}
+      const canonicalKey=canonicalAttendanceHistoryKey(key);
+      // Odstráň starú variantu rovnakého dátum|skupina a ulož novú.
+      Object.keys(remoteHistory).forEach(k=>{
+        if(canonicalAttendanceHistoryKey(k)===canonicalKey && k!==canonicalKey) delete remoteHistory[k];
+      });
+      remoteHistory[canonicalKey]=history||{};
+      remoteOrder[canonicalKey]=Math.max(Number(remoteOrder[canonicalKey]||0),at);
+      if(isAdmin()) remoteAdmin[canonicalKey]=Math.max(Number(remoteAdmin[canonicalKey]||0),at);
+      tx.set(ref,{
+        'gt-training-attendance-history':JSON.stringify(remoteHistory),
+        'gt-attendance-save-order-v1':JSON.stringify(remoteOrder),
+        'gt-attendance-admin-edits-v1':JSON.stringify(remoteAdmin),
+        _lastUpdateBy:uid,
+        _updatedAt:Date.now()
+      },{merge:true});
+    });
+    console.log('📤 Dochádzka uložená priamo na server:',key);
+    return true;
+  }catch(e){
+    console.warn('Priame transakčné uloženie dochádzky zlyhalo:',e);
+    return false;
+  }
+}
+
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
   const before=trainingAttendanceByGroup[key]||null;
@@ -8663,7 +8705,15 @@ function saveCurrentTrainingAttendance(){
   // Kritická ochrana dnešnej dochádzky: pri pomalom Firebase nesmie nový
   // lokálny zápis po reloadovaní ustúpiť staršiemu cloudovému snapshotu.
   markAttendancePendingSave(attendanceState.date,attendanceState.group);
-  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),100); }catch(e){}
+  // v960: najprv zapíš konkrétnu dochádzku priamo transakciou na server.
+  // Všeobecný sync je iba doplnkový; strata/oneskorenie localStorage pushu
+  // už nesmie znamenať, že trénerova dochádzka zostane iba v mobile.
+  try{
+    const directHistory=JSON.parse(JSON.stringify(next));
+    saveAttendanceHistoryKeyToCloud(key,directHistory,adminSavedAt||getAttendancePendingSaveAt(attendanceState.date,attendanceState.group)||Date.now())
+      .catch(e=>console.warn('Attendance direct cloud save:',e));
+  }catch(e){ console.warn('Attendance direct cloud save prepare:',e); }
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),300); }catch(e){}
 }
 function membershipDraftKey(memberId,date,group){
   return `${memberId}|${date}|${group}`;

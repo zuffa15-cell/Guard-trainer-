@@ -86,14 +86,14 @@ function initCloudSync(){
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
     if(!data) return;
-    if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
-      // moje vlastné zmeny - ignoruj
+    const hasAdminChange = !!(data['gt-attendance-admin-override-v1'] && data['gt-attendance-admin-override-v1']!=='{}') || !!(data['gt-attendance-admin-edits-v1'] && data['gt-attendance-admin-edits-v1']!=='{}');
+    if(!hasAdminChange && data._lastUpdateBy && data._lastUpdateBy === myUid) {
       return;
     }
-    if(data._updatedAt && data._updatedAt <= lastCloudUpdate) {
-      // stará zmena - ignoruj
+    if(!hasAdminChange && data._updatedAt && data._updatedAt <= lastCloudUpdate) {
       return;
     }
+    // ADMIN zmena sa NIKDY neignoruje, aj keď je _updatedAt starší
     
     console.log("📥 Prišla zmena z cloudu");
     // Toto je prvý potvrdený snapshot spoločnej databázy. Označ ho ešte
@@ -3690,7 +3690,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER</div>
+   <div class="gt-login-title">GUARD TRAINER v9999-ADMIN-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -3884,7 +3884,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 </div>
 <div class="app">
 <header class="topbar home-topbar">
-  <div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small" data-logged-trainer></span></div>
+  <div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small" data-logged-trainer></span></div>
 </header>
 
 <main class="content">
@@ -4868,7 +4868,7 @@ function renderHeadHomeList(title,rows,kind){
   }catch(e){}
   const app=document.querySelector('.app');
   const body=kind==='new'?rows.map(m=>`<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${m.memberSince||m.newMemberDate||'—'}</span></div>`).join(''):rows.map(m=>{const d=headHomeLastVisit(m);return `<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${d?d.toLocaleDateString('sk-SK'):'Žiadna návšteva'}</span></div>`}).join('');
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
 
 function getHeadHomeAttendancePaymentTotals(month,year){
@@ -4936,7 +4936,7 @@ function renderHeadHome(){
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;const todayIso=(()=>{const td=appTodayDate();return `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,'0')}-${String(td.getDate()).padStart(2,'0')}`;})();const todayClass=iso===todayIso?' week-today':'';let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day${todayClass}"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
   const birthdayRows=birthdays.map(m=>`<div class="birthday-row"><span class="birthday-name">${m.surname} ${m.name} <strong class="birthday-age">— ${m.age} rokov</strong></span><span class="birthday-group">${headHomeGroupShort((m.groups||[m.group])[0])}</span><span class="birthday-date">${m.next.getDate()}. ${m.next.getMonth()+1}.</span></div>`).join('');
-  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content head-home-dashboard">
+  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content head-home-dashboard">
   <section class="head-welcome-card"><div class="welcome-small">${greeting}</div><div class="welcome-big">HLAVNÝ TRÉNER</div><div class="welcome-date">${t.day}. ${skMonths[t.month-1]} ${t.year}</div></section>
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
@@ -4985,8 +4985,8 @@ function renderHome(){
   // Preto sa meno musí vložiť priamo do tejto šablóny, nie cez všeobecný
   // topbar replacement.
   html=html.replace(
-    /<div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small" data-logged-trainer><\/span><\/div>/,
-    `<div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>`
+    /<div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small" data-logged-trainer><\/span><\/div>/,
+    `<div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>`
   );
   html=html.replace(/<button class="menu"[^>]*>☰<\/button>/, '');
   html=html.replace(/<div class="date">[\s\S]*?<\/div>/,`<div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>`);
@@ -5020,7 +5020,7 @@ function renderCalendar(){
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const currentMonthLabel=monthNames[selectedCalendarMonth]+' '+selectedCalendarYear;
   app.innerHTML=`
-    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
     <main class="content">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">▣</span> KALENDÁR</div>
@@ -5568,7 +5568,7 @@ function renderTrainers(){
  const app=document.querySelector('.app');
  const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainers-page">
   <div class="trainer-head"><div><span class="trainer-head-icon">♟</span><div><h2>TRÉNERI</h2><small>${isAdmin()?'Správa trénerov a ich oprávnení':'Prehľad všetkých trénerov – iba na čítanie'}</small></div></div>${isAdmin()?`<button onclick="newTrainer()">＋ PRIDAŤ TRÉNERA</button>`:''}</div>
   <div class="trainer-stats"><div><b>${trainerList.length}</b><span>Tréneri spolu</span></div><div><b>${active}</b><span>Aktívni</span></div><div><b>0</b><span>Platnosť čoskoro vyprší</span></div><div><b>0</b><span>Platnosť vypršala</span></div></div>
@@ -5618,7 +5618,7 @@ function renderTrainerProfile(id){
  }
  const app=document.querySelector('.app');
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainer-profile-page">
   <div class="profile-title-row">
     <div><h2>PROFIL TRÉNERA</h2><small>Osobné údaje, licencia a oprávnenia</small></div>
@@ -5794,7 +5794,7 @@ function renderInviteTrainer(){
   const app=document.querySelector('.app');
   const groups=getAdminCreatedGroups();
   app.innerHTML=`
-   <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+   <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
    <main class="content trainer-profile-page">
     <div class="profile-title-row"><div><h2>VYTVORIŤ TRÉNERA</h2><small>Vyplň údaje trénera a odošli mu pozvánku</small></div></div>
     <section class="profile-box">
@@ -5923,7 +5923,7 @@ function renderNewTrainerDirect(){
  const groups=getAdminCreatedGroups();
  const templateGroups=['A','B','C','D','D+'].filter(c=>groups.some(g=>String(g[0]).toUpperCase()===c));
  document.querySelector('.app').innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content trainer-profile-page">
    <div class="profile-title-row"><div><h2>NOVÝ TRÉNER</h2><small>Vytvorené podľa vzoru „VZOROVÝ TRÉNER“</small></div></div>
    <section class="profile-box"><h3>OSOBNÉ ÚDAJE</h3><div class="profile-grid">
@@ -6445,7 +6445,7 @@ function renderMembers(){
  const active=membersData.length;
  const unpaidM=membersData.filter(m=>!m.membership).length, unpaidR=membersData.filter(m=>!m.registration).length, debts=membersData.filter(m=>m.debt>0).length;
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content members-page">
   <div class="members-head"><div><h2>ČLENOVIA <span class="member-count">(${active})</span></h2><small>Správa členov klubu</small></div><button onclick="createMemberFromMembers()">＋ NOVÝ ČLEN</button></div>
   <div class="member-filters"><input id="memberSearchInput" type="search" placeholder="🔎 Hľadať člena..." autocomplete="off" oninput="filterMembers(this.value)"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
@@ -7494,7 +7494,7 @@ function openRoleTesting(){
   const app=document.querySelector('.app');
   if(!app) return;
   const options=[['admin','ADMIN','Celý pohľad administrátora'],['head','HLAVNÝ TRÉNER','Pohľad hlavného trénera'],['trainer1','TRÉNER 1','Pohľad trénera 1'],['trainer2','TRÉNER 2','Pohľad trénera 2']];
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="more-page-title"><div class="section-title">🧪 TESTOVANIE APLIKÁCIE</div><small>Administrátor si môže vyskúšať jednotlivé pohľady.</small></div><div class="more-buttons">${options.map(o=>`<button type="button" class="more-menu-item role-test-button" data-test-role="${o[0]}" onclick="return startAdminTestRole('${o[0]}')"><span><b>${o[1]}</b><small>${o[2]}</small></span>›</button>`).join('')}<button class="more-menu-item" onclick="exitAdminTesting()"><span><b>UKONČIŤ TESTOVANIE</b><small>Návrat na administrátora</small></span>›</button></div></main>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="more-page-title"><div class="section-title">🧪 TESTOVANIE APLIKÁCIE</div><small>Administrátor si môže vyskúšať jednotlivé pohľady.</small></div><div class="more-buttons">${options.map(o=>`<button type="button" class="more-menu-item role-test-button" data-test-role="${o[0]}" onclick="return startAdminTestRole('${o[0]}')"><span><b>${o[1]}</b><small>${o[2]}</small></span>›</button>`).join('')}<button class="more-menu-item" onclick="exitAdminTesting()"><span><b>UKONČIŤ TESTOVANIE</b><small>Návrat na administrátora</small></span>›</button></div></main>`;
 }
 function startAdminTestRole(role){
   const allowed=['admin','head','trainer1','trainer2'];
@@ -7552,7 +7552,7 @@ function openScheduleManager(){
  const schedules=getSavedSchedules();
  const app=document.querySelector('.app');
  app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content schedule-page">
    <div class="section-title">📅 ROZVRH</div>
    <small>Uložené tréningy – admin ich môže upraviť alebo vymazať.</small>
@@ -7676,7 +7676,7 @@ function openCreateSchedule(editId=null){
  app.innerHTML=`
   <header class="topbar">
    <button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button>
-   <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+   <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
   </header>
   <main class="content schedule-page">
    <div class="section-title">📅 VYTVORIŤ ROZVRH</div>
@@ -7792,7 +7792,7 @@ function renderMore(){
  app.innerHTML=`
    <header class="topbar">
      <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-     <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+     <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
    </header>
    <main class="content">
      <div class="more-page-title">
@@ -8249,7 +8249,7 @@ function renderCancelledAttendance(){
   const app=document.querySelector('.app');
   const color=getGroupColor(attendanceState.group,'gold');
   app.innerHTML=`
-    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
     <main class="content attendance-page cancelled-attendance-page">
       <div class="calendar-head"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
         <button class="month-btn" onclick="openAttendanceDatePicker()">${formatAttendanceDate(attendanceState.date)}⌄</button></div>
@@ -8311,7 +8311,7 @@ function attendanceChooser(){
       <div class="group-people"><b>${getGroupMemberCount(code)}</b><span>členov</span></div>
     </article>`;
   }).join(''):`<div class="empty-state"><b>DNES NIE JE NAPLANOVANÝ ŽIADNY TRÉNING</b><small>Dochádzka sa dá otvoriť iba pre aktuálne naplánovaný tréning.</small></div>`;
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast" class="toast"></div>`;
 }
 
 function applyBillingSnapshotToAttendance(){
@@ -8419,7 +8419,7 @@ function attendance(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content attendance-page ${(isAttendanceFullyLocked()||isHeadTrainer())?'attendance-readonly':''}">
       <div class="calendar-head">
@@ -9867,7 +9867,7 @@ function trainingBilling(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content billing-page">
       <div class="section-title">VYÚČTOVANIE TRÉNINGU</div>
@@ -10126,7 +10126,7 @@ function renderYearlyBilling(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content yearly-billing-page">
       <div class="monthly-trainer-card">
@@ -10362,7 +10362,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'MÁJ';
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page">
     <div class="monthly-trainer-card">
       <div class="trainer-avatar">${String(trainerName||'T').charAt(0)}</div>
@@ -10431,7 +10431,7 @@ function showHeadTrainerDetailSummary(trainerName,month=appToday().month,year=ap
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[Number(month)-1]||'';
   const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
   <div class="section-title monthly-title">▣ &nbsp; SÚHRN – <b>${mName} ${year}</b></div>
   <div class="head-detail-summary">
@@ -10485,7 +10485,7 @@ function renderHeadTrainerYearFor(trainerName){
     const unfinished=i===currentMonth-1;
     return `<tr class="${unfinished?'year-unfinished':''}"><td>${name}</td><td>${amount} €</td></tr>`;
   }).join('');
-  app.innerHTML=`<header class="topbar"><button type="button" class="menu" onclick="window.renderHeadTrainerBilling(); return false;" aria-label="Späť na ročné vyúčtovanie">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  app.innerHTML=`<header class="topbar"><button type="button" class="menu" onclick="window.renderHeadTrainerBilling(); return false;" aria-label="Späť na ročné vyúčtovanie">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page annual-trainer-compact"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
   <div class="section-title monthly-title">📊 ROČNÉ VYÚČTOVANIE – <b>${year}</b></div>
   <div class="year-trainer-name">${trainerName}</div>
@@ -10894,7 +10894,7 @@ function renderHeadTrainerBilling(){
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'';
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing">
     <section class="head-profile head-profile-main"><div class="head-avatar">${headName.charAt(0)}</div><div class="head-trainer-title"><b>HLAVNÝ TRÉNER</b><span>${headName}</span></div><button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button></section>
     <div class="head-title-row"><h2>▣ &nbsp; VYÚČTOVANIE – <b>${mName} ${year}</b></h2><div class="head-month-nav"><button onclick="shiftHeadTrainerBillingMonth(-1)" aria-label="Predchádzajúci mesiac">‹</button><button onclick="resetHeadTrainerBillingMonth()" aria-label="Aktuálny mesiac">▣</button><button onclick="shiftHeadTrainerBillingMonth(1)" aria-label="Nasledujúci mesiac">›</button></div></div>
@@ -11628,7 +11628,7 @@ function renderTrainerYearDetail(trainerName){
   const vals=approved[trainerName]||[];
   const total=vals.reduce((a,v)=>a+v,0);
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content trainer-year-approved">
     <section class="head-profile"><div class="head-avatar">T</div><div><b>${trainerName}</b><span>TRÉNER</span></div><div class="head-groups"><small>SKUPINY</small><div><i>B</i><i>D</i></div></div></section>
     <div class="section-title monthly-title">▣ &nbsp; ROČNÉ VYÚČTOVANIE – 2026</div>
@@ -11770,7 +11770,7 @@ function renderHeadTrainerYear(view='trainers'){
   const allRows=months.map((m,i)=>`<tr><td>${m}</td><td class="club-amount">${money(sums[i])}</td></tr>`).join('');
 
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing annual-screen">
     <section class="head-profile head-profile-main">
       <div class="head-avatar">M</div>
@@ -12191,7 +12191,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content monthly-billing-page">
       <div class="monthly-trainer-card">
@@ -12352,7 +12352,7 @@ function renderHeadTrainerAttendanceReadOnly(){
   const code=String(attendanceState.group||'').trim().toUpperCase();
   const wanted=new Set(groupRosterCodes(code));
   const members=(membersData||[]).filter(m=>(Array.isArray(m.groups)?m.groups:[m.group]).some(g=>wanted.has(String(g||'').trim().toUpperCase())));
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content attendance-page attendance-readonly">
    <div class="calendar-head"><div class="section-title">☑ DOCHÁDZKA</div><div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div></div>
    <div class="att-group"><span>${code}</span><b>${attendanceState.name||code}</b></div>
@@ -12713,7 +12713,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const medals=['🥇','🥈','🥉'];
 
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content stats-page">
     <div class="section-title">📊 ŠTATISTIKY – CELÝ KLUB</div>
     <div class="stats-period">
@@ -13294,7 +13294,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 <label class="field"><span class="icon">♙</span><input id="gtLoginEmail" type="email" placeholder="E-mail" autocomplete="username"></label>
 <label class="field"><span class="icon">♙</span><input id="gtLoginPassword" type="password" placeholder="Heslo" autocomplete="current-password"></label>
 <button class="login" type="button">PRIHLÁSIŤ SA</button>
-<div class="footer">GUARD TRAINER 1.0<br>© 2024 Guard Košice</div></div></div>
+<div class="footer">GUARD TRAINER v9999-ADMIN-FIX 1.0<br>© 2024 Guard Košice</div></div></div>
 
 <script id="gtCloudLoadingTextV1">
 (function(){
@@ -13331,7 +13331,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
       cloudInitialSnapshotReady=true;
     }
     try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}
-    console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');
+    console.log('🚀 GUARD TRAINER v9999-ADMIN-FIX: otvorenie aplikácie podľa prihlásenej roly');
     localStorage.setItem('gt-auth-initialized','true');
 
     let account=null;

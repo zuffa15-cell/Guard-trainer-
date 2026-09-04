@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v957: oprava cloud synchronizácie vyúčtovania medzi zariadeniami; prázdne lokálne vyúčtovanie už neprepíše cloud a prijaté vyúčtovanie sa na otvorenej karte okamžite zobrazí.
+<!-- Guard Trainer v958: oprava cloud synchronizácie vyúčtovania medzi zariadeniami; prázdne lokálne vyúčtovanie už neprepíše cloud a prijaté vyúčtovanie sa na otvorenej karte okamžite zobrazí.
 <!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
@@ -251,6 +251,7 @@ function initCloudSync(){
       // _updatedAt môže byť vyšší, hoci admin-edit pre konkrétny tréning
       // je novší.
       let newerAttendance=false;
+      let newerBilling=false;
       let newerMembers=hasRemoteMembers && data._lastUpdateBy !== myUid;
       // Členovia majú vlastný timestamp podľa ID. Globálny _updatedAt nesmie
       // zablokovať prijatie nového člena z administrátorského zariadenia.
@@ -283,6 +284,32 @@ function initCloudSync(){
           try{return JSON.stringify(local)!==JSON.stringify(m);}catch(e){return false;}
         });
       }catch(e){}
+      // VYÚČTOVANIE má vlastný záznamový čas (savedAt), preto globálny
+      // _updatedAt dokumentu nesmie zablokovať cloudové vyúčtovanie.
+      // Typický prípad: Kalendár/Dochádzka je novšia na mobile, ale samotné
+      // vyúčtovanie bolo uložené skôr na druhom zariadení. Ak by sme tu
+      // vyhodili celý snapshot ako starý, trénerovi by sa zobrazilo 0 tréningov.
+      try{
+        const remoteBillingRaw=data['gt-monthly-billing-v221'];
+        const localBillingRaw=originalGetItem('gt-monthly-billing-v221');
+        const remoteBilling=remoteBillingRaw?JSON.parse(remoteBillingRaw):[];
+        const localBilling=localBillingRaw?JSON.parse(localBillingRaw):[];
+        const normBilling=v=>String(v||'').trim().toUpperCase();
+        const billingKey=r=>{
+          const d=parsePaymentDate(r&&r.date);
+          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
+          return `${normBilling(r&&r.trainer)}|${dk}|${normBilling(r&&r.group)}`;
+        };
+        const localMap=new Map();
+        if(Array.isArray(localBilling)) localBilling.forEach(r=>localMap.set(billingKey(r),r));
+        if(Array.isArray(remoteBilling)) remoteBilling.forEach(r=>{
+          const key=billingKey(r), l=localMap.get(key);
+          if(!l){ newerBilling=true; return; }
+          const rt=Number(r&&r.savedAt||r&&r.updatedAt||r&&r.createdAt||0);
+          const lt=Number(l&&l.savedAt||l&&l.updatedAt||l&&l.createdAt||0);
+          if(rt>lt) newerBilling=true;
+        });
+      }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
         const localAdmin=originalGetItem('gt-attendance-admin-edits-v1')?JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')):{};
@@ -299,8 +326,9 @@ function initCloudSync(){
           });
         }
       }catch(e){}
-      if(!newerAttendance && !newerMembers) return;
+      if(!newerAttendance && !newerBilling && !newerMembers) return;
       if(newerMembers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších členov – prijímam');
+      else if(newerBilling) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšie vyúčtovanie – prijímam');
       else console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
     }
     

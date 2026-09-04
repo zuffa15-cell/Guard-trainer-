@@ -383,6 +383,18 @@ function initCloudSync(){
           return;
         }
         if(k==='gt-monthly-billing-v221'){
+          // Pred každým cloudovým zlúčením uchovaj lokálnu kópiu finančných
+          // záznamov. Ak staršia verzia aplikácie poslala do cloudu prázdne
+          // vyúčtovanie, lokálne existujúce záznamy sa nesmú stratiť.
+          try{
+            const localBefore=originalGetItem(k);
+            if(localBefore){
+              const parsedBefore=JSON.parse(localBefore);
+              if(Array.isArray(parsedBefore) && parsedBefore.length){
+                originalSetItem('gt-monthly-billing-backup-v1', localBefore);
+              }
+            }
+          }catch(e){}
           // Vyúčtovanie je zdieľané medzi viacerými zariadeniami/rolami.
           // Nikdy neprepíš celý zoznam starším snapshotom z iného zariadenia.
           // Zlúč jednotlivé tréningy podľa tréner + dátum + skupina a pri
@@ -406,9 +418,17 @@ function initCloudSync(){
             if(ra>=pa) mergedMap.set(key,row);
           };
           localRows.forEach(put); remoteRows.forEach(put);
-          const mergedRows=Array.from(mergedMap.values());
+          let mergedRows=Array.from(mergedMap.values());
+          // Ak cloud obsahuje prázdny zoznam, ale zariadenie má uložené
+          // finančné záznamy, prázdny cloudový snapshot nesmie vymazať
+          // existujúce vyúčtovania. Z lokálnej verzie ich ponecháme a po
+          // skončení snapshotu sa odošlú späť na server.
+          if(remoteRows.length===0 && localRows.length>0) mergedRows=localRows.slice();
           const mergedRaw=JSON.stringify(mergedRows);
           if(mergedRaw!==originalGetItem(k)){ originalSetItem(k,mergedRaw); changed=true; }
+          if(remoteRows.length===0 && localRows.length>0){
+            cloudPushQueued=true;
+          }
           return;
         }
         if(k==='gt-club-handover-v1'){
@@ -10140,11 +10160,13 @@ try{
   // Bez tohto kroku boli údaje po refreshi prázdne a hlavný tréner videl samé nuly.
   const savedBilling=JSON.parse(localStorage.getItem('gt-monthly-billing-v221')||'null');
   if(Array.isArray(savedBilling)){
+    // Vyúčtovania sú historické finančné záznamy. Nesmú sa filtrovať podľa
+    // aktuálneho dátumu začiatku dochádzky, inak by sa mohli stratiť staršie
+    // záznamy Viktora alebo iného trénera. Nechávame všetky platné riadky.
     monthlyBillingRecords=savedBilling.filter(r=>{
+      if(!r || typeof r!=='object') return false;
       const d=parsePaymentDate(r?.date);
-      if(!d) return false;
-      const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-      return iso>=TRAINING_DATA_START_DATE;
+      return !!d;
     });
     persistMonthlyBillingRecords();
   }

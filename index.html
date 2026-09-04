@@ -5866,28 +5866,15 @@ function visibleTrainerProfiles(){
   // a login account and never included in trainer accounting.
   return (trainersData||[]).filter(t=>!isTestTrainerAccount(t));
 }
-function ensureTemplateTrainer(){
-  try{
-    if(!Array.isArray(trainersData)) return null;
-    let t=trainersData.find(x=>x.isTemplate===true || String(x.full||x.name||'').trim().toUpperCase()==='VZOROVÝ TRÉNER');
-    if(!t){
-      const id=Math.max(0,...trainersData.map(x=>Number(x.id)||0))+1;
-      t={id,full:'VZOROVÝ TRÉNER',name:'VZOROVÝ TRÉNER',email:'',phone:'',
-        role:'TRÉNER',license:'',valid:'',status:'VZOR',active:false,
-        groups:[],loginPassword:'',loginPasswordSet:false,isTemplate:true};
-      trainersData.push(t);
-      persistTrainersData();
-    }
-    return t;
-  }catch(e){return null;}
+function ensureTemplateTrainer(){ return null; }
+function openTrainerManagement(){
+  try{ renderTrainers(); }catch(e){ console.error('SPRÁVA TRÉNEROV:',e); toast('Správa trénerov sa nepodarila otvoriť.'); }
+  return false;
 }
 function renderTrainers(){
  canonicalizeTrainers();
  persistTrainersData();
- ensureTemplateTrainer();
- // Profile assignments are authoritative. Do not overwrite them from the
- // schedule when the trainer list is opened.
- ensureTemplateTrainer();
+ // Profilové priradenia sú autoritatívne. Zoznam trénerov obsahuje presne 4 profily.
  const app=document.querySelector('.app');
  const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
@@ -8235,7 +8222,7 @@ function renderMore(){
      
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
-       <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
+       <button class="more-menu-item" onclick="return openTrainerManagement()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
        <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
        <button type="button" class="more-menu-item gt-logout-button" onclick="return logoutGuardTrainer(this)">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>
      </div>

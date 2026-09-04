@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v931: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v949: Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -8002,7 +8002,7 @@ function getAttendancePendingSaveAt(date,group){
   }catch(e){ return 0; }
 }
 
-// v948: Dochádzka administrátora má aj samostatný Firestore dokument.
+// v949: Admin dochádzka je autoritatívny samostatný Firestore záznam pre trénerov.
 // Nepoužíva sa na bežný sync celej databázy, preto ju nemôže prepísať
 // neúplná lokálna kópia trénera.
 const ATTENDANCE_DIRECT_COLLECTION = 'guard-trainer-attendance';
@@ -8057,7 +8057,14 @@ function saveCurrentTrainingAttendance(){
   if(adminSavedAt){
     // Samostatný dokument je zdroj pravdy pre trénerovo zariadenie.
     // Zápis je asynchrónny, ale shared-db sync pokračuje nezávisle.
-    try{ saveAdminAttendanceDirectCloud(key,next,adminSavedAt); }catch(e){}
+    try{
+      const directSave=saveAdminAttendanceDirectCloud(key,next,adminSavedAt);
+      // Poistka proti tomu, že admin uloží dochádzku a hneď prejde na iné
+      // zariadenie skôr, než sa prvý Firestore zápis dokončí.
+      if(directSave && typeof directSave.catch==='function') directSave.catch(e=>console.warn('Admin direct save 1',e));
+      setTimeout(()=>{try{saveAdminAttendanceDirectCloud(key,next,adminSavedAt);}catch(e){}},1000);
+      setTimeout(()=>{try{saveAdminAttendanceDirectCloud(key,next,adminSavedAt);}catch(e){}},3000);
+    }catch(e){ console.warn('Priamy cloud zápis admin dochádzky zlyhal',e); }
   }
   // Toto je rozhodujúci čas pre poradie skupín v daný deň.
   markAttendanceSavedNow(attendanceState.date,attendanceState.group);
@@ -8991,7 +8998,11 @@ async function refreshCurrentAttendanceFromCloud(){
           localSaved=Number(o[wantedKey]||0);
         }catch(e){}
         localSaved=Math.max(localSaved,getAttendancePendingSaveAt(attendanceState.date,attendanceState.group));
-        if(remoteAdmin>localSaved && d.history && typeof d.history==='object'){
+        // Samostatný admin dokument je zdroj pravdy pre trénerovo zobrazenie.
+        // NEPOROVNÁVAME tu hodiny zariadení: telefóny môžu mať rozdielne
+        // systémové časy a potom by tréner mohol zostať na 0 aj keď admin
+        // práve uložil 2 prítomných. Tento dokument zapisuje iba administrátor.
+        if(d.history && typeof d.history==='object'){
           const hist=d.history;
           (attendanceState.members||[]).forEach(a=>{
             const x=hist[a.surname+'|'+a.name];

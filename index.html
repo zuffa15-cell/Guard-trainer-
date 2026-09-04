@@ -493,6 +493,47 @@ function pushToCloud(force = false){
         try{const x=remoteRaw?JSON.parse(remoteRaw):{};if(x&&typeof x==='object')r=x;}catch(e){}
         return {l,r};
       };
+      // ČLENOVIA: nikdy neprepíš cloudový zoznam novšou požiadavkou zo
+      // zariadenia, ktoré ešte nemá nového člena. Zlúčime členov po ID podľa
+      // individuálneho času uloženia. Toto je dôležité najmä vtedy, keď
+      // administrátor pridá člena priamo cez Dochádzku a tréner má otvorenú
+      // staršiu lokálnu kópiu zoznamu.
+      {
+        let localMembers=[], remoteMembers=[];
+        let localOrder={}, remoteOrder={};
+        try{
+          const x=payload['gt-members-real-2026-v847']?JSON.parse(payload['gt-members-real-2026-v847']):[];
+          if(Array.isArray(x)) localMembers=x;
+        }catch(e){}
+        try{
+          const x=remote['gt-members-real-2026-v847']?JSON.parse(remote['gt-members-real-2026-v847']):[];
+          if(Array.isArray(x)) remoteMembers=x;
+        }catch(e){}
+        try{ localOrder=JSON.parse(payload['gt-member-save-order-v1']||'{}')||{}; }catch(e){}
+        try{ remoteOrder=JSON.parse(remote['gt-member-save-order-v1']||'{}')||{}; }catch(e){}
+        const byId=new Map();
+        localMembers.forEach(m=>{if(m&&m.id!=null) byId.set(String(m.id),m);});
+        remoteMembers.forEach(m=>{
+          if(!m||m.id==null)return;
+          const id=String(m.id);
+          const local=byId.get(id);
+          const lt=Number(localOrder[id]||0);
+          const rt=Number(remoteOrder[id]||0);
+          if(!local || rt>lt) byId.set(id,m);
+        });
+        // Zachovaj aj informáciu o odstránených členoch. Ak je člen v lokálnom
+        // zozname novší než cloud, lokálny stav má prednosť.
+        const mergedMembers=Array.from(byId.values());
+        const mergedOrder={};
+        new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>{
+          mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0));
+        });
+        payload['gt-members-real-2026-v847']=JSON.stringify(
+          mergedMembers.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})
+        );
+        payload['gt-member-save-order-v1']=JSON.stringify(mergedOrder);
+      }
+
       // Save-order timestampy: vždy zachovaj union oboch zariadení.
       {
         const {l,r}=mergeJsonMaps(payload['gt-attendance-save-order-v1'],remote['gt-attendance-save-order-v1']);

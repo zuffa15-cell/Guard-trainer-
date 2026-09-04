@@ -964,7 +964,14 @@ window.addEventListener('DOMContentLoaded', ()=>{
 .home-brand{white-space:nowrap;display:flex;align-items:center;gap:12px}
 .home-brand .logged-trainer-name{font-size:.48em;font-weight:600;letter-spacing:.02em;opacity:.82;overflow:hidden;text-overflow:ellipsis;max-width:45vw}
 @media(max-width:420px){.home-brand{gap:8px}.home-brand .logged-trainer-name{max-width:40vw;font-size:.44em}}
-</style></style>
+</style>
+<style id="gtHomeNoLegacyFlash">
+/* v981: statická stará obrazovka Domov sa nesmie ani na okamih zobraziť.
+   Domov sa zobrazí až po vykreslení aktuálnych serverových/rozvrhových údajov. */
+.app.gt-home-pending{visibility:hidden;}
+.app.gt-home-ready{visibility:visible;}
+</style>
+</style>
 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -4323,7 +4330,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 
 
 </div>
-<div class="app">
+<div class="app gt-home-pending">
 <header class="topbar home-topbar">
   <div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small" data-logged-trainer></span></div>
 </header>
@@ -5450,6 +5457,7 @@ function renderHome(){
   const listHtml=items.length ? items.map(g=>{const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};const homeDate=appToday().iso;const cancelled=isTrainingCancelled(homeDate,g.code,g.time,g.name);const headInactive = isHeadTrainer();return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:'${g.code}',name:'${String(g.name||'').replace(/'/g,"\\'")}',substitutionInactive:${!!g.substitutionInactive},substitutionBy:'${String(g.substitutionBy||'').replace(/'/g,"\\'")}',scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`}" data-group-code="${g.code}" data-group-name="${g.name}"><div class="badge ${g.code.toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}${g.substitutionLabel?`<small class="sub-home-label">${g.substitutionLabel}${g.substitutionBy?` · ${g.substitutionBy}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${g.time}<br><i>⌖</i>${g.location||'Watsonova 4'}${g.trainer?`<br><i>♟</i>${g.trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;}).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;
   html=html.replace(/<section class="training-list">[\s\S]*?<\/section>/,`<section class="training-list">${listHtml}</section>`);
   app.innerHTML=html;
+  try{ app.classList.remove('gt-home-pending'); app.classList.add('gt-home-ready'); }catch(e){}
   // Vynútene nastav meno priamo po vykreslení Domova.
   try{
     const homeUserEl=app.querySelector('.home-topbar .logged-user-small');

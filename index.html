@@ -13601,35 +13601,46 @@ window.openStatisticsScreen=openStatisticsScreen;
 
 function nav(route){
   try{
-    if(['home','statistics','calendar','attendance','billing','trainer-month','more','members'].includes(route)) window.__gtBackTarget=null;
-    if(route==='home'){ if(location.hash!=='#home'){ history.pushState({gtRoute:'home'},'',location.pathname+location.search+'#home'); } renderHome(); return false; }
+    const allowed=['home','statistics','calendar','attendance','billing','trainer-month','more','members'];
+    if(!allowed.includes(route)) return false;
+    if(allowed.includes(route)) window.__gtBackTarget=null;
+
+    // Použi skutočný hash ako jednotný navigačný kanál. Hashchange je obslúžený
+    // centrálnym routerom nižšie, takže funguje aj po úplnom prekreslení .app.
+    const target='#'+route;
+    if(location.hash!==target){
+      location.hash=route;
+      return false;
+    }
+
+    // Ak už hash obsahuje rovnakú obrazovku, vykresli ju priamo.
+    if(route==='home'){ renderHome(); return false; }
     if(route==='statistics'){ return openStatisticsScreen(); }
-    if(route==='calendar'){ history.pushState({gtRoute:'calendar'},'',location.pathname+location.search+'#calendar'); renderCalendar(); return false; }
-    if(route==='attendance'){ if(isHeadTrainer()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
-      // DOCHÁDZKA z Domova / hlavnej navigácie je vždy dnešný deň.
-      // Dátum z Kalendára sa nesmie preniesť do tejto vstupnej cesty.
+    if(route==='calendar'){ renderCalendar(); return false; }
+    if(route==='attendance'){
+      if(isHeadTrainer()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
       window.__attendanceOpenedFromCalendar=false;
       window.__attendanceOpenSource='home';
       attendanceState.date=appToday().iso;
-      attendanceState.group='';
-      attendanceState.name='';
-      attendanceState.trainingTime='';
+      attendanceState.group=''; attendanceState.name=''; attendanceState.trainingTime='';
       attendanceState.trainingScheduleId=null;
       attendanceState.billingPaymentSnapshot=null;
       attendanceState.billingAttendanceSnapshot=null;
       attendanceState.billingRecordSnapshot=null;
-      history.pushState({gtRoute:'attendance',source:'home',date:attendanceState.date},'',location.pathname+location.search+'#attendance');
-      attendanceChooser(); return false; }
-    if(route==='billing'){ return openMyBilling(); }
-    if(route==='trainer-month'){ history.pushState({gtRoute:'trainer-month'},'',location.pathname+location.search+'#trainer-month'); renderMonthlyBilling(); return false; }
-    if(route==='more'){ history.pushState({gtRoute:'more'},'',location.pathname+location.search+'#more'); renderMore(); return false; }
-    if(route==='members'){ history.pushState({gtRoute:'members'},'',location.pathname+location.search+'#members'); renderMembers(); return false; }
+      attendanceChooser(); return false;
+    }
+    if(route==='billing') return openMyBilling();
+    if(route==='trainer-month'){ renderMonthlyBilling(); return false; }
+    if(route==='more'){ renderMore(); return false; }
+    if(route==='members'){ renderMembers(); return false; }
   }catch(err){
     console.error('Navigation error:',err);
-    toast('Chyba otvorenia obrazovky');
+    try{ toast('Chyba otvorenia obrazovky'); }catch(e){}
   }
   return false;
 }
+window.nav=nav;
+
 // v519 – Android/system Back fallback: always keep an in-app Home history entry.
 // When the native wrapper does not expose Capacitor/Cordova back events, the
 // browser/WebView history itself handles one step back.
@@ -13695,6 +13706,8 @@ window.addEventListener('hashchange',()=>{
     return;
   }
   if(r==='home'){ renderHome(); return; }
+  if(r==='members'){ try{ renderMembers(); }catch(e){ console.error('Members open error:',e); try{toast('Chyba otvorenia členov');}catch(_){} } return; }
+  if(r==='more'){ try{ renderMore(); }catch(e){ console.error('More open error:',e); try{toast('Chyba otvorenia menu Viac');}catch(_){} } return; }
   if(r==='memberProfile'){ const id=Number(history.state?.gtId||0); if(id) renderMemberProfile(id); else renderMembers(); return; }
   if(r==='memberEdit'){ const id=Number(history.state?.gtId||0); if(id) renderMemberEditForm(id); else renderMembers(); return; }
   if(r==='memberAttendance'){ const id=Number(history.state?.gtId||0); if(id) renderMemberAttendance(id); else renderMembers(); return; }

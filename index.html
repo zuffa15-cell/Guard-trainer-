@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-admin-override-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -86,37 +86,23 @@ function initCloudSync(){
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
     if(!data) return;
-    if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
-      // moje vlastné zmeny - ignoruj
+    const hasAdminChange = !!(data['gt-attendance-admin-override-v1'] && data['gt-attendance-admin-override-v1']!=='{}') || !!(data['gt-attendance-admin-edits-v1'] && data['gt-attendance-admin-edits-v1']!=='{}');
+    if(!hasAdminChange && data._lastUpdateBy && data._lastUpdateBy === myUid) {
       return;
     }
-    if(data._updatedAt && data._updatedAt <= lastCloudUpdate) {
-      // Globálny čas dokumentu nesmie zahodiť novšiu zmenu dochádzky.
-      // Iné zariadenie mohlo medzičasom odoslať inú zmenu, takže jeho
-      // _updatedAt môže byť vyšší, hoci admin-edit pre konkrétny tréning
-      // je novší.
-      let newerAttendance=false;
-      try{
-        const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
-        const localAdmin=originalGetItem('gt-attendance-admin-edits-v1')?JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')):{};
-        Object.keys(remoteAdmin||{}).some(k=>{
-          if(Number(remoteAdmin[k]||0)>Number(localAdmin?.[k]||0)){ newerAttendance=true; return true; }
-          return false;
-        });
-        if(!newerAttendance){
-          const remoteOrder=data['gt-attendance-save-order-v1']?JSON.parse(data['gt-attendance-save-order-v1']):{};
-          const localOrder=originalGetItem('gt-attendance-save-order-v1')?JSON.parse(originalGetItem('gt-attendance-save-order-v1')):{};
-          Object.keys(remoteOrder||{}).some(k=>{
-            if(Number(remoteOrder[k]||0)>Number(localOrder?.[k]||0)){ newerAttendance=true; return true; }
-            return false;
-          });
-        }
-      }catch(e){}
-      if(!newerAttendance) return;
-      console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
+    if(!hasAdminChange && data._updatedAt && data._updatedAt <= lastCloudUpdate) {
+      return;
     }
+    // ADMIN zmena sa NIKDY neignoruje, aj keď je _updatedAt starší
     
     console.log("📥 Prišla zmena z cloudu");
+    try{
+      if(data['gt-attendance-admin-override-v1']){
+        console.log('🔥 ADMIN OVERRIDE v cloude!', data['gt-attendance-admin-override-v1'].slice(0,500));
+        // okamžite zobraz toast
+        setTimeout(()=>{ try{ toast('ADMIN zmena prišla z cloudu!'); }catch(e){} }, 100);
+      }
+    }catch(e){}
     // Toto je prvý potvrdený snapshot spoločnej databázy. Označ ho ešte
     // pred ďalším UI spracovaním, aby showApp vedel, že môže bezpečne
     // vykresliť aktuálne dáta.
@@ -184,8 +170,8 @@ function initCloudSync(){
             const remoteAt=Number(rOrder[key]||0);
             const localAdminAt=Number(lAdmin[key]||0);
             const remoteAdminAt=Number(rAdmin[key]||0);
-            if(remoteAdminAt>localAdminAt && rHist[key]) merged[key]=rHist[key];
-            else if(localAdminAt>remoteAdminAt && lHist[key]) merged[key]=lHist[key];
+            if(remoteAdminAt>0 && rHist[key]) merged[key]=rHist[key];
+            else if(localAdminAt>0 && lHist[key]) merged[key]=lHist[key];
             else if(localAt>remoteAt && localAt>0) merged[key]=lHist[key]||{};
             else if(rHist[key]) merged[key]=rHist[key];
             else if(lHist[key]) merged[key]=lHist[key];
@@ -254,6 +240,17 @@ function initCloudSync(){
             merged[key]=Math.max(Number(localObj[key]||0),Number(remoteObj[key]||0));
           });
           const raw=JSON.stringify(merged);
+          if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
+          return;
+        }
+        if(k==='gt-attendance-admin-override-v1'){
+          let localObj={}, remoteObj={};
+          try{ const lr=originalGetItem('gt-attendance-admin-override-v1'); const x=lr?JSON.parse(lr):{}; if(x&&typeof x==='object') localObj=x; }catch(e){}
+          try{ const rr=data[k]?JSON.parse(data[k]):{}; if(rr&&typeof rr==='object') remoteObj=rr; }catch(e){}
+          const mergedOverride={};
+          const allKeys=new Set([...Object.keys(localObj),...Object.keys(remoteObj)]);
+          allKeys.forEach(ck=>{ const l=localObj[ck], r=remoteObj[ck]; if(r && l){ const rt=Number(r.savedAt||0), lt=Number(l.savedAt||0); mergedOverride[ck]= rt>=lt ? r : l; } else if(r) mergedOverride[ck]=r; else if(l) mergedOverride[ck]=l; });
+          const raw=JSON.stringify(mergedOverride);
           if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
           return;
         }
@@ -396,37 +393,19 @@ function initCloudSync(){
         // lokálny zápis nikdy neprepíše novší cloudový zápis, ale novšia
         // zmena administrátora sa na obrazovke zobrazí bez ručného refreshu.
         try{
-          if(typeof attendanceState!=='undefined' &&
+          if(location.hash==='#attendance' && typeof attendanceState!=='undefined' &&
              typeof trainingAttendanceKey==='function' && typeof attendance==='function'){
             const curKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
             const localAt=Number(localAttendanceOrder[curKey]||0);
             const remoteAt=Number(remoteAttendanceOrder[curKey]||0);
             const localAdminAt=Number(localAttendanceAdminEdits[curKey]||0);
             const remoteAdminAt=Number(remoteAttendanceAdminEdits[curKey]||0);
-            // Ak administrátor uložil dochádzku novšie, jeho stav má prednosť
-            // pred akýmkoľvek starým stavom trénera aj starým snapshotom vyúčtovania.
-            // Obrazovku preto obnovíme aj vtedy, keď hash nie je presne #attendance
-            // (napr. pri návrate z kalendára alebo pri inom spôsobe otvorenia).
-            if(remoteAdminAt>localAdminAt || remoteAt>localAt){
+            const hasAdminOverride = (Number(remoteAdminAt||0)>0) || (data['gt-attendance-admin-override-v1'] && data['gt-attendance-admin-override-v1']!=='{}');
+            if(hasAdminOverride || remoteAt>=localAt || remoteAdminAt>=localAdminAt){
               attendanceState.billingPaymentSnapshot=null;
               attendanceState.billingAttendanceSnapshot=null;
               attendanceState.billingRecordSnapshot=null;
-              if(remoteAdminAt>localAdminAt){
-                try{
-                  const hist=findAttendanceHistory(attendanceState.date,attendanceState.group)||{};
-                  const byName=new Map(Object.entries(hist));
-                  (attendanceState.members||[]).forEach(a=>{
-                    const x=byName.get(a.surname+'|'+a.name);
-                    a.training=!!x?.training;
-                    a.trainingAccount=!!x?.trainingAccount;
-                    a.newMember=!!x?.newMember;
-                    a.newMemberDate=a.newMember ? (x?.newMemberDate||attendanceState.date) : '';
-                  });
-                }catch(e){}
-              }
-              if(location.hash==='#attendance'){
-                setTimeout(()=>{try{ attendance(); }catch(e){ console.warn('Attendance cloud refresh failed:',e); }},0);
-              }
+              setTimeout(()=>{try{ attendance(); }catch(e){ console.warn('Attendance cloud refresh failed:',e); }},0);
             }
           }
         }catch(e){ console.warn('Attendance screen cloud refresh check failed:',e); }
@@ -521,8 +500,8 @@ function pushToCloud(force = false){
           const lat=Math.max(Number(lo[k]||0),Number(getAttendancePendingSaveAt(String(k).split('|')[0],String(k).split('|').slice(1).join('|'))||0));
           const rat=Number(ro[k]||0);
           const lad=Number(la[k]||0),rad=Number(ra[k]||0);
-          if(rad>lad && rm[k]) out[k]=rm[k];
-          else if(lad>rad && lm[k]) out[k]=lm[k];
+          if(rad>0 && rm[k]) out[k]=rm[k];
+          else if(lad>0 && lm[k]) out[k]=lm[k];
           else if(lat>=rat && lm[k]) out[k]=lm[k];
           else if(rm[k]) out[k]=rm[k];
           else if(lm[k]) out[k]=lm[k];
@@ -3718,7 +3697,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER</div>
+   <div class="gt-login-title">GUARD TRAINER v9999-ADMIN-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -3912,7 +3891,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 </div>
 <div class="app">
 <header class="topbar home-topbar">
-  <div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small" data-logged-trainer></span></div>
+  <div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small" data-logged-trainer></span></div>
 </header>
 
 <main class="content">
@@ -3981,7 +3960,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 <nav class="bottom">
   <a class="nav active" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
   <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-  <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+  <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
   <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
   <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
   <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -4896,7 +4875,7 @@ function renderHeadHomeList(title,rows,kind){
   }catch(e){}
   const app=document.querySelector('.app');
   const body=kind==='new'?rows.map(m=>`<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${m.memberSince||m.newMemberDate||'—'}</span></div>`).join(''):rows.map(m=>{const d=headHomeLastVisit(m);return `<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${d?d.toLocaleDateString('sk-SK'):'Žiadna návšteva'}</span></div>`}).join('');
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
 }
 
 function getHeadHomeAttendancePaymentTotals(month,year){
@@ -4964,7 +4943,7 @@ function renderHeadHome(){
   const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;const todayIso=(()=>{const td=appTodayDate();return `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,'0')}-${String(td.getDate()).padStart(2,'0')}`;})();const todayClass=iso===todayIso?' week-today':'';let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day${todayClass}"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
   const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
   const birthdayRows=birthdays.map(m=>`<div class="birthday-row"><span class="birthday-name">${m.surname} ${m.name} <strong class="birthday-age">— ${m.age} rokov</strong></span><span class="birthday-group">${headHomeGroupShort((m.groups||[m.group])[0])}</span><span class="birthday-date">${m.next.getDate()}. ${m.next.getMonth()+1}.</span></div>`).join('');
-  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content head-home-dashboard">
+  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content head-home-dashboard">
   <section class="head-welcome-card"><div class="welcome-small">${greeting}</div><div class="welcome-big">HLAVNÝ TRÉNER</div><div class="welcome-date">${t.day}. ${skMonths[t.month-1]} ${t.year}</div></section>
   <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
   ${memberCard}
@@ -5013,8 +4992,8 @@ function renderHome(){
   // Preto sa meno musí vložiť priamo do tejto šablóny, nie cez všeobecný
   // topbar replacement.
   html=html.replace(
-    /<div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small" data-logged-trainer><\/span><\/div>/,
-    `<div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>`
+    /<div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small" data-logged-trainer><\/span><\/div>/,
+    `<div class="brand home-brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>`
   );
   html=html.replace(/<button class="menu"[^>]*>☰<\/button>/, '');
   html=html.replace(/<div class="date">[\s\S]*?<\/div>/,`<div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>`);
@@ -5048,7 +5027,7 @@ function renderCalendar(){
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const currentMonthLabel=monthNames[selectedCalendarMonth]+' '+selectedCalendarYear;
   app.innerHTML=`
-    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
     <main class="content">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">▣</span> KALENDÁR</div>
@@ -5071,7 +5050,7 @@ function renderCalendar(){
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
       <a class="nav active" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
       <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
       <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -5596,7 +5575,7 @@ function renderTrainers(){
  const app=document.querySelector('.app');
  const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainers-page">
   <div class="trainer-head"><div><span class="trainer-head-icon">♟</span><div><h2>TRÉNERI</h2><small>${isAdmin()?'Správa trénerov a ich oprávnení':'Prehľad všetkých trénerov – iba na čítanie'}</small></div></div>${isAdmin()?`<button onclick="newTrainer()">＋ PRIDAŤ TRÉNERA</button>`:''}</div>
   <div class="trainer-stats"><div><b>${trainerList.length}</b><span>Tréneri spolu</span></div><div><b>${active}</b><span>Aktívni</span></div><div><b>0</b><span>Platnosť čoskoro vyprší</span></div><div><b>0</b><span>Platnosť vypršala</span></div></div>
@@ -5604,7 +5583,7 @@ function renderTrainers(){
   <div id="trainerList">${trainerRows(trainerList)}</div>
   ${renderPendingTrainerInvitations()}
  </main>
- <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav active" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
+ <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a><a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav active" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
 }
 function renderPendingTrainerInvitations(){
  const list=getTrainerInvitations().filter(x=>x.status==='ČAKÁ');
@@ -5646,7 +5625,7 @@ function renderTrainerProfile(id){
  }
  const app=document.querySelector('.app');
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainer-profile-page">
   <div class="profile-title-row">
     <div><h2>PROFIL TRÉNERA</h2><small>Osobné údaje, licencia a oprávnenia</small></div>
@@ -5822,7 +5801,7 @@ function renderInviteTrainer(){
   const app=document.querySelector('.app');
   const groups=getAdminCreatedGroups();
   app.innerHTML=`
-   <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+   <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
    <main class="content trainer-profile-page">
     <div class="profile-title-row"><div><h2>VYTVORIŤ TRÉNERA</h2><small>Vyplň údaje trénera a odošli mu pozvánku</small></div></div>
     <section class="profile-box">
@@ -5951,7 +5930,7 @@ function renderNewTrainerDirect(){
  const groups=getAdminCreatedGroups();
  const templateGroups=['A','B','C','D','D+'].filter(c=>groups.some(g=>String(g[0]).toUpperCase()===c));
  document.querySelector('.app').innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content trainer-profile-page">
    <div class="profile-title-row"><div><h2>NOVÝ TRÉNER</h2><small>Vytvorené podľa vzoru „VZOROVÝ TRÉNER“</small></div></div>
    <section class="profile-box"><h3>OSOBNÉ ÚDAJE</h3><div class="profile-grid">
@@ -6473,14 +6452,14 @@ function renderMembers(){
  const active=membersData.length;
  const unpaidM=membersData.filter(m=>!m.membership).length, unpaidR=membersData.filter(m=>!m.registration).length, debts=membersData.filter(m=>m.debt>0).length;
  app.innerHTML=`
- <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+ <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content members-page">
   <div class="members-head"><div><h2>ČLENOVIA <span class="member-count">(${active})</span></h2><small>Správa členov klubu</small></div><button onclick="createMemberFromMembers()">＋ NOVÝ ČLEN</button></div>
   <div class="member-filters"><input id="memberSearchInput" type="search" placeholder="🔎 Hľadať člena..." autocomplete="off" oninput="filterMembers(this.value)"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
   <div class="member-list-head"><span>ČLEN</span><span>SKUPINA</span><span>PRIHLÁŠKA</span><span>ČLENSKÉ</span><span>REGISTRÁCIA</span></div>
   <div id="memberList">${memberRows(membersData)}</div>
  </main>
- <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav active" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
+ <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a><a class="nav active" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
 }
 
 
@@ -6781,7 +6760,7 @@ function renderMemberProfile(id, backTarget){
  <nav class="bottom">
   <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
   <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-  <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+  <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
   <a class="nav active" href="#members" onclick="return nav('members')" data-nav="members"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
   <a class="nav" href="#billing" onclick="return openMyBilling()" data-nav="billing"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
   <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -7522,7 +7501,7 @@ function openRoleTesting(){
   const app=document.querySelector('.app');
   if(!app) return;
   const options=[['admin','ADMIN','Celý pohľad administrátora'],['head','HLAVNÝ TRÉNER','Pohľad hlavného trénera'],['trainer1','TRÉNER 1','Pohľad trénera 1'],['trainer2','TRÉNER 2','Pohľad trénera 2']];
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="more-page-title"><div class="section-title">🧪 TESTOVANIE APLIKÁCIE</div><small>Administrátor si môže vyskúšať jednotlivé pohľady.</small></div><div class="more-buttons">${options.map(o=>`<button type="button" class="more-menu-item role-test-button" data-test-role="${o[0]}" onclick="return startAdminTestRole('${o[0]}')"><span><b>${o[1]}</b><small>${o[2]}</small></span>›</button>`).join('')}<button class="more-menu-item" onclick="exitAdminTesting()"><span><b>UKONČIŤ TESTOVANIE</b><small>Návrat na administrátora</small></span>›</button></div></main>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="more-page-title"><div class="section-title">🧪 TESTOVANIE APLIKÁCIE</div><small>Administrátor si môže vyskúšať jednotlivé pohľady.</small></div><div class="more-buttons">${options.map(o=>`<button type="button" class="more-menu-item role-test-button" data-test-role="${o[0]}" onclick="return startAdminTestRole('${o[0]}')"><span><b>${o[1]}</b><small>${o[2]}</small></span>›</button>`).join('')}<button class="more-menu-item" onclick="exitAdminTesting()"><span><b>UKONČIŤ TESTOVANIE</b><small>Návrat na administrátora</small></span>›</button></div></main>`;
 }
 function startAdminTestRole(role){
   const allowed=['admin','head','trainer1','trainer2'];
@@ -7580,7 +7559,7 @@ function openScheduleManager(){
  const schedules=getSavedSchedules();
  const app=document.querySelector('.app');
  app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content schedule-page">
    <div class="section-title">📅 ROZVRH</div>
    <small>Uložené tréningy – admin ich môže upraviť alebo vymazať.</small>
@@ -7704,7 +7683,7 @@ function openCreateSchedule(editId=null){
  app.innerHTML=`
   <header class="topbar">
    <button class="menu" onclick="appBack()" aria-label="Krok späť">‹</button>
-   <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+   <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
   </header>
   <main class="content schedule-page">
    <div class="section-title">📅 VYTVORIŤ ROZVRH</div>
@@ -7820,7 +7799,7 @@ function renderMore(){
  app.innerHTML=`
    <header class="topbar">
      <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-     <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+     <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
    </header>
    <main class="content">
      <div class="more-page-title">
@@ -7842,7 +7821,7 @@ function renderMore(){
    <nav class="bottom">
      <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
      <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-     <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+     <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
      <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
      <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
      <a class="nav active" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -8004,41 +7983,85 @@ function getAttendancePendingSaveAt(date,group){
 
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
-  const before=trainingAttendanceByGroup[key]||null;
-  // Vždy vytvoríme nový kompletný snapshot a až potom ho priradíme ku kľúču.
-  // Starý kód zapisoval do trainingAttendanceByGroup[key] a následne tento
-  // objekt nahradil prázdnym "next", čím sa uložená dochádzka stratila.
   const next=Object.create(null);
   (attendanceState.members||[]).forEach(a=>{
-    next[a.surname+'|'+a.name]={
+    const stableKey = a.id ? ('id:'+a.id) : (a.surname+'|'+a.name);
+    const fallbackKey = a.surname+'|'+a.name;
+    const record={
+      id: a.id||'',
+      surname: a.surname||'',
+      name: a.name||'',
       training:!!a.training,
       trainingAccount:!!a.trainingAccount,
-      membershipAccountAmount:Number(a.membershipAccountAmount||0),membershipAccountDate:a.membershipAccountDate||'',
-      registrationAccountAmount:Number(a.registrationAccountAmount||0),registrationAccountDate:a.registrationAccountDate||'',
       newMember:!!a.newMember,
-      newMemberDate:a.newMember ? (a.newMemberDate||attendanceState.date) : ''
+      newMemberDate:a.newMember ? (a.newMemberDate||attendanceState.date) : (a.newMemberDate||''),
+      savedAt: Date.now(),
+      savedBy: (typeof currentTrainerAccountId==='function'? (currentTrainerAccountId()||'') : ''),
+      isAdminSave: (typeof isAdmin==='function' && isAdmin())
     };
+    next[stableKey]=record;
+    if(stableKey!==fallbackKey) next[fallbackKey]=record;
   });
   trainingAttendanceByGroup[key]=next;
-  const changedAttendance=JSON.stringify(before||{})!==JSON.stringify(next||{});
-  if(isAdmin()){
+  persistTrainingAttendanceHistory();
+  if(typeof isAdmin==='function' && isAdmin()){
     try{
+      const overrideRaw = originalGetItem('gt-attendance-admin-override-v1')||'{}';
+      let override={}; try{override=JSON.parse(overrideRaw)||{};}catch(e){}
+      override[key]= { data: JSON.parse(JSON.stringify(next)), savedAt: Date.now(), by: 'admin' };
+      originalSetItem('gt-attendance-admin-override-v1', JSON.stringify(override));
       const adminEdits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}');
-      // Každé explicitné uloženie administrátorom je autoritatívne pre daný
-      // dátum/skupinu. Timestamp zapisujeme aj vtedy, keď sa výsledný JSON
-      // náhodou nezmenil, aby neskorší cloud snapshot nemohol vrátiť starý stav.
       adminEdits[key]=Date.now();
       originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(adminEdits));
+      const orderRaw=originalGetItem('gt-attendance-save-order-v1')||'{}';
+      let order={}; try{order=JSON.parse(orderRaw)||{};}catch(e){}
+      order[key]=Date.now()+10000;
+      originalSetItem('gt-attendance-save-order-v1', JSON.stringify(order));
+      try{ localStorage.removeItem(ATTENDANCE_PENDING_SAVE_KEY); }catch(e){}
+      try{ originalSetItem(ATTENDANCE_PENDING_SAVE_KEY, '{}'); }catch(e){}
     }catch(e){}
+  } else {
+    markAttendanceSavedNow(attendanceState.date,attendanceState.group);
+    markAttendancePendingSave(attendanceState.date,attendanceState.group);
   }
-  persistTrainingAttendanceHistory();
-  // Toto je rozhodujúci čas pre poradie skupín v daný deň.
-  markAttendanceSavedNow(attendanceState.date,attendanceState.group);
-  // Kritická ochrana dnešnej dochádzky: pri pomalom Firebase nesmie nový
-  // lokálny zápis po reloadovaní ustúpiť staršiemu cloudovému snapshotu.
-  markAttendancePendingSave(attendanceState.date,attendanceState.group);
-  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),100); }catch(e){}
+  t
+
+// DEBUG ADMIN SYNC
+window._debugAdminSync = function(){
+  try{
+    const over = JSON.parse(localStorage.getItem('gt-attendance-admin-override-v1')||'{}');
+    const hist = JSON.parse(localStorage.getItem('gt-training-attendance-history')||'{}');
+    const order = JSON.parse(localStorage.getItem('gt-attendance-save-order-v1')||'{}');
+    const adminEdits = JSON.parse(localStorage.getItem('gt-attendance-admin-edits-v1')||'{}');
+    const curKey = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(attendanceState.group, attendanceState.date) : 'unknown';
+    const info = {
+      curKey: curKey,
+      hasOverride: !!over[curKey],
+      overrideCount: Object.keys(over).length,
+      histHasKey: !!hist[curKey],
+      histKeys: Object.keys(hist).slice(0,5),
+      orderForKey: order[curKey]||0,
+      adminEditForKey: adminEdits[curKey]||0,
+      cloudEnabled: typeof cloudEnabled!=='undefined'?cloudEnabled:'unknown',
+      lastCloudUpdate: typeof lastCloudUpdate!=='undefined'?lastCloudUpdate:0
+    };
+    console.log('DEBUG ADMIN SYNC', info);
+    alert('DEBUG:\nKey: '+curKey+'\nOverride: '+(info.hasOverride?'ÁNO '+JSON.stringify(over[curKey]).slice(0,200):'NIE')+'\nHist: '+(info.histHasKey?'ÁNO':'NIE')+'\nVšetky override kľúče: '+Object.keys(over).join(', '));
+    return info;
+  }catch(e){ console.error(e); alert('DEBUG error '+e); }
+};
+
+// Prepíš onSnapshot aby vždy logoval admin
+(function(){
+  const origLog = console.log;
+  // already done
+})();
+
+ry{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),300); }catch(e){}
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),1000); }catch(e){}
 }
+
 function membershipDraftKey(memberId,date,group){
   return `${memberId}|${date}|${group}`;
 }
@@ -8089,11 +8112,28 @@ function commitMembershipDraftsForCurrentTraining(){
 }
 
 function getSavedTrainingAttendance(group,name){
-  const data=trainingAttendanceByGroup[trainingAttendanceKey(group)];
-  const v=data && data[name];
-  if(typeof v==='boolean') return {training:v,trainingAccount:false};
-  return v || {training:false,trainingAccount:false};
+  const key = trainingAttendanceKey(group);
+  const data=trainingAttendanceByGroup[key];
+  if(!data) return {training:false,trainingAccount:false,newMember:false};
+  let v = data[name];
+  if(!v){
+    const parts = String(name||'').split('|');
+    if(parts.length>=2){
+      const s = parts[0], n = parts.slice(1).join('|');
+      for(const k of Object.keys(data)){
+        const rec=data[k];
+        if(rec && rec.surname===s && rec.name===n){ v=rec; break; }
+      }
+    }
+  }
+  if(typeof v==='boolean') return {training:v,trainingAccount:false,newMember:false};
+  return v || {training:false,trainingAccount:false,newMember:false};
 }
+function getExactSavedAttendance(date, group){
+  const key = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(group, date) : (date+'|'+group);
+  return (typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) ? trainingAttendanceByGroup[key] : null;
+}
+
 function cleanAttendanceMember(m){
   return {
     surname:m.surname,name:m.name,training:false,newMember:false,
@@ -8180,44 +8220,63 @@ function loadAttendanceFromMembers(){
    const gs=Array.isArray(m.groups)?m.groups:[m.group];
    return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
  });
- // Test mode: keep the original 10 test members visible, but NEVER
- // discard a real member who was added to this group.
+ const key = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(attendanceState.group, attendanceState.date) : (attendanceState.date+'|'+attendanceState.group);
+ let adminOverrideMap=null;
+ try{
+   const overRaw = originalGetItem('gt-attendance-admin-override-v1')||localStorage.getItem('gt-attendance-admin-override-v1')||'{}';
+   const over=JSON.parse(overRaw)||{};
+   if(over[key] && over[key].data) adminOverrideMap=over[key].data;
+ }catch(e){}
+ const regularMap = (typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) ? trainingAttendanceByGroup[key] : null;
+ const savedMap = adminOverrideMap || regularMap;
+ const hasSavedHistory = !!savedMap && Object.keys(savedMap).length>0;
  
  attendanceState.members=selected.map(m=>{
-   const old=byName.get(m.surname+'|'+m.name);
-   return {
-     surname:m.surname,name:m.name,training:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).training
-      || ((old && old.group===attendanceState.group)?!!old.training:false)),
-     trainingAccount:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).trainingAccount
-      || ((old && old.group===attendanceState.group)?!!old.trainingAccount:false)),
-     membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
-     registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
-     newMember:(Object.prototype.hasOwnProperty.call(
-        getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name),'newMember')
-        ? !!getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).newMember
-        : (!!m.newMemberDate && m.newMemberDate===attendanceState.date)),
-     newMemberDate:m.newMemberDate||'',
-     // Membership is member-level, not group-level: once paid, it remains paid
-     // when the member appears in any other assigned group.
-     membershipAmount:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='add'
-       ? Number(getMembershipDraft(m.id,attendanceState.date,attendanceState.group).amount||0)
-       : (getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='remove' ? 0 : Number(m.membershipAmount||0))),
-     membershipDate:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.date : (m.membershipDate||'')),
-     membershipPaidGroup:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.group : (m.membershipPaidGroup||'')),
-     membershipAccountAmount:Number(m.membershipAccountAmount||0),
-     membershipAccountDate:m.membershipAccountDate||'',
-     registration:!!m.registration,
-     registrationDate:m.registrationDate||'',
-     registrationAccountAmount:Number(m.registrationAccountAmount||0),
-     registrationAccountDate:m.registrationAccountDate||'',
-     debt:Number(m.debt||0),
-     debtReason:m.debtReason||'',application:!!m.application,
-     applicationDate:m.applicationDate||'',
-     applicationFile:m.applicationFile||'',
-     applicationFileName:m.applicationFileName||''
-   };
+   let saved=null;
+   if(savedMap){
+     if(m.id && savedMap['id:'+m.id]) saved=savedMap['id:'+m.id];
+     else if(savedMap[m.surname+'|'+m.name]) saved=savedMap[m.surname+'|'+m.name];
+     else {
+       for(const kk of Object.keys(savedMap)){
+         const rec=savedMap[kk];
+         if(rec && rec.surname===m.surname && rec.name===m.name){ saved=rec; break; }
+       }
+     }
+   }
+   if(hasSavedHistory && saved){
+     return {
+       id:m.id||'', surname:m.surname,name:m.name, group: attendanceState.group,
+       training: !!saved.training, trainingAccount: !!saved.trainingAccount,
+       newMember: !!saved.newMember, newMemberDate: saved.newMemberDate||'', savedAt: saved.savedAt||0,
+       membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
+       membershipAmount:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='add' ? Number(getMembershipDraft(m.id,attendanceState.date,attendanceState.group).amount||0) : (getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='remove' ? 0 : Number(m.membershipAmount||0))),
+       membershipDate:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.date : (m.membershipDate||'')),
+       membershipPaidGroup:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.group : (m.membershipPaidGroup||'')),
+       registration:!!m.registration, registrationDate:m.registrationDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0), registrationAccountDate:m.registrationAccountDate||'',
+       debt:Number(m.debt||0), debtReason:m.debtReason||'',application:!!m.application,
+       applicationDate:m.applicationDate||'', applicationFile:m.applicationFile||'', applicationFileName:m.applicationFileName||''
+     };
+   } else {
+     return {
+       id:m.id||'', surname:m.surname,name:m.name, group: attendanceState.group,
+       training:false, trainingAccount:false,
+       membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
+       newMember:(!!m.newMemberDate && m.newMemberDate===attendanceState.date), newMemberDate:m.newMemberDate||'',
+       membershipAmount:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='add' ? Number(getMembershipDraft(m.id,attendanceState.date,attendanceState.group).amount||0) : (getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='remove' ? 0 : Number(m.membershipAmount||0))),
+       membershipDate:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.date : (m.membershipDate||'')),
+       membershipPaidGroup:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.group : (m.membershipPaidGroup||'')),
+       registration:!!m.registration, registrationDate:m.registrationDate||'',
+       registrationAccountAmount:Number(m.registrationAccountAmount||0), registrationAccountDate:m.registrationAccountDate||'',
+       debt:Number(m.debt||0), debtReason:m.debtReason||'',application:!!m.application,
+       applicationDate:m.applicationDate||'', applicationFile:m.applicationFile||'', applicationFileName:m.applicationFileName||''
+     };
+   }
  });
 }
+
 
 /* v209 – current date is always the phone's local date */
 function refreshCurrentDateDefaults(){
@@ -8230,7 +8289,7 @@ function renderCancelledAttendance(){
   const app=document.querySelector('.app');
   const color=getGroupColor(attendanceState.group,'gold');
   app.innerHTML=`
-    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
     <main class="content attendance-page cancelled-attendance-page">
       <div class="calendar-head"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
         <button class="month-btn" onclick="openAttendanceDatePicker()">${formatAttendanceDate(attendanceState.date)}⌄</button></div>
@@ -8244,7 +8303,7 @@ function renderCancelledAttendance(){
       </div>
       <div class="members-list cancelled-members-list"></div>
     </main>
-    <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance active" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>
+    <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance active" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a><a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>
     <div id="toast" class="toast"></div>`;
 }
 function attendanceChooser(){
@@ -8292,7 +8351,7 @@ function attendanceChooser(){
       <div class="group-people"><b>${getGroupMemberCount(code)}</b><span>členov</span></div>
     </article>`;
   }).join(''):`<div class="empty-state"><b>DNES NIE JE NAPLANOVANÝ ŽIADNY TRÉNING</b><small>Dochádzka sa dá otvoriť iba pre aktuálne naplánovaný tréning.</small></div>`;
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast" class="toast"></div>`;
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div><div class="calendar-head"><div><b>${formatAttendanceDate(today)}</b></div></div><div class="training-list">${rows}</div></main>${standardBottomNav('attendance')}<div id="toast" class="toast"></div>`;
 }
 
 function applyBillingSnapshotToAttendance(){
@@ -8376,6 +8435,41 @@ function attendance(){
     attendanceState.date=String(window.__attendanceHomeDate||appToday().iso);
   }
   refreshCurrentDateDefaults();
+
+  // FORCE FETCH ADMIN OVERRIDE PRIAMO Z CLOUDU - obíde onSnapshot blokáciu
+  try{
+    if(typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled){
+      db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
+        if(!doc.exists) return;
+        const data=doc.data();
+        if(!data || !data['gt-attendance-admin-override-v1']) return;
+        try{
+          const remoteOverride = JSON.parse(data['gt-attendance-admin-override-v1']||'{}');
+          const localOverrideRaw = originalGetItem('gt-attendance-admin-override-v1')||'{}';
+          let localOverride={}; try{localOverride=JSON.parse(localOverrideRaw)||{};}catch(e){}
+          const curKeyNow = (typeof trainingAttendanceKey==='function') ? trainingAttendanceKey(attendanceState.group, attendanceState.date) : '';
+          if(remoteOverride[curKeyNow] && remoteOverride[curKeyNow].data){
+            const rt=Number(remoteOverride[curKeyNow].savedAt||0);
+            const lt=Number((localOverride[curKeyNow]||{}).savedAt||0);
+            if(rt>lt || !localOverride[curKeyNow]){
+              console.log('🔥 FORCE APPLY ADMIN OVERRIDE z priameho fetchu', curKeyNow);
+              localOverride[curKeyNow]=remoteOverride[curKeyNow];
+              originalSetItem('gt-attendance-admin-override-v1', JSON.stringify(localOverride));
+              // prepíš aj históriu
+              if(typeof trainingAttendanceByGroup!=='undefined'){
+                trainingAttendanceByGroup[curKeyNow]=remoteOverride[curKeyNow].data;
+                persistTrainingAttendanceHistory();
+              }
+              // okamžite prekresli
+              setTimeout(()=>{ try{ loadAttendanceFromMembers(); refreshAttendance(); toast('ADMIN dochádzka načítaná priamo z cloudu'); }catch(e){} }, 200);
+            }
+          }
+        }catch(e){ console.warn('force admin fetch error', e); }
+      });
+    }
+  }catch(e){}
+
+
   applyTrainingSettingsForAttendance();
 
   // Dochádzka musí zobrazovať rovnaký čas ako Domov/Kalendár.
@@ -8395,33 +8489,12 @@ function attendance(){
     isTrainingCancelled(attendanceState.date,attendanceState.group,'',attendanceState.name);
   if(attendanceCancelled){ renderCancelledAttendance(); return; }
   loadAttendanceFromMembers();
-  // Ak existuje novšia explicitná úprava administrátora, história dochádzky
-  // je autoritatívna a starý snapshot vyúčtovania ju nesmie prepísať.
-  const _attKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
-  let _adminEditAt=0;
-  try{ _adminEditAt=Number(JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')[_attKey]||0); }catch(e){}
-  let _billingAt=0;
-  try{ _billingAt=Number(attendanceState.billingRecordSnapshot?.savedAt||0); }catch(e){}
-  if(_adminEditAt<=_billingAt){ applyBillingSnapshotToAttendance(); }
-  else {
-    try{
-      const _hist=findAttendanceHistory(attendanceState.date,attendanceState.group)||{};
-      (attendanceState.members||[]).forEach(a=>{
-        const x=_hist[a.surname+'|'+a.name];
-        if(x){
-          a.training=!!x.training;
-          a.trainingAccount=!!x.trainingAccount;
-          a.newMember=!!x.newMember;
-          a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
-        }
-      });
-    }catch(e){}
-  }
+  applyBillingSnapshotToAttendance();
   const app=document.querySelector('.app');
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content attendance-page ${(isAttendanceFullyLocked()||isHeadTrainer())?'attendance-readonly':''}">
       <div class="calendar-head">
@@ -8458,16 +8531,13 @@ function attendance(){
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
       <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-      <a class="nav active" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav active" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
       <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
       <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
     </nav>
     <div id="toast" class="toast"></div>`;
   updateAttendanceTotals();
-  // Po vykreslení skontroluj priamo Firestore, či administrátor nezmenil
-  // tento konkrétny tréning novšie než lokálny stav trénera.
-  setTimeout(()=>{try{refreshCurrentAttendanceFromCloud();}catch(e){}},100);
 }
 function groupClass(g){ return g==='A'?'a':g==='B'?'b':g==='C'?'c':g==='D'?'d':'dp'; }
 function openAttendanceMemberProfile(index){
@@ -8940,45 +9010,6 @@ function editMemberAccount(type,i){
 function refreshAttendance(){
  const list=document.getElementById('attendanceList'); if(list) list.innerHTML=renderAttendanceRows();
  updateAttendanceTotals();
-}
-
-// v947: pri otvorení dochádzky sa konkrétny tréning ešte raz overí priamo
-// v spoločnom Firestore. Toto je poistka proti tomu, aby tréner videl 0 len
-// preto, že jeho posledný lokálny push mal novší globálny timestamp.
-async function refreshCurrentAttendanceFromCloud(){
-  try{
-    if(!db || !cloudEnabled || typeof attendanceState==='undefined') return;
-    const wantedKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
-    const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
-    if(!doc.exists) return;
-    const data=doc.data()||{};
-    let hist={},adminEdits={};
-    try{ hist=data['gt-training-attendance-history']?JSON.parse(data['gt-training-attendance-history']):{}; }catch(e){}
-    try{ adminEdits=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{}; }catch(e){}
-    const canonicalHist={};
-    Object.keys(hist||{}).forEach(k=>{ canonicalHist[canonicalAttendanceHistoryKey(k)]=hist[k]||{}; });
-    const remoteHist=canonicalHist[wantedKey];
-    const remoteAdmin=Number(adminEdits?.[wantedKey]||0);
-    if(!remoteHist || !remoteAdmin) return;
-    let localEdits={};
-    try{ localEdits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')||{}; }catch(e){}
-    const localAdmin=Number(localEdits[wantedKey]||0);
-    if(remoteAdmin<=localAdmin) return;
-    (attendanceState.members||[]).forEach(a=>{
-      const x=remoteHist[a.surname+'|'+a.name];
-      a.training=!!x?.training;
-      a.trainingAccount=!!x?.trainingAccount;
-      a.newMember=!!x?.newMember;
-      a.newMemberDate=a.newMember ? (x?.newMemberDate||attendanceState.date) : '';
-    });
-    localEdits[wantedKey]=remoteAdmin;
-    originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(localEdits));
-    attendanceState.billingPaymentSnapshot=null;
-    attendanceState.billingAttendanceSnapshot=null;
-    attendanceState.billingRecordSnapshot=null;
-    persistTrainingAttendanceHistory();
-    refreshAttendance();
-  }catch(e){ console.warn('Priame načítanie admin dochádzky z cloudu zlyhalo',e); }
 }
 
 function currentMemberPaymentTotals(m){
@@ -9911,7 +9942,7 @@ function trainingBilling(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content billing-page">
       <div class="section-title">VYÚČTOVANIE TRÉNINGU</div>
@@ -9940,7 +9971,7 @@ function trainingBilling(){
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
       <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
       <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
       <a class="nav active" href="#trainer-month" onclick="return openMyBilling()" data-nav="billing"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -10170,7 +10201,7 @@ function renderYearlyBilling(){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content yearly-billing-page">
       <div class="monthly-trainer-card">
@@ -10197,7 +10228,7 @@ function renderYearlyBilling(){
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
       <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
       <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
       <a class="nav active" href="#trainer-month" onclick="location.hash='trainer-month'; return false;"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -10406,7 +10437,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'MÁJ';
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page">
     <div class="monthly-trainer-card">
       <div class="trainer-avatar">${String(trainerName||'T').charAt(0)}</div>
@@ -10475,7 +10506,7 @@ function showHeadTrainerDetailSummary(trainerName,month=appToday().month,year=ap
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[Number(month)-1]||'';
   const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
   <div class="section-title monthly-title">▣ &nbsp; SÚHRN – <b>${mName} ${year}</b></div>
   <div class="head-detail-summary">
@@ -10529,7 +10560,7 @@ function renderHeadTrainerYearFor(trainerName){
     const unfinished=i===currentMonth-1;
     return `<tr class="${unfinished?'year-unfinished':''}"><td>${name}</td><td>${amount} €</td></tr>`;
   }).join('');
-  app.innerHTML=`<header class="topbar"><button type="button" class="menu" onclick="window.renderHeadTrainerBilling(); return false;" aria-label="Späť na ročné vyúčtovanie">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  app.innerHTML=`<header class="topbar"><button type="button" class="menu" onclick="window.renderHeadTrainerBilling(); return false;" aria-label="Späť na ročné vyúčtovanie">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content monthly-billing-page annual-trainer-compact"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
   <div class="section-title monthly-title">📊 ROČNÉ VYÚČTOVANIE – <b>${year}</b></div>
   <div class="year-trainer-name">${trainerName}</div>
@@ -10630,7 +10661,7 @@ function standardBottomNav(active='billing', forceAttendance=false){
   return `<nav class="${navClass}">
     <a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
     <a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-    ${showAttendance ? `<a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>` : ''}
+    ${showAttendance ? `<a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>` : ''}
     <a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
     <a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
     <a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -10938,7 +10969,7 @@ function renderHeadTrainerBilling(){
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'';
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing">
     <section class="head-profile head-profile-main"><div class="head-avatar">${headName.charAt(0)}</div><div class="head-trainer-title"><b>HLAVNÝ TRÉNER</b><span>${headName}</span></div><button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button></section>
     <div class="head-title-row"><h2>▣ &nbsp; VYÚČTOVANIE – <b>${mName} ${year}</b></h2><div class="head-month-nav"><button onclick="shiftHeadTrainerBillingMonth(-1)" aria-label="Predchádzajúci mesiac">‹</button><button onclick="resetHeadTrainerBillingMonth()" aria-label="Aktuálny mesiac">▣</button><button onclick="shiftHeadTrainerBillingMonth(1)" aria-label="Nasledujúci mesiac">›</button></div></div>
@@ -11672,7 +11703,7 @@ function renderTrainerYearDetail(trainerName){
   const vals=approved[trainerName]||[];
   const total=vals.reduce((a,v)=>a+v,0);
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content trainer-year-approved">
     <section class="head-profile"><div class="head-avatar">T</div><div><b>${trainerName}</b><span>TRÉNER</span></div><div class="head-groups"><small>SKUPINY</small><div><i>B</i><i>D</i></div></div></section>
     <div class="section-title monthly-title">▣ &nbsp; ROČNÉ VYÚČTOVANIE – 2026</div>
@@ -11814,7 +11845,7 @@ function renderHeadTrainerYear(view='trainers'){
   const allRows=months.map((m,i)=>`<tr><td>${m}</td><td class="club-amount">${money(sums[i])}</td></tr>`).join('');
 
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing annual-screen">
     <section class="head-profile head-profile-main">
       <div class="head-avatar">M</div>
@@ -12235,7 +12266,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
-      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      <div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
     <main class="content monthly-billing-page">
       <div class="monthly-trainer-card">
@@ -12304,7 +12335,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
       <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
       <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
       <a class="nav active" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -12396,7 +12427,7 @@ function renderHeadTrainerAttendanceReadOnly(){
   const code=String(attendanceState.group||'').trim().toUpperCase();
   const wanted=new Set(groupRosterCodes(code));
   const members=(membersData||[]).filter(m=>(Array.isArray(m.groups)?m.groups:[m.group]).some(g=>wanted.has(String(g||'').trim().toUpperCase())));
-  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content attendance-page attendance-readonly">
    <div class="calendar-head"><div class="section-title">☑ DOCHÁDZKA</div><div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div></div>
    <div class="att-group"><span>${code}</span><b>${attendanceState.name||code}</b></div>
@@ -12757,7 +12788,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const medals=['🥇','🥈','🥉'];
 
   app.innerHTML=`
-  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER v9999-ADMIN-FIX<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content stats-page">
     <div class="section-title">📊 ŠTATISTIKY – CELÝ KLUB</div>
     <div class="stats-period">
@@ -12840,7 +12871,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   <nav class="bottom">
     <a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
     <a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-    <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+    <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#" onclick="event.preventDefault(); _debugAdminSync(); return false;" style="background:#400"><span class="ico">🐛</span><span class="nav-label">DEBUG</span></a>
     <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
     <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
     <a class="nav active" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
@@ -13338,7 +13369,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 <label class="field"><span class="icon">♙</span><input id="gtLoginEmail" type="email" placeholder="E-mail" autocomplete="username"></label>
 <label class="field"><span class="icon">♙</span><input id="gtLoginPassword" type="password" placeholder="Heslo" autocomplete="current-password"></label>
 <button class="login" type="button">PRIHLÁSIŤ SA</button>
-<div class="footer">GUARD TRAINER 1.0<br>© 2024 Guard Košice</div></div></div>
+<div class="footer">GUARD TRAINER v9999-ADMIN-FIX 1.0<br>© 2024 Guard Košice</div></div></div>
 
 <script id="gtCloudLoadingTextV1">
 (function(){
@@ -13375,7 +13406,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
       cloudInitialSnapshotReady=true;
     }
     try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}
-    console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');
+    console.log('🚀 GUARD TRAINER v9999-ADMIN-FIX: otvorenie aplikácie podľa prihlásenej roly');
     localStorage.setItem('gt-auth-initialized','true');
 
     let account=null;

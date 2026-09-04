@@ -358,7 +358,80 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        if(k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1'){
+          // Nová logika: členovia sa synchronizujú aj cez shared-db ako záloha k direct cloud
+          try{
+            if(k==='gt-members-real-2026-v847'){
+              const remoteRaw=data[k]||'[]';
+              const remoteMembers=JSON.parse(remoteRaw)||[];
+              if(Array.isArray(remoteMembers) && remoteMembers.length>0){
+                const localRaw=originalGetItem(MEMBERS_STORAGE_KEY)||'[]';
+                let localMembers=[]; try{localMembers=JSON.parse(localRaw)||[];}catch(e){}
+                const saveOrderRaw=originalGetItem('gt-member-save-order-v1')||'{}';
+                const deleteOrderRaw=originalGetItem('gt-member-delete-order-v1')||'{}';
+                let saveOrder={}, deleteOrder={};
+                try{saveOrder=JSON.parse(saveOrderRaw)||{};}catch(e){}
+                try{deleteOrder=JSON.parse(deleteOrderRaw)||{};}catch(e){}
+                const remoteOrderRaw=data['gt-member-save-order-v1']||'{}';
+                const remoteDeleteRaw=data['gt-member-delete-order-v1']||'{}';
+                let remoteOrder={}, remoteDelete={};
+                try{remoteOrder=JSON.parse(remoteOrderRaw)||{};}catch(e){}
+                try{remoteDelete=JSON.parse(remoteDeleteRaw)||{};}catch(e){}
+                const localById=new Map(localMembers.filter(m=>m&&m.id!=null).map(m=>[String(m.id), m]));
+                let changedMembers=false;
+                remoteMembers.forEach(rm=>{
+                  if(!rm||rm.id==null) return;
+                  const id=String(rm.id);
+                  const localDel=Number(deleteOrder[id]||0);
+                  const remoteDel=Number(remoteDelete[id]||0);
+                  if(localDel>0 && localDel>=remoteDel) return; // lokálne zmazaný novšie
+                  const localSave=Number(saveOrder[id]||0);
+                  const remoteSave=Number(remoteOrder[id]||0);
+                  if(!localById.has(id)){
+                    // nový člen z cloudu - pridaj
+                    localMembers.push(rm);
+                    saveOrder[id]=Math.max(localSave, remoteSave, Date.now());
+                    changedMembers=true;
+                  } else {
+                    // existuje - ak remote novší, prepíš
+                    if(remoteSave>localSave){
+                      const idx=localMembers.findIndex(m=>String(m?.id)===id);
+                      if(idx>=0) localMembers[idx]=rm;
+                      saveOrder[id]=remoteSave;
+                      changedMembers=true;
+                    }
+                  }
+                });
+                if(changedMembers){
+                  try{
+                    membersData.splice(0,membersData.length, ...localMembers);
+                    normalizeAllMembers();
+                    originalSetItem(MEMBERS_STORAGE_KEY, JSON.stringify(localMembers));
+                    originalSetItem('gt-member-save-order-v1', JSON.stringify(saveOrder));
+                    originalSetItem('gt-members-real-2026-v847', JSON.stringify(localMembers));
+                    if(typeof window!=='undefined') window.membersData=membersData;
+                  }catch(e){ console.warn('merge members failed', e); }
+                }
+              }
+            }
+            // save-order a delete-order vždy merguj
+            if(k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1'){
+              const localRaw=originalGetItem(k)||'{}';
+              const remoteRaw=data[k]||'{}';
+              let localObj={}, remoteObj={};
+              try{localObj=JSON.parse(localRaw)||{};}catch(e){}
+              try{remoteObj=JSON.parse(remoteRaw)||{};}catch(e){}
+              const merged={};
+              new Set([...Object.keys(localObj),...Object.keys(remoteObj)]).forEach(kk=>{
+                merged[kk]=Math.max(Number(localObj[kk]||0), Number(remoteObj[kk]||0));
+              });
+              const mergedRaw=JSON.stringify(merged);
+              if(mergedRaw!==localRaw){ originalSetItem(k, mergedRaw); }
+            }
+          }catch(e){ console.warn('shared-db members merge failed', e); }
+          return;
+        }
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -495,6 +568,10 @@ function initCloudSync(){
 
   // v846: staré cloudové member kľúče sa NESMÚ migrovať.
     syncEnabled = true;
+    initMemberDirectCloudSync();
+    try{ flushPendingMemberCloud(); }catch(e){}
+    // Okamžite skús poslať všetkých členov do shared-db aby sa noví dostali ku všetkým
+    try{ if(membersData && membersData.length>0){ originalSetItem('gt-members-real-2026-v847', JSON.stringify(membersData)); } }catch(e){}
 }
 
 function pushToCloud(force = false){
@@ -6289,60 +6366,68 @@ const MEMBER_APPLICATION_CLOUD_COLLECTION='guard-trainer-applications';
 // v960: členovia majú aj samostatný Firestore kanál. Spoločný dokument
 // zostáva zachovaný ako kompatibilita, ale vytvorenie/úprava/vymazanie člena
 // sa už nespolieha iba na veľký spoločný snapshot.
-// v962: ČLENOVIA sú výhradne spoločný zoznam v guard-trainer-data/shared-db.
-// Nepoužívame druhú Firestore kolekciu. Zmena jedného člena sa zapisuje
-// transakčne do spoločného dokumentu, takže dve zariadenia nemôžu navzájom
-// prepísať svoje nové členstvo.
-async function syncMemberChangeToSharedCloud(member, deleted=false){
+const MEMBER_DIRECT_CLOUD_COLLECTION='guard-trainer-members';
+let memberDirectSyncReady=false;
+function memberDirectStamp(m){
+  try{return Math.max(Number(localStorage.getItem('gt-member-save-order-v1')?JSON.parse(localStorage.getItem('gt-member-save-order-v1'))[String(m?.id)]||0:0),Number(localStorage.getItem('gt-member-delete-order-v1')?JSON.parse(localStorage.getItem('gt-member-delete-order-v1'))[String(m?.id)]||0:0));}catch(e){return 0;}
+}
+async function saveMemberDirectCloud(member,deleted=false){
   try{
     if(!db || !member || member.id==null) return false;
     const id=String(member.id);
-    let stamp=Date.now();
-    try{
-      const so=JSON.parse(originalGetItem('gt-member-save-order-v1')||'{}')||{};
-      const de=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
-      stamp=Math.max(Number(so[id]||0),Number(de[id]||0),stamp);
-    }catch(e){}
-    const uid=firebase.auth().currentUser?.uid || 'unknown';
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      let members=[];
-      let saveOrder={};
-      let deleteOrder={};
-      try{const x=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];if(Array.isArray(x))members=x;}catch(e){}
-      try{const x=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};if(x&&typeof x==='object')saveOrder=x;}catch(e){}
-      try{const x=data['gt-member-delete-order-v1']?JSON.parse(data['gt-member-delete-order-v1']):{};if(x&&typeof x==='object')deleteOrder=x;}catch(e){}
-      const byId=new Map();
-      members.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
-      if(deleted){
-        deleteOrder[id]=Math.max(Number(deleteOrder[id]||0),stamp);
-        byId.delete(id);
-      }else{
-        const clean={...member}; delete clean.applicationFile; delete clean.applicationFileName;
-        const old=byId.get(id);
-        const oldAt=Math.max(Number(saveOrder[id]||0),Number(deleteOrder[id]||0));
-        if(!old || stamp>=oldAt){
-          byId.set(id,clean);
-          saveOrder[id]=stamp;
-          if(Number(deleteOrder[id]||0)<=stamp) delete deleteOrder[id];
-        }
-      }
-      tx.set(ref,{
-        'gt-members-real-2026-v847':JSON.stringify(Array.from(byId.values())),
-        'gt-member-save-order-v1':JSON.stringify(saveOrder),
-        'gt-member-delete-order-v1':JSON.stringify(deleteOrder),
-        _lastUpdateBy:uid,
-        _updatedAt:Date.now()
-      },{merge:true});
-    });
-    console.log('☁️ Spoločný zoznam členov uložený',id,deleted?'DELETE':'SAVE');
+    let stamp=memberDirectStamp(member); if(!stamp) stamp=Date.now();
+    if(deleted){
+      await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION).doc(id).set({memberId:id,deleted:true,deletedAt:stamp,updatedAt:stamp},{merge:true});
+    }else{
+      const clean={...member}; delete clean.applicationFile; delete clean.applicationFileName;
+      await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION).doc(id).set({memberId:id,deleted:false,member:clean,updatedAt:stamp},{merge:true});
+    }
     return true;
-  }catch(e){
-    console.warn('Guard Trainer: shared member transaction failed',e);
-    return false;
-  }
+  }catch(e){ console.warn('Guard Trainer: direct member cloud save failed',e); return false; }
+}
+function initMemberDirectCloudSync(){
+  if(!db || memberDirectSyncReady) return;
+  memberDirectSyncReady=true;
+  try{ flushPendingMemberCloud(); }catch(e){}
+  // Každých 10 sekúnd skús znovu poslať pending
+  setInterval(()=>{ try{ flushPendingMemberCloud(); }catch(e){} }, 10000);
+  db.collection(MEMBER_DIRECT_CLOUD_COLLECTION).onSnapshot(snap=>{
+    let uiChanged=false;
+    try{
+      snap.docChanges().forEach(ch=>{
+        const d=ch.doc.data()||{}, id=String(d.memberId||ch.doc.id);
+        if(!id) return;
+        const remoteAt=Number(d.updatedAt||d.deletedAt||0);
+        let saveOrder={},deleteOrder={};
+        try{saveOrder=JSON.parse(originalGetItem('gt-member-save-order-v1')||'{}')||{};}catch(e){}
+        try{deleteOrder=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};}catch(e){}
+        const localAt=Math.max(Number(saveOrder[id]||0),Number(deleteOrder[id]||0));
+        if(remoteAt && remoteAt<localAt) return;
+        const idx=membersData.findIndex(m=>String(m?.id)===id);
+        if(d.deleted){
+          if(idx>=0){
+            const m=membersData[idx];
+            const deleted=getDeletedMembers().filter(x=>!memberSameName(x,m));
+            const archived=JSON.parse(JSON.stringify(m)); archived.archived=true; archived.deletedAt=new Date(Number(d.deletedAt||remoteAt||Date.now())).toISOString();
+            deleted.push(archived); persistDeletedMembers(deleted);
+            membersData.splice(idx,1); uiChanged=true;
+          }
+          try{deleteOrder[id]=Math.max(Number(deleteOrder[id]||0),remoteAt||Date.now());originalSetItem('gt-member-delete-order-v1',JSON.stringify(deleteOrder));}catch(e){}
+        }else if(d.member){
+          const remote={...d.member};
+          if(idx>=0) membersData[idx]=remote; else membersData.push(remote);
+          try{saveOrder[id]=Math.max(Number(saveOrder[id]||0),remoteAt||Date.now());originalSetItem('gt-member-save-order-v1',JSON.stringify(saveOrder));}catch(e){}
+          uiChanged=true;
+        }
+      });
+      if(uiChanged){
+        normalizeAllMembers();
+        try{localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));}catch(e){}
+        if(location.hash==='#members') setTimeout(()=>{try{renderMembers();}catch(e){}},0);
+        if(location.hash==='#attendance') setTimeout(()=>{try{attendance();}catch(e){}},0);
+      }
+    }catch(e){console.warn('Guard Trainer: direct member cloud sync failed',e);}
+  },err=>console.warn('Guard Trainer: direct member listener failed',err));
 }
 
 async function saveApplicationFileToCloud(memberId, fileRec){
@@ -6387,7 +6472,10 @@ function persistMembersData(changedMemberId=null){
     const prevById=new Map(previous.map(m=>[String(m?.id),m]));
     const changedIds=new Set();
     if(changedMemberId!=null) changedIds.add(String(changedMemberId));
-    if(previousRaw){
+    // Ak je to prvé uloženie (žiadna previous), považuj všetky aktuálne id za zmenené - aby nový člen išiel do cloudu
+    if(!previousRaw){
+      membersData.forEach(m=>{ if(m&&m.id!=null) changedIds.add(String(m.id)); });
+    } else {
       membersData.forEach(m=>{
         if(!m||m.id==null)return;
         const old=prevById.get(String(m.id));
@@ -6397,24 +6485,64 @@ function persistMembersData(changedMemberId=null){
         if(m&&m.id!=null && !membersData.some(x=>String(x?.id)===String(m.id))) changedIds.add(String(m.id));
       });
     }
-    localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+    // Vždy ulož lokálne
+    try{ originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData)); }catch(e){ try{ localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData)); }catch(e2){} }
+    // Ulož aj do spoločného dokumentu ako zálohu, aby sa nový člen dostal do shared-db ak direct cloud zlyhá
+    try{ originalSetItem('gt-members-real-2026-v847', JSON.stringify(membersData)); }catch(e){}
+    // Zozbieraj pending pre prípad že cloud ešte nie je pripravený
+    let pendingQueue=[];
+    try{ const q=JSON.parse(originalGetItem('gt-member-pending-cloud-v1')||'[]'); if(Array.isArray(q)) pendingQueue=q; }catch(e){}
     changedIds.forEach(id=>{
-      // Každá zmena člena sa zapisuje do spoločného Firestore dokumentu transakčne.
-      // Toto je jediný zdroj synchronizácie zoznamu členov medzi zariadeniami.
-      const deletedAt = (()=>{
-        try{ const d=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{}; return Number(d[String(id)]||0); }catch(e){ return 0; }
-      })();
+      const deletedAt = (()=>{ try{ const d=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{}; return Number(d[String(id)]||0); }catch(e){ return 0; } })();
       if(deletedAt>0){
         const old=previous.find(m=>String(m?.id)===String(id));
-        if(old) syncMemberChangeToSharedCloud(old,true);
+        if(old){
+          if(typeof db!=='undefined' && db && cloudEnabled){ saveMemberDirectCloud(old,true); }
+          else { if(!pendingQueue.includes(id)) pendingQueue.push(id); }
+        }
       }else{
         const saved=membersData.find(m=>String(m?.id)===String(id));
-        if(saved){ markMemberSaved(id); syncMemberChangeToSharedCloud(saved,false); }
+        if(saved){
+          markMemberSaved(id);
+          if(typeof db!=='undefined' && db && cloudEnabled){ saveMemberDirectCloud(saved,false); }
+          else { if(!pendingQueue.includes(id)) pendingQueue.push(id); }
+        }
       }
     });
+    try{ originalSetItem('gt-member-pending-cloud-v1', JSON.stringify(pendingQueue)); }catch(e){}
+    // Vždy skús push do spoločného cloudu (shared-db) pre istotu
+    try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true), 200); }catch(e){}
   }
   catch(e){ console.warn('Guard Trainer: members could not be persisted',e); }
 }
+// Flush pending members when cloud becomes ready
+function flushPendingMemberCloud(){
+  try{
+    const raw=originalGetItem('gt-member-pending-cloud-v1')||'[]';
+    const queue=JSON.parse(raw)||[];
+    if(!Array.isArray(queue) || queue.length===0) return;
+    const remaining=[];
+    queue.forEach(id=>{
+      const deletedAt = (()=>{ try{ const d=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{}; return Number(d[String(id)]||0); }catch(e){ return 0; } })();
+      if(deletedAt>0){
+        const delRaw=originalGetItem(MEMBERS_STORAGE_KEY);
+        // skús nájsť v deleted members
+        try{
+          const dels=JSON.parse(localStorage.getItem('gt-deleted-members-v1')||'[]')||[];
+          const found=dels.find(m=>String(m?.id)===String(id));
+          if(found) saveMemberDirectCloud(found,true);
+          else remaining.push(id);
+        }catch(e){ remaining.push(id); }
+      } else {
+        const saved=membersData.find(m=>String(m?.id)===String(id));
+        if(saved){ saveMemberDirectCloud(saved,false); }
+        else { remaining.push(id); }
+      }
+    });
+    originalSetItem('gt-member-pending-cloud-v1', JSON.stringify(remaining));
+  }catch(e){ console.warn('flush pending failed', e); }
+}
+
 function loadPersistedMembers(){
   try{
     const raw=JSON.parse(localStorage.getItem(MEMBERS_STORAGE_KEY)||'null');
@@ -6621,7 +6749,7 @@ function deleteMemberFromList(id){
    originalSetItem('gt-member-delete-order-v1',JSON.stringify(dels));
  }catch(e){ console.warn('Guard Trainer: member delete tombstone failed',e); }
  persistMembersData(id);
- try{syncMemberChangeToSharedCloud(m,true);}catch(e){}
+ try{saveMemberDirectCloud(m,true);}catch(e){}
  try{pushToCloud(true);}catch(e){}
  renderMembers();
  toast('Člen bol presunutý do archívu');

@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Guard Trainer v957: oprava cloud synchronizácie vyúčtovania medzi zariadeniami; prázdne lokálne vyúčtovanie už neprepíše cloud a prijaté vyúčtovanie sa na otvorenej karte okamžite zobrazí.
 <!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
@@ -635,8 +636,15 @@ function initCloudSync(){
         // Dáta sa iba aktualizujú na pozadí; navigáciu ovláda výhradne používateľ.
 
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
-        // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
-        console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
+        // Ak je práve otvorené Moje vyúčtovanie, po prijatí cloudového
+        // vyúčtovania ho okamžite prekresli. Ostatné obrazovky sa nemenia.
+        try{
+          if((location.hash==='#trainer-month' || location.hash==='#billing') &&
+             !isAdmin() && !isHeadTrainer() && typeof renderMonthlyBilling==='function'){
+            setTimeout(()=>{try{renderMonthlyBilling();}catch(e){console.warn('Billing cloud refresh failed:',e);}},0);
+          }
+        }catch(e){}
+        console.log('Cloud sync: dáta aktualizované na pozadí');
         // Ak administrátor upravil dochádzku, zariadenie trénera musí zmenu
         // okamžite premietnuť aj do práve otvorenej obrazovky Dochádzka.
         // Rozhodujeme podľa timestampu konkrétneho dátumu/skupiny: starší
@@ -794,6 +802,45 @@ function pushToCloud(force = false){
       // ČLENOVIA: ŽIADNY všeobecný merge. Serverový zoznam sa mení iba
       // transakciou syncMemberChangeToSharedCloud(member). Týmto sa zabráni,
       // aby telefón so staršou lokálnou kópiou prepísal serverovú pravdu.
+
+      // VYÚČTOVANIE: nikdy neposielaj prázdnu/staršiu lokálnu kópiu cez
+      // existujúce cloudové vyúčtovanie. Presne toto spôsobovalo, že druhé
+      // zariadenie mohlo po synchronizácii ukázať 0 tréningov a následne
+      // prepísať spoločné vyúčtovanie prázdnym poľom. Zlúčime záznamy podľa
+      // tréner + dátum + skupina; pri konflikte vyhrá novšie uloženie.
+      {
+        let localRows=[], remoteRows=[];
+        try{ const x=payload['gt-monthly-billing-v221']; const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localRows=p; }catch(e){}
+        try{ const x=remote['gt-monthly-billing-v221']; const p=x?JSON.parse(x):[]; if(Array.isArray(p)) remoteRows=p; }catch(e){}
+        const normBilling=v=>String(v||'').trim().toUpperCase();
+        const billingKey=r=>{
+          const d=parsePaymentDate(r&&r.date);
+          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
+          return `${normBilling(r&&r.trainer)}|${dk}|${normBilling(r&&r.group)}`;
+        };
+        const mergedMap=new Map();
+        const putBilling=row=>{
+          if(!row) return;
+          const key=billingKey(row); if(!key || key.startsWith('|')) return;
+          const prev=mergedMap.get(key);
+          if(!prev){ mergedMap.set(key,row); return; }
+          // Reálny finančný záznam má prednosť pred informačným záznamom
+          // o zastupovaní. Ak sú oba reálne, rozhoduje savedAt/updatedAt.
+          if(prev.substituteReference && !row.substituteReference){ mergedMap.set(key,row); return; }
+          if(!prev.substituteReference && row.substituteReference){ return; }
+          const pa=Number(prev.savedAt||prev.updatedAt||prev.createdAt||0);
+          const ra=Number(row.savedAt||row.updatedAt||row.createdAt||0);
+          if(ra>=pa) mergedMap.set(key,row);
+        };
+        // Remote ide prvé: lokálny prázdny register už nikdy nevymaže cloud.
+        remoteRows.forEach(putBilling); localRows.forEach(putBilling);
+        const mergedRows=Array.from(mergedMap.values());
+        payload['gt-monthly-billing-v221']=JSON.stringify(mergedRows);
+        // Dôležité: ak telefón nemal vlastné vyúčtovanie, okamžite si ponechá
+        // zlúčenú cloudovú verziu aj lokálne. Nemusí čakať na ďalší refresh.
+        try{ monthlyBillingRecords=mergedRows; }catch(e){}
+        try{ originalSetItem('gt-monthly-billing-v221',JSON.stringify(mergedRows)); }catch(e){}
+      }
 
       ['gt-attendance','gt-training-attendance'].forEach(k=>{
         if(!String(payload[k]||'').trim() && String(remote[k]||'').trim()) payload[k]=remote[k];

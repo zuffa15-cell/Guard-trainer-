@@ -97,6 +97,7 @@ function initCloudSync(){
       // je novší.
       let newerAttendance=false;
       let newerMembers=false;
+      let newerTrainers=false;
       // Členovia majú vlastný timestamp podľa ID. Globálny _updatedAt nesmie
       // zablokovať prijatie nového člena z administrátorského zariadenia.
       try{
@@ -104,6 +105,25 @@ function initCloudSync(){
         const remoteOrder=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};
         const localOrder=originalGetItem('gt-member-save-order-v1')?JSON.parse(originalGetItem('gt-member-save-order-v1')):{};
         if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>m&&m.id!=null && Number(remoteOrder[String(m.id)]||0)>Number(localOrder[String(m.id)]||0));
+      }catch(e){}
+      // Tréneri majú spoločný profilový register. Ak cloud obsahuje trénera,
+      // ktorého toto zariadenie ešte nemá, starší globálny _updatedAt nesmie
+      // zahodiť celý snapshot. Rovnako prijmi zmenu existujúceho profilu,
+      // ak je uložená v spoločnom login registri.
+      try{
+        const remotePw=data['gt-trainer-login-passwords']?JSON.parse(data['gt-trainer-login-passwords']):{};
+        const localPw=originalGetItem('gt-trainer-login-passwords')?JSON.parse(originalGetItem('gt-trainer-login-passwords')):{};
+        newerTrainers=Object.keys(remotePw||{}).some(id=>{
+          const r=remotePw[id], l=localPw?.[id];
+          if(!l) return true;
+          return JSON.stringify(r)!==JSON.stringify(l);
+        });
+        if(!newerTrainers){
+          const remoteRaw=data['gt-trainers-v395']?JSON.parse(data['gt-trainers-v395']):[];
+          const localRaw=originalGetItem('gt-trainers-v395')?JSON.parse(originalGetItem('gt-trainers-v395')):[];
+          const localIds=new Set((Array.isArray(localRaw)?localRaw:[]).map(t=>String(t?.id)));
+          newerTrainers=Array.isArray(remoteRaw)&&remoteRaw.some(t=>t&&t.id!=null&&!localIds.has(String(t.id)));
+        }
       }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
@@ -121,8 +141,9 @@ function initCloudSync(){
           });
         }
       }catch(e){}
-      if(!newerAttendance && !newerMembers) return;
-      if(newerMembers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších členov – prijímam');
+      if(!newerAttendance && !newerMembers && !newerTrainers) return;
+      if(newerTrainers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších trénerov – prijímam');
+      else if(newerMembers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších členov – prijímam');
       else console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
     }
     
@@ -335,6 +356,42 @@ function initCloudSync(){
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
         if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        // Trénerov tiež nikdy neprepíš celým zoznamom. Staršie zariadenie môže
+        // mať Viktora/Petra lokálne, zatiaľ čo cloudový snapshot je zo zariadenia,
+        // ktoré ich ešte nemalo. Zlúčime profily podľa ID.
+        if(k==='gt-trainers-v395'){
+          try{
+            const localArr=JSON.parse(originalGetItem(k)||'[]');
+            const remoteArr=JSON.parse(data[k]||'[]');
+            const map=new Map();
+            (Array.isArray(localArr)?localArr:[]).forEach(t=>{if(t&&t.id!=null)map.set(String(t.id),t);});
+            (Array.isArray(remoteArr)?remoteArr:[]).forEach(t=>{
+              if(!t||t.id==null)return;
+              const id=String(t.id), prev=map.get(id);
+              if(!prev) map.set(id,t);
+              else map.set(id,{...prev,...t,groups:Array.isArray(t.groups)?[...t.groups]:(Array.isArray(prev.groups)?[...prev.groups]:[])});
+            });
+            const merged=Array.from(map.values());
+            const raw=JSON.stringify(merged);
+            if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
+            trainersData.splice(0,trainersData.length,...merged);
+            restoreTrainerProfilesFromLoginRegistry();
+          }catch(e){}
+          return;
+        }
+        // Login register zlučuj podľa ID, aby sa nestratil účet, ktorý existuje
+        // iba na jednom zariadení.
+        if(k==='gt-trainer-login-passwords'){
+          try{
+            const localObj=JSON.parse(originalGetItem(k)||'{}')||{};
+            const remoteObj=JSON.parse(data[k]||'{}')||{};
+            const merged={...localObj,...remoteObj};
+            const raw=JSON.stringify(merged);
+            if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
+            restoreTrainerProfilesFromLoginRegistry(raw);
+          }catch(e){}
+          return;
+        }
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -394,6 +451,13 @@ function initCloudSync(){
           }
         }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
+        // Po synchronizácii trénerov obnov aj práve otvorený zoznam trénerov.
+        try{
+          restoreTrainerProfilesFromLoginRegistry();
+          if(location.hash==='#trainers' && typeof renderTrainers==='function'){
+            setTimeout(()=>{try{ renderTrainers(); }catch(e){ console.warn('Trainer cloud refresh failed:',e); }},0);
+          }
+        }catch(e){}
         // Po cloudovom pridaní člena treba obnoviť aj otvorený attendanceState.members.
         // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
         try{
@@ -5544,6 +5608,76 @@ function persistTrainersData(){
   try{ localStorage.setItem(TRAINERS_STORAGE_KEY,JSON.stringify(trainersData)); }
   catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
 }
+
+// v958 – Obnova reálnych trénerov z nezávislého login registra.
+// Ak staršia verzia stratila profil v gt-trainers-v395, ale účet stále existuje
+// v spoločnom registri hesiel, profil sa obnoví bez zásahu do dochádzky/vyúčtovania.
+function restoreTrainerProfilesFromLoginRegistry(rawRegistry){
+  try{
+    const raw = rawRegistry!=null ? rawRegistry : originalGetItem('gt-trainer-login-passwords');
+    const reg = raw ? JSON.parse(raw) : {};
+    if(!reg || typeof reg!=='object') return false;
+    let changed=false;
+    Object.values(reg).forEach(r=>{
+      if(!r || r.isTemplate || r.id==null || r.active===false) return;
+      const id=Number(r.id);
+      if(!Number.isFinite(id)) return;
+      let existing=trainersData.find(t=>Number(t.id)===id);
+      if(!existing){
+        const target=String(r.name||'').trim().toLowerCase();
+        existing=trainersData.find(t=>String(t.full||t.name||'').trim().toLowerCase()===target);
+        if(existing && Number(existing.id)!==id){
+          existing.id=id;
+          changed=true;
+        }
+      }
+      if(existing){
+        // Login register je autoritatívny iba pre meno/rolu/skupiny, ak profil
+        // už existuje. Heslo nemeníme do profilu, aby sa nerozbila existujúca autentifikácia.
+        const full=String(r.name||existing.full||existing.name||'').trim();
+        if(full && String(existing.full||existing.name||'').trim()!==full){ existing.full=full; existing.name=full; changed=true; }
+        if(Array.isArray(r.groups) && JSON.stringify(existing.groups||[])!==JSON.stringify(r.groups)){ existing.groups=[...r.groups]; changed=true; }
+        if(r.role && String(existing.role||'')!==String(r.role)){ existing.role=String(r.role); changed=true; }
+        existing.active=true; existing.status='AKTÍVNA';
+        return;
+      }
+      const full=String(r.name||'').trim();
+      if(!full) return;
+      trainersData.push({
+        id, name:full, full, role:String(r.role||'TRÉNER'), email:'', phone:'',
+        license:'', valid:'', groups:Array.isArray(r.groups)?[...r.groups]:[],
+        active:true, status:'AKTÍVNA', isTemplate:false,
+        loginPassword:String(r.password||''), loginPasswordSet:!!r.password
+      });
+      changed=true;
+    });
+    if(changed) persistTrainersData();
+    return changed;
+  }catch(e){ console.warn('Obnova trénerov z login registra sa nepodarila',e); return false; }
+}
+try{ restoreTrainerProfilesFromLoginRegistry(); }catch(e){}
+// Bezpečná poistka pre dva reálne účty, ktoré boli v starších pracovných verziách
+// výslovne používané. Ak sa ich cloudový/login profil neskôr nájde, obnoví sa
+// podľa mena a preberie jeho skutočné ID, skupiny a prihlasovacie údaje.
+(function ensureKnownRealTrainerNames(){
+  try{
+    const known=[
+      {full:'Viktor Žuffa',role:'TRÉNER'},
+      {full:'Peter Onuščák',role:'TRÉNER'}
+    ];
+    let nextId=Math.max(0,...trainersData.map(t=>Number(t.id)||0))+1;
+    let changed=false;
+    known.forEach(k=>{
+      const exists=trainersData.find(t=>String(t.full||t.name||'').trim().toLowerCase()===k.full.toLowerCase());
+      if(!exists){
+        trainersData.push({id:nextId++,name:k.full,full:k.full,role:k.role,email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA',isTemplate:false});
+        changed=true;
+      }
+    });
+    if(changed) persistTrainersData();
+    restoreTrainerProfilesFromLoginRegistry();
+  }catch(e){}
+})();
 
 /* v531 – synchronizácia priradenia tréner ↔ skupina.
    Zdrojom sú uložené rozvrhy (trainerIds + groupCode). Profil trénera

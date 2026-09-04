@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v958: oprava cloud synchronizácie vyúčtovania medzi zariadeniami; prázdne lokálne vyúčtovanie už neprepíše cloud a prijaté vyúčtovanie sa na otvorenej karte okamžite zobrazí.
+<!-- Guard Trainer v959:  oprava cloud synchronizácie vyúčtovania medzi zariadeniami; prázdne lokálne vyúčtovanie už neprepíše cloud a prijaté vyúčtovanie sa na otvorenej karte okamžite zobrazí.
 <!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
@@ -8536,6 +8536,68 @@ function getAttendancePendingSaveAt(date,group){
 // Nepoužíva sa na bežný sync celej databázy, preto ju nemôže prepísať
 // neúplná lokálna kópia trénera.
 const ATTENDANCE_DIRECT_COLLECTION = 'guard-trainer-attendance';
+// v959: živý listener pre administrátorskú dochádzku.
+// Samostatný admin dokument sa zapisuje do Firestore, ale predtým sa čítal iba
+// pri otvorení dochádzky. Preto už otvorený mobil trénera nevidel následnú
+// zmenu administrátora. Listener sleduje práve otvorený dátum + skupinu.
+let gtDirectAttendanceUnsubscribe=null;
+let gtDirectAttendanceListeningKey='';
+let gtDirectAttendanceLastApplied=0;
+function stopDirectAttendanceListener(){
+  try{ if(typeof gtDirectAttendanceUnsubscribe==='function') gtDirectAttendanceUnsubscribe(); }catch(e){}
+  gtDirectAttendanceUnsubscribe=null;
+  gtDirectAttendanceListeningKey='';
+  gtDirectAttendanceLastApplied=0;
+}
+function applyDirectAdminAttendanceSnapshot(data,key){
+  try{
+    if(!data || !data.history || typeof data.history!=='object') return false;
+    if(typeof attendanceState==='undefined') return false;
+    if(trainingAttendanceKey(attendanceState.group,attendanceState.date)!==key) return false;
+    const remoteAt=Number(data.adminSavedAt||data.updatedAt||0);
+    if(remoteAt && remoteAt<=gtDirectAttendanceLastApplied) return false;
+    const hist=data.history;
+    (attendanceState.members||[]).forEach(a=>{
+      const x=hist[a.surname+'|'+a.name];
+      if(!x) return;
+      a.training=!!x.training;
+      a.trainingAccount=!!x.trainingAccount;
+      a.newMember=!!x.newMember;
+      a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
+    });
+    trainingAttendanceByGroup[key]=hist;
+    if(remoteAt){
+      gtDirectAttendanceLastApplied=remoteAt;
+      const order=JSON.parse(originalGetItem('gt-attendance-save-order-v1')||'{}')||{};
+      order[key]=Math.max(Number(order[key]||0),remoteAt);
+      originalSetItem('gt-attendance-save-order-v1',JSON.stringify(order));
+      const pending=JSON.parse(originalGetItem(ATTENDANCE_PENDING_SAVE_KEY)||'{}')||{};
+      delete pending[attendanceSaveOrderKey(attendanceState.date,attendanceState.group)];
+      originalSetItem(ATTENDANCE_PENDING_SAVE_KEY,JSON.stringify(pending));
+    }
+    attendanceState.billingPaymentSnapshot=null;
+    attendanceState.billingAttendanceSnapshot=null;
+    attendanceState.billingRecordSnapshot=null;
+    persistTrainingAttendanceHistory();
+    refreshAttendance();
+    console.log('📥 Živá admin dochádzka načítaná pre trénera',key,remoteAt);
+    return true;
+  }catch(e){ console.warn('Živé načítanie admin dochádzky zlyhalo',e); return false; }
+}
+function startDirectAttendanceListener(key){
+  try{
+    if(!db || !cloudEnabled || isAdmin() || isHeadTrainer()) return;
+    if(gtDirectAttendanceListeningKey===key && gtDirectAttendanceUnsubscribe) return;
+    stopDirectAttendanceListener();
+    const docRef=db.collection(ATTENDANCE_DIRECT_COLLECTION).doc(attendanceDirectDocId(key));
+    gtDirectAttendanceListeningKey=key;
+    gtDirectAttendanceUnsubscribe=docRef.onSnapshot(snap=>{
+      if(!snap.exists) return;
+      const data=snap.data()||{};
+      applyDirectAdminAttendanceSnapshot(data,key);
+    },err=>console.warn('Živý listener admin dochádzky zlyhal',err));
+  }catch(e){ console.warn('Spustenie živého listenera admin dochádzky zlyhalo',e); }
+}
 function attendanceDirectDocId(key){
   return encodeURIComponent(String(key||'')).replace(/%/g,'_');
 }
@@ -9554,7 +9616,13 @@ async function refreshCurrentAttendanceFromCloud(){
           return;
         }
       }
-    }catch(e){ console.warn('Priame načítanie admin dochádzky zlyhalo',e); }
+      // Dôležité: listener musí zostať aktívny aj keď pri prvom načítaní
+      // dokument ešte neexistoval. Admin ho môže vytvoriť až neskôr.
+      startDirectAttendanceListener(wantedKey);
+    }catch(e){
+      console.warn('Priame načítanie admin dochádzky zlyhalo',e);
+      startDirectAttendanceListener(wantedKey);
+    }
 
     // Fallback pre staršie záznamy, ktoré ešte nemajú samostatný dokument.
     const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();

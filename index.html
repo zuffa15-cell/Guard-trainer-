@@ -10673,10 +10673,23 @@ function initBillingDirectSync(){
     window.mergeBillingRecords=mergeBillingRecords;
     window.fetchBillingNow=fetchBilling;
     
-    // Pre admin/head okamžitý fetch
+    // Pre admin/head okamžitý fetch + poistka proti mobilným WebView,
+    // ktoré môžu oneskoriť Firestore onSnapshot až do ďalšieho refreshu.
+    // Kým je otvorené vyúčtovanie, každé 2 sekundy overíme autoritatívny
+    // dokument. Toto nie je náhrada realtime listenera, ale spoľahlivá poistka.
     try{
       if(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer())){
-        setTimeout(fetchBilling, 1500);
+        setTimeout(fetchBilling, 300);
+        setTimeout(fetchBilling, 1200);
+        setTimeout(fetchBilling, 2500);
+        if(!window.__gtBillingAutoPoll){
+          window.__gtBillingAutoPoll=setInterval(()=>{
+            try{
+              const hash=String(location.hash||'').toLowerCase();
+              if(hash==='#billing' || hash==='#trainer-month') fetchBilling();
+            }catch(e){}
+          },2000);
+        }
       }
     }catch(e){}
     
@@ -10687,7 +10700,11 @@ function initBillingDirectSync(){
     const refreshBillingScreenNow=()=>{
       try{
         const hash=String(location.hash||'').toLowerCase();
-        if(hash!=='#billing' && hash!=='#trainer-month') return;
+        // Obrazovka môže byť otvorená aj v WebView bez správneho hash stavu.
+        // Prekresľuj iba ak je práve zobrazený billing panel.
+        const billingOpen = hash==='#billing' || hash==='#trainer-month' ||
+          !!document.querySelector('.head-billing, .monthly-billing, .billing-screen, .billing-table, [data-screen="billing"]');
+        if(!billingOpen) return;
         if(billingRealtimeRenderTimer) clearTimeout(billingRealtimeRenderTimer);
         billingRealtimeRenderTimer=setTimeout(()=>{
           billingRealtimeRenderTimer=null;

@@ -7440,6 +7440,16 @@ function getSavedMemberTrainingData(member){
     if(!d)return;
     const group=String(groupValue||'').trim();
     const groupKey=normGroup(group)||group;
+    // Štatistika člena sa smie započítať iba pre reálne existujúci tréning.
+    // Starý/stale attendance záznam pre skupinu, ktorá v daný deň nemala tréning,
+    // nesmie vytvoriť falošný tréning (napr. 2.9. skupina C).
+    try{
+      if(typeof scheduleItemsForDate==='function'){
+        const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+        const scheduled=(scheduleItemsForDate(iso)||[]).some(x=>normGroup(x.code)===groupKey);
+        if(!scheduled) return;
+      }
+    }catch(e){}
     const unique=`${d.year}-${d.month}-${d.day}|${groupKey}`;
     if(seen.has(unique))return;
     seen.add(unique);

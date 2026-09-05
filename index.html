@@ -3873,7 +3873,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1035-ODNIKIAL</div>
+   <div class="gt-login-title">GUARD TRAINER</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -3887,6 +3887,29 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
  const error=document.getElementById('gtSimpleLoginError');
  const KEY='gt-simple-login-step1';
  function openApp(account){
+   try{
+     // Vždy zosúlaď prihlasovací účet so skutočným profilom trénera.
+     // Ak starý účet ešte nesie ID testovacieho "Tréner 1", ale meno je už Peter Onuščák,
+     // použije sa ID skutočného profilu Petra. Tým sa dochádzka aj vyúčtovanie ukladajú pod správneho trénera.
+     if(account && account.trainer_id!=null){
+       try{
+         const keys=Object.keys(localStorage).filter(k=>/^gt-trainers-v\d+$/.test(k) || k==='gt-trainers');
+         let profiles=[];
+         keys.sort((a,b)=>Number((b.match(/v(\d+)$/)||[])[1]||0)-Number((a.match(/v(\d+)$/)||[])[1]||0));
+         for(const k of keys){
+           try{ const arr=JSON.parse(localStorage.getItem(k)||'[]'); if(Array.isArray(arr)&&arr.length){ profiles=arr; break; } }catch(e){}
+         }
+         const display=String(account.display_name||'').trim().toLowerCase();
+         const byName=profiles.find(t=>!t.isTemplate && t.active!==false && String(t.full||t.name||'').trim().toLowerCase()===display);
+         if(byName){
+           account.trainer_id=Number(byName.id);
+           account.display_name=String(byName.full||byName.name||account.display_name).trim();
+           account.groups=Array.isArray(byName.groups)?[...byName.groups]:Array.isArray(account.groups)?account.groups:[];
+           account.role=String(byName.role||account.role||'TRÉNER');
+         }
+       }catch(e){}
+     }
+   }catch(e){}
    try{
      localStorage.setItem(KEY,'1');
      if(account){
@@ -5816,6 +5839,32 @@ window.fixViktorGroupC = function(){
     renderTrainers();
   }catch(e){ alert('Chyba: '+e.message); }
 };
+
+// Oprava starých prihlasovacích záznamov pre reálnych trénerov.
+// Profil v karte Tréneri je zdroj identity; prihlasovací register sa mu prispôsobí.
+function repairTrainerLoginRegistry(){
+  try{
+    const raw=localStorage.getItem('gt-trainer-login-passwords');
+    if(!raw) return;
+    const pw=JSON.parse(raw)||{};
+    let changed=false;
+    (trainersData||[]).forEach(t=>{
+      if(!t || t.isTemplate || t.active===false) return;
+      const name=String(t.full||t.name||'').trim();
+      if(!name || !t.loginPassword) return;
+      const id=String(t.id);
+      const old=pw[id]||{};
+      const next={...old,id:Number(t.id),name,password:String(t.loginPassword),active:true,role:String(t.role||'TRÉNER'),groups:Array.isArray(t.groups)?[...t.groups]:[],isTemplate:false};
+      if(JSON.stringify(old)!==JSON.stringify(next)){ pw[id]=next; changed=true; }
+    });
+    if(changed){
+      const json=JSON.stringify(pw);
+      localStorage.setItem('gt-trainer-login-passwords',json);
+      try{ originalSetItem('gt-trainer-login-passwords',json); }catch(e){}
+    }
+  }catch(e){ console.warn('Oprava login registra trénerov sa nepodarila',e); }
+}
+repairTrainerLoginRegistry();
 
 function initTrainersDirectSync(){
   try{

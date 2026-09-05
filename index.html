@@ -472,9 +472,8 @@ function initCloudSync(){
         // Po cloudovom pridaní člena treba obnoviť aj otvorený attendanceState.members.
         // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
         try{
-          if(memberDataChanged && location.hash==='#attendance' && typeof attendance==='function'){
-            // v1031: NEPRENAČÍTAVAJ dochádzku keď sa zmení membersData z cloudu - ostáva lokálna
-            console.log('🔒 BLOKUJEM auto-reload dochádzky po zmene membersData z cloudu');
+          if(memberDataChanged && location.hash==='#attendance'){
+            console.log('🔒 v1032 blokujem auto-reload dochádzky');
           }
           if(memberDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
             setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member list cloud refresh failed:',e); }},0);
@@ -3837,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1031-STABLE-2-9</div>
+   <div class="gt-login-title">GUARD TRAINER v1032-FINAL-2-9-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8377,6 +8376,14 @@ function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKe
 }
 function persistTrainingAttendanceHistory(){
   try{
+    const j=JSON.stringify(trainingAttendanceByGroup);
+    localStorage.setItem('gt-training-attendance-history', j);
+    originalSetItem('gt-training-attendance-history', j);
+    console.log('💾 Uložené', Object.keys(trainingAttendanceByGroup).length);
+  }catch(e){}
+  try{
+
+  try{
     localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup));
   }catch(e){ console.warn('Attendance history save failed',e); }
 }
@@ -8715,23 +8722,18 @@ function syncAttendanceRecord(member){
   return a;
 }
 function loadAttendanceFromMembers(){
- // v1031: 100% lokálna stabilná dochádzka - neprepisuj z membersData ak už máme načítané
- const _loadKey = `${attendanceState.date}|${attendanceState.group}`;
- if(window.__lastAttendanceMembersKey===_loadKey && attendanceState.members && attendanceState.members.length>0){
-   // Už máme členov pre tento dátum/skupinu - len obnov training flags z histórie, nemeň zoznam
-   const hist = trainingAttendanceByGroup[_loadKey]||{};
+ // v1032: Ak už máme členov pre rovnaký dátum/skupinu, neprepisuj zoznam z membersData
+ const _key = `${attendanceState.date}|${attendanceState.group}`;
+ if(window.__lastMembersKey===_key && attendanceState.members && attendanceState.members.length>0){
+   const hist = trainingAttendanceByGroup[_key]||{};
    attendanceState.members.forEach(a=>{
-     const saved = hist[a.surname+'|'+a.name];
-     if(saved){
-       a.training = !!saved.training;
-       a.trainingAccount = !!saved.trainingAccount;
-       a.newMember = !!saved.newMember;
-       a.newMemberDate = saved.newMemberDate||'';
-     }
+     const s=hist[a.surname+'|'+a.name];
+     if(s){ a.training=!!s.training; a.trainingAccount=!!s.trainingAccount; }
    });
-   console.log('🔒 Stabilná dochádzka - ponechávam', attendanceState.members.length, 'členov pre', _loadKey);
+   console.log('🔒 Stabilní členovia pre', _key, attendanceState.members.length);
    return;
  }
+ window.__lastMembersKey=_key;
  const current=attendanceState.members||[];
  const byName=new Map(current.map(a=>[a.surname+'|'+a.name,a]));
  const wantedGroups=new Set(groupMemberRosterCodes(attendanceState.group));
@@ -8739,7 +8741,6 @@ function loadAttendanceFromMembers(){
    const gs=Array.isArray(m.groups)?m.groups:[m.group];
    return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
  });
- window.__lastAttendanceMembersKey=_loadKey;
  // Test mode: keep the original 10 test members visible, but NEVER
  // discard a real member who was added to this group.
  

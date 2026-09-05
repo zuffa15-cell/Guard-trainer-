@@ -3835,7 +3835,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1008-GROUPS-FIX</div>
+   <div class="gt-login-title">GUARD TRAINER v1009-VIKTOR-C-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -4710,10 +4710,15 @@ function getCurrentTestTrainerProfile(){
     const role=String(account?.role||'').trim().toLowerCase();
     if(account && account.trainer_id!=null && (role==='trainer'||role==='tréner'||role==='trener')){
       const id=Number(account.trainer_id);
-      const real=(trainersData||[]).find(t=>Number(t.id)===id);
+      const real=(trainersData||[]).find(t=>Number(t.id)===id && !t.isTemplate);
       if(real){
         if(!Array.isArray(real.groups) && Array.isArray(account.groups)) real.groups=[...account.groups];
         return real;
+      }
+      // Ak je real template, ignoruj - vráť null aby sa nenačítal VZOROVÝ
+      if((trainersData||[]).find(t=>Number(t.id)===id && t.isTemplate)){
+        console.warn('⛔ Pokus o prihlásenie ako VZOROVÝ TRÉNER - blokované');
+        return null;
       }
       try{
         const pw=JSON.parse(localStorage.getItem('gt-trainer-login-passwords')||'{}');
@@ -4759,34 +4764,49 @@ function trainerOwnsTraining(item){
   const myId=currentTrainerAccountId();
   if(myId==null || !item) return false;
 
-  // The trainer's profile assignment is the primary group permission.
-  // Multiple trainers may legitimately be assigned to the same group.
-  // Therefore a training in one of my assigned groups is mine to open,
-  // even when an older schedule row still contains another/legacy trainerId.
+  // VZOROVÝ TRÉNER nikdy nevlastní žiadny tréning
+  try{
+    const me=(trainersData||[]).find(t=>Number(t.id)===myId);
+    if(me && me.isTemplate) return false;
+  }catch(e){}
+
+  // Profil trénera je primárny - ak má skupinu, môže otvoriť tréning tej skupiny
   try{
     const profile=getCurrentTestTrainerProfile();
     const myGroups=new Set((profile?.groups||[])
       .map(x=>String(x).trim().toUpperCase()).filter(Boolean));
-    // Include groups resolved from the current trainer ID and active schedule.
-    // This fixes trainers whose profile copy is stale but whose group is
-    // correctly assigned in the current schedule.
     try{
       (getCurrentTrainerGroups()||[]).forEach(x=>myGroups.add(String(x).trim().toUpperCase()));
     }catch(e){}
     const code=normalizeGroupCode(item.groupCode||item.code||item.group||'');
-    if(groupRosterCodes(code).some(c=>myGroups.has(c))) return true;
-  }catch(e){}
+    if(code && myGroups.size>0 && groupRosterCodes(code).some(c=>myGroups.has(c))) {
+      console.log('✅ Tréner vlastní tréning podľa skupiny', code, 'moje skupiny:', [...myGroups]);
+      return true;
+    }
+  }catch(e){ console.warn('trainerOwnsTraining groups fail', e); }
 
-  // Backward-compatible ownership for schedules that are not represented in
-  // the trainer profile yet: use explicit trainer IDs, then trainer name.
+  // Fallback: explicit trainer IDs
   const ids=Array.isArray(item.trainerIds)?item.trainerIds.map(Number):[];
   if(item.trainerId!=null) ids.push(Number(item.trainerId));
   if(ids.includes(myId)) return true;
+  
+  // Fallback: meno - aj priezvisko stačí (Žuffa == Viktor Žuffa)
   try{
     const me=(trainersData||[]).find(t=>Number(t.id)===myId);
-    const myName=String(me?.full||me?.name||'').trim().toLowerCase();
-    return !!myName && myName===String(item.trainer||'').trim().toLowerCase();
+    const myFull=String(me?.full||me?.name||'').trim().toLowerCase();
+    const mySurname=myFull.split(/\s+/).pop()||'';
+    const itemTrainer=String(item.trainer||'').trim().toLowerCase();
+    if(myFull && itemTrainer){
+      if(myFull===itemTrainer) return true;
+      if(mySurname && itemTrainer.includes(mySurname)) return true;
+      if(myFull.includes(itemTrainer) || itemTrainer.includes(myFull)) return true;
+      // "Žuffa" matches "Viktor Žuffa"
+      const itemParts=itemTrainer.split(/\s+/);
+      const myParts=myFull.split(/\s+/);
+      if(itemParts.some(p=> myParts.includes(p) && p.length>=3)) return true;
+    }
   }catch(e){ return false; }
+  return false;
 }
 
 function filterHomeItemsForCurrentRole(items){
@@ -5847,7 +5867,8 @@ function trainerBadge(c){
 // Testovacie roly používajú rovnaké profily ako Admin.
 function isTestTrainerAccount(t){
  const n=String(t?.full||t?.name||'').trim().toLowerCase();
- return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2';
+ if(t?.isTemplate) return true;
+ return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2'||n==='vzorový tréner'||n==='vzorovy trener';
 }
 function visibleTrainerProfiles(){
   // The template is intentionally visible to the Admin, but never usable as

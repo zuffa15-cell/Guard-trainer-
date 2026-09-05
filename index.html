@@ -8587,6 +8587,71 @@ function saveCurrentTrainingAttendance(){
     }catch(e){ adminSavedAt=Date.now(); }
   }
   persistTrainingAttendanceHistory();
+
+  // LIVE PREPOJENIE DO VYÚČTOVANIA:
+  // Ak už pre tento tréning existuje vyúčtovanie, každá zmena dochádzky
+  // musí okamžite prepísať jeho počty a sumy. Tréner nemusí znovu stláčať
+  // tlačidlo „ULOŽIŤ VYÚČTOVANIE“. Tým sa obnoví pôvodné správanie:
+  // tréner uloží dochádzku -> admin a hlavný tréner ju hneď uvidia.
+  try{
+    const activeTrainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+    const dateDisplay=formatBillingDate(attendanceState.date);
+    const d=parsePaymentDate(dateDisplay);
+    const canonical=d
+      ? `${activeTrainer.toUpperCase()}|${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}|${String(attendanceState.group||'').trim().toUpperCase()}`
+      : '';
+    if(activeTrainer && canonical && Array.isArray(monthlyBillingRecords)){
+      const bi=monthlyBillingRecords.findIndex(r=>billingRecordCanonicalKey(r)===canonical);
+      if(bi>=0){
+        const old=monthlyBillingRecords[bi]||{};
+        const fee=trainingFee();
+        const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
+        const trainingPaid=attendanceState.members.filter(m=>m.training&&!m.newMember&&!m.trainingAccount).length;
+        const trainingSum=trainingPaid*fee;
+        const membershipSum=attendanceState.members.reduce((x,m)=>x+Number(currentMemberPaymentTotals(m).membership||0),0);
+        const registrationSum=attendanceState.members.reduce((x,m)=>x+Number(currentMemberPaymentTotals(m).registration||0),0);
+        const otherPlus=Number(attendanceState.otherPlus||0);
+        const otherMinus=Number(attendanceState.otherMinus||0);
+        const rewardRate=trainerRewardPerMember();
+        const trainerReward=paying*rewardRate;
+        const clubAmount=trainingSum+membershipSum+registrationSum+otherPlus-otherMinus-trainerReward;
+        const updated={...old,
+          trainer:activeTrainer,
+          date:dateDisplay,
+          group:attendanceState.group,
+          name:attendanceState.name,
+          paying, trainingPaid, trainingSum, membershipSum, registrationSum,
+          otherPlus, otherMinus,
+          trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,
+          gross:trainingSum+membershipSum+registrationSum+otherPlus-otherMinus,
+          trainerReward, clubAmount,
+          trainingFee:fee,
+          trainerRewardPerMember:rewardRate,
+          trainingScheduleId:attendanceState.trainingScheduleId||old.trainingScheduleId||null,
+          attendanceSnapshot:(attendanceState.members||[]).filter(m=>m.training).map(m=>m.surname+'|'+m.name),
+          attendanceStateSnapshot:(attendanceState.members||[]).map(m=>({
+            surname:m.surname,name:m.name,training:!!m.training,trainingAccount:!!m.trainingAccount,
+            newMember:!!m.newMember,newMemberDate:m.newMemberDate||'',
+            membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
+            registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||''
+          })),
+          paymentSnapshot:(attendanceState.members||[]).map(m=>{const pt=currentMemberPaymentTotals(m);return {
+            surname:m.surname,name:m.name,membership:Number(pt.membership||0),registration:Number(pt.registration||0),
+            trainingAccount:!!m.trainingAccount,training:!!m.training,newMember:!!m.newMember
+          };}).filter(x=>x.training||x.membership>0||x.registration>0),
+          presentCount:attendanceState.members.filter(m=>m.training).length,
+          newCount:attendanceState.members.filter(m=>m.newMember).length,
+          savedAt:Date.now(),savedBy:activeTrainer,
+          savedByRole:(typeof isAdmin==='function'&&isAdmin())?'ADMIN':((typeof isHeadTrainer==='function'&&isHeadTrainer())?'HEAD_TRAINER':'TRAINER')
+        };
+        monthlyBillingRecords[bi]=updated;
+        // Toto je zámerne okamžité – persist pošle nový stav do
+        // guard-trainer-billing/all a realtime listener ho rozošle ostatným.
+        persistMonthlyBillingRecords();
+      }
+    }
+  }catch(e){ console.warn('Live update vyúčtovania z dochádzky zlyhal',e); }
+
   if(adminSavedAt){
     // Samostatný dokument je zdroj pravdy pre trénerovo zariadenie.
     // Zápis je asynchrónny, ale shared-db sync pokračuje nezávisle.

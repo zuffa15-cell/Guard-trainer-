@@ -3835,7 +3835,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1007-ADMIN-ONLY</div>
+   <div class="gt-login-title">GUARD TRAINER v1008-GROUPS-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -5643,6 +5643,23 @@ function saveTrainersDirectCloud(){
     db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').set({trainers: trainersData, updatedAt: Date.now(), updatedBy: 'admin'}, {merge:true}).then(()=>console.log('✅ Tréneri v cloude - admin')).catch(e=>console.warn('trainers cloud fail',e));
   }catch(e){ console.warn('save direct fail', e); }
 }
+
+window.fixViktorGroupC = function(){
+  try{
+    const viktor = trainersData.find(t=> String(t.full||'').toLowerCase().includes('viktor'));
+    if(!viktor){ alert('Viktor nenájdený'); return; }
+    console.log('Viktor pred:', viktor.groups);
+    if(!viktor.groups.includes('C')){
+      viktor.groups.push('C');
+      viktor.groups=[...new Set(viktor.groups.map(g=>String(g).toUpperCase()))];
+    }
+    persistTrainersData();
+    syncTrainerGroupToSchedules(viktor, viktor.groups);
+    alert('Viktorovi pridaná skupina C: '+viktor.groups.join(', '));
+    renderTrainers();
+  }catch(e){ alert('Chyba: '+e.message); }
+};
+
 function initTrainersDirectSync(){
   try{
     if(typeof db==='undefined' || !db) return;
@@ -5758,12 +5775,23 @@ function syncTrainerGroupsFromSchedules(){
         const code=String(s.groupCode||'').trim().toUpperCase();
         if(assigned && code) derived.add(code);
       });
-      // The schedule is the source of truth for trainer↔group assignment.
-      // Keep the profile exactly synchronized with the groups assigned in schedules
-      // (including removals), instead of only merging newly found groups.
+      // FIX: Profil trénera je autoritatívny, nie rozvrh.
+      // Rozvrh je len odvodený od profilu. Ak má tréner v profile skupinu C,
+      // musí mu ostať, aj keď rozvrh ju ešte nemá - syncTrainerGroupToSchedules ju doplní.
+      // Preto tu len pridávame skupiny z rozvrhu, nikdy neodstraňujeme tie z profilu.
       const current=Array.isArray(t.groups)?t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean):[];
-      const next=[...derived];
-      if(next.join('|')!==current.join('|')){ t.groups=next; changed=true; }
+      const merged=new Set([...current, ...derived]);
+      const next=[...merged].sort();
+      const currSorted=[...current].sort();
+      if(next.join('|')!==currSorted.join('|')){ 
+        // Len pridaj, neodoberaj - profil je zdroj pravdy
+        // Ak je derived väčší ako current, pridaj chýbajúce
+        if(merged.size>current.length){
+          t.groups=next; 
+          changed=true; 
+          console.log('➕ Pridávam skupiny z rozvrhu pre', t.full, ':', [...derived].filter(g=>!current.includes(g)));
+        }
+      }
     });
     if(changed) persistTrainersData();
   }catch(e){ console.warn('Synchronizácia tréner ↔ skupina sa nepodarila',e); }
@@ -5799,11 +5827,18 @@ function syncTrainerGroupToSchedules(trainer, selectedGroups){
         changed=true;
       }
     });
-    if(changed) localStorage.setItem('gt-schedule',JSON.stringify(schedules));
+    if(changed){ 
+      localStorage.setItem('gt-schedule',JSON.stringify(schedules));
+      try{ originalSetItem('gt-schedule', JSON.stringify(schedules)); }catch(e){}
+      try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
+      console.log('📅 Rozvrh aktualizovaný zo skupín trénera');
+    }
   }catch(e){ console.warn('Synchronizácia skupiny do rozvrhu sa nepodarila',e); }
 }
 
-syncTrainerGroupsFromSchedules();
+// syncTrainerGroupsFromSchedules() - volá sa len pri štarte, nie pri každom renderi
+try{ syncTrainerGroupsFromSchedules(); }catch(e){}
+
 
 function trainerBadge(c){
  const cls={A:'ga',B:'gb',C:'gc',D:'gd','D+':'gdp',H:'gh',T:'gt'}[c]||'gother';

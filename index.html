@@ -3835,7 +3835,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1013-LOGIN-FIX</div>
+   <div class="gt-login-title">GUARD TRAINER v1014-RETRO-EDIT</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8394,9 +8394,37 @@ function isAttendanceTodayForTrainer(){
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // Tréner môže upravovať iba aktuálny kalendárny deň.
-  // Každý starší deň je vždy iba na čítanie, bez ohľadu na to,
-  // či bol uložený cez Kalendár, Vyúčtovanie alebo inou cestou.
+  // FIX: Tréner môže spätne opraviť svoju vlastnú dochádzku
+  // Ak je to jeho skupina, môže upravovať aj staršie dni
+  try{
+    const myId=currentTrainerAccountId();
+    if(myId!=null){
+      const trainer=(trainersData||[]).find(t=>Number(t.id)===myId && !t.isTemplate);
+      if(trainer){
+        const myGroups=new Set((trainer.groups||[]).map(g=>String(g).trim().toUpperCase()).filter(Boolean));
+        const currentGroup=String(attendanceState.group||'').trim().toUpperCase();
+        if(myGroups.has(currentGroup)){
+          console.log('✅ Tréner môže spätne opraviť svoju skupinu', currentGroup);
+          return false; // Nie je zamknuté - môže upravovať svoju skupinu aj spätne
+        }
+      }
+      // Aj cez schedule check
+      try{
+        const schedules=getSavedSchedules();
+        const wantedDate=attendanceState.date||'';
+        const wantedGroup=String(attendanceState.group||'').trim().toUpperCase();
+        const isOwn=schedules.some(s=>{
+          const code=String(s.groupCode||'').trim().toUpperCase();
+          if(code!==wantedGroup) return false;
+          const ids=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
+          if(s.trainerId!=null) ids.push(Number(s.trainerId));
+          return ids.includes(Number(myId));
+        });
+        if(isOwn) return false;
+      }catch(e){}
+    }
+  }catch(e){ console.warn('isAttendanceFullyLocked check fail', e); }
+  // Ak nie je jeho skupina, zamkni pre staršie dni
   return !isAttendanceTodayForTrainer();
 }
 function attendanceEditGuard(){
@@ -8419,8 +8447,20 @@ function attendancePaymentLockKey(){
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // Aj členské a registračné môže tréner upravovať iba v aktuálnom dni.
-  // Pri každom staršom dni sú automaticky zamknuté.
+  // FIX: Tréner môže spätne opraviť aj členské/registračné pre svoju skupinu
+  try{
+    const myId=currentTrainerAccountId();
+    if(myId!=null){
+      const trainer=(trainersData||[]).find(t=>Number(t.id)===myId && !t.isTemplate);
+      if(trainer){
+        const myGroups=new Set((trainer.groups||[]).map(g=>String(g).trim().toUpperCase()).filter(Boolean));
+        const currentGroup=String(attendanceState.group||'').trim().toUpperCase();
+        if(myGroups.has(currentGroup)){
+          return false;
+        }
+      }
+    }
+  }catch(e){}
   return !isAttendanceTodayForTrainer();
 }
 function attendancePaymentEditGuard(){

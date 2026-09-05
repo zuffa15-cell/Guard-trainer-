@@ -3787,7 +3787,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    try{
      const r=String(account?.role||'').trim().toLowerCase();
      if(r==='head'){
-       const hp=(trainersData||[]).find(t=>String(t?.role||'').trim().toUpperCase()==='HLAVNÝ TRÉNER' && !isExplicitAnatoliiTrainer(t));
+       const hp=(trainersData||[]).find(t=>String(t?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()==='HLAVNY TRENER' && !isExplicitAnatoliiTrainer(t));
        if(hp){
          account={...account, role:'head', trainer_id:hp.id, display_name:String(hp.full||hp.name||'').trim(), groups:Array.isArray(hp.groups)?[...hp.groups]:[]};
        }
@@ -3857,7 +3857,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    // Anatolii Kuhal is explicitly an ordinary trainer, never the main trainer.
    const n=String(t?.full||t?.name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
    const isAnatolii=(n==='ANATOLII KUHAL'||n==='KUHAL ANATOLII');
-   const role=(!isAnatolii && String(t?.role||'').trim().toUpperCase()==='HLAVNÝ TRÉNER')?'head':'trainer';
+   const roleText=String(t?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase(); const role=(!isAnatolii && roleText==='HLAVNY TRENER')?'head':'trainer';
    openApp({role,display_name:String(t?.full||t?.name||'').trim(),trainer_id:t?.id,groups:Array.isArray(t?.groups)?t.groups:[]});
  }
  function login(){
@@ -4685,10 +4685,16 @@ function getCurrentTestTrainerGroupCodes(){
   return p ? new Set((p.groups||[]).map(c=>String(c).trim().toUpperCase()).filter(Boolean)) : null;
 }
 function getCurrentTrainerDisplayName(){
-  // Pri reálnom prihlásení používame ID účtu uložené prihlasovaním.
-  // Starý CURRENT_TRAINER_NAME / testovací profil je iba fallback pre staré testovanie.
+  // HLAVNÝ TRÉNER je samostatná rola. Nikdy nepouži ID/meno bežného trénera
+  // uložené v starom účte (napr. Anatolii Kuhal).
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const role=String(account?.role||'').trim().toLowerCase();
+    if(role==='head' || isHeadTrainer()){
+      const hp=getMainTrainerProfile();
+      if(hp) return String(hp.full||hp.name||'HLAVNÝ TRÉNER').trim();
+      return String(account?.display_name||'HLAVNÝ TRÉNER').trim();
+    }
     if(account && account.trainer_id!=null){
       const id=Number(account.trainer_id);
       const t=(trainersData||[]).find(x=>Number(x.id)===id);
@@ -4703,6 +4709,12 @@ function getCurrentTrainerDisplayName(){
 function currentTrainerAccountId(){
   try{
     const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const role=String(a?.role||'').trim().toLowerCase();
+    if(role==='head' || isHeadTrainer()){
+      const hp=getMainTrainerProfile();
+      const hid=Number(hp?.id);
+      return Number.isFinite(hid)?hid:null;
+    }
     const id=Number(a&&a.trainer_id);
     return Number.isFinite(id)?id:null;
   }catch(e){ return null; }
@@ -10845,7 +10857,7 @@ function getMainTrainerProfile(){
     const role=String(a?.role||'').trim().toLowerCase();
     if(role==='head' && Number.isFinite(id)){
       const mine=(trainersData||[]).find(t=>Number(t.id)===id);
-      if(mine && !isExplicitAnatoliiTrainer(mine) && String(mine.role||'').trim().toUpperCase()==='HLAVNÝ TRÉNER') return mine;
+      if(mine && !isExplicitAnatoliiTrainer(mine) && String(mine.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()==='HLAVNY TRENER') return mine;
     }
   }catch(e){}
   return (trainersData||[]).find(t=>!isExplicitAnatoliiTrainer(t) && String(t.role||'').trim().toUpperCase()==='HLAVNÝ TRÉNER') || null;

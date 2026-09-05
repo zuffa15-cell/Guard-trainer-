@@ -124,6 +124,43 @@ function initCloudSync(){
     let changed = false;
     isApplyingRemote = true;
     try {
+      // v960: PROFILY TRÉNEROV / SKUPINY – samostatný autoritatívny register.
+      // Staré shared-db polia gt-trainers mohli po refreshe vrátiť starú kópiu
+      // a tým zmazať skupiny, ktoré admin práve priradil. Tento register sa
+      // načítava podľa vlastného savedAt a preto jedna stará kópia nemôže
+      // prepísať novšiu administrátorskú zmenu.
+      try{
+        const raw=data['gt-trainers-authoritative-v2'];
+        if(raw){
+          let pack=null;
+          try{ pack=typeof raw==='string'?JSON.parse(raw):raw; }catch(e){}
+          const remoteAt=Number(pack?.savedAt||0);
+          const localAt=Number(originalGetItem('gt-trainers-authoritative-v2-savedAt')||0);
+          if(Array.isArray(pack?.trainers) && remoteAt>=localAt){
+            const clean=pack.trainers.map(t=>({
+              ...t,
+              groups:Array.isArray(t.groups)?[...new Set(t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean))]:[]
+            }));
+            trainersData.splice(0,trainersData.length,...clean);
+            originalSetItem('gt-trainers-authoritative-v2',JSON.stringify(clean));
+            originalSetItem('gt-trainers-authoritative-v2-savedAt',String(remoteAt));
+            persistTrainersData();
+            // Pri prijatí profilu aktualizuj aj lokálny login register, aby
+            // sa skupiny použili aj po novom prihlásení na inom zariadení.
+            try{
+              const pwRaw=originalGetItem('gt-trainer-login-passwords');
+              const pw=pwRaw?JSON.parse(pwRaw):{};
+              clean.forEach(t=>{
+                const id=String(t.id); const old=pw[id]||{};
+                pw[id]={...old,id:t.id,name:String(t.full||t.name||''),password:String(t.loginPassword||old.password||''),active:t.active!==false,role:String(t.role||'TRÉNER'),groups:Array.isArray(t.groups)?[...t.groups]:[]};
+              });
+              originalSetItem('gt-trainer-login-passwords',JSON.stringify(pw));
+            }catch(e){}
+            changed=true;
+          }
+        }
+      }catch(e){ console.warn('Autoritatívny register trénerov sa nepodarilo načítať',e); }
+
       // v896: Dochádzka za konkrétny deň nesmie byť prepísaná starším
       // cloudovým snapshotom. Pri v895 sa pri štarte mohla lokálna včerajšia
       // dochádzka (vrátane NOVÝ) prepísať starším cloudovým stavom.
@@ -156,6 +193,10 @@ function initCloudSync(){
       let memberDataChanged=false;
       SYNC_KEYS.forEach(k=>{
         if(isGTLocalAuthKey(k)) return;
+        // Tréneri majú vlastný autoritatívny register nižšie. Staré polia
+        // gt-trainers/gt-trainers-authoritative-v1 nesmú po refreshe prepísať
+        // novšie skupiny uložené administrátorom.
+        if(k==='gt-trainers' || k==='gt-trainers-authoritative-v1') return;
         if((k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') && memberSyncHandled) return;
         if(!data[k]) return;
         if(k==='gt-training-attendance-history'){
@@ -5555,6 +5596,27 @@ function selectDay(n){
 function goBack(){ location.hash='home'; renderHome(); }
 
 
+
+// v960: Autoritatívne uloženie celého registra trénerov.
+// Používa sa iba pri administrátorskej zmene profilu/skupín. Ostatné
+// zariadenia čítajú tento register namiesto starej neúplnej gt-trainers kópie.
+async function syncTrainerProfileToCloud(trainer){
+  try{
+    if(!db || !cloudEnabled || !isAdmin()) return false;
+    const snapshot=(trainersData||[]).map(t=>({
+      ...t,
+      groups:Array.isArray(t.groups)?[...new Set(t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean))]:[]
+    }));
+    const savedAt=Date.now();
+    originalSetItem('gt-trainers-authoritative-v2',JSON.stringify(snapshot));
+    originalSetItem('gt-trainers-authoritative-v2-savedAt',String(savedAt));
+    await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set({
+      'gt-trainers-authoritative-v2':JSON.stringify({savedAt,trainers:snapshot}),
+      _updatedAt:savedAt
+    },{merge:true});
+    return true;
+  }catch(e){ console.warn('Priamy cloud zápis trénerov zlyhal',e); return false; }
+}
 
 const trainersData=[
  {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},

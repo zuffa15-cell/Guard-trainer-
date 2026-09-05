@@ -660,6 +660,36 @@ function pushToCloud(force = false){
         payload['gt-training-attendance-history']=JSON.stringify(out);
       }
     }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
+
+    // VYÚČTOVANIE: pri každom všeobecnom pushnutí zachovaj mazacie značky.
+    // Inak by neskorší push jedného zariadenia mohol hlavného trénera znovu zásobiť starým záznamom.
+    try{
+      let localBill=[], remoteBill=[];
+      try{ localBill=JSON.parse(payload['gt-monthly-billing-v221']||'[]')||[]; }catch(e){}
+      try{ remoteBill=JSON.parse(remote['gt-monthly-billing-v221']||'[]')||[]; }catch(e){}
+      let localDel={}, remoteDel={};
+      try{ localDel=JSON.parse(payload['gt-billing-delete-order-v1']||'{}')||{}; }catch(e){}
+      try{ remoteDel=JSON.parse(remote['gt-billing-delete-order-v1']||'{}')||{}; }catch(e){}
+      const del={...remoteDel};
+      Object.keys(localDel).forEach(k=>del[k]=Math.max(Number(del[k]||0),Number(localDel[k]||0)));
+      Object.keys(billingDeleteOrder).forEach(k=>del[k]=Math.max(Number(del[k]||0),Number(billingDeleteOrder[k]||0)));
+      const map=new Map();
+      const put=r=>{
+        if(!r)return;
+        const k=billingRecordCanonicalKey(r);
+        if(Number(del[k]||0)>=Number(r.savedAt||r.updatedAt||0))return;
+        const prev=map.get(k);
+        if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) map.set(k,r);
+      };
+      remoteBill.forEach(put); localBill.forEach(put);
+      const billRows=Array.from(map.values());
+      payload['gt-monthly-billing-v221']=JSON.stringify(billRows);
+      payload['gt-billing']=JSON.stringify(billRows);
+      payload['gt-billing-delete-order-v1']=JSON.stringify(del);
+      Object.keys(billingDeleteOrder).forEach(k=>delete billingDeleteOrder[k]);
+      Object.assign(billingDeleteOrder,del);
+      persistBillingDeleteOrder();
+    }catch(e){ console.warn('Billing cloud merge before push failed',e); }
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
   }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
     .catch(e=>console.warn('Push fail',e));
@@ -10437,12 +10467,20 @@ function persistMonthlyBillingRecords(){
               seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
             }catch(e){}
           });
-          const merged=Array.from(seen.values());
-          db.collection('guard-trainer-billing').doc('all').set({records: merged, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', merged.length)).catch(e=>console.warn('billing cloud fail', e));
+          // Mazacie značky sú súčasťou serverového dokumentu a NESMÚ sa pri tomto zápise stratiť.
+          let serverDeleteOrder={};
+          try{ if(doc.exists && doc.data() && doc.data().billingDeleteOrder && typeof doc.data().billingDeleteOrder==='object') serverDeleteOrder=doc.data().billingDeleteOrder; }catch(e){}
+          Object.keys(serverDeleteOrder).forEach(k=>billingDeleteOrder[k]=Math.max(Number(billingDeleteOrder[k]||0),Number(serverDeleteOrder[k]||0)));
+          persistBillingDeleteOrder();
+          const finalRows=Array.from(seen.values()).filter(r=>{
+            const k=billingRecordCanonicalKey(r);
+            return Number(billingDeleteOrder[k]||0) < Number(r.savedAt||r.updatedAt||0);
+          });
+          db.collection('guard-trainer-billing').doc('all').set({records: finalRows, billingDeleteOrder: {...billingDeleteOrder}, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', finalRows.length)).catch(e=>console.warn('billing cloud fail', e));
         }).catch(e=>{
           // Pri chybe čítania neposielaj naspäť staré záznamy. Lokálny zoznam
           // už je po vymazaní čistý a obsahuje iba platné záznamy.
-          db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(err=>console.warn('billing cloud fail', err));
+          db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, billingDeleteOrder: {...billingDeleteOrder}, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(err=>console.warn('billing cloud fail', err));
         });
       }
     }catch(e){ console.warn('billing direct push fail', e); }
@@ -11260,7 +11298,12 @@ cleanupMayJune2026TrainingData();
 
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().toUpperCase();
-  let rows=monthlyBillingRecords.filter(r=>String(r.trainer||r.name||'').trim().toUpperCase()===target).filter(r=>{
+  let rows=monthlyBillingRecords.filter(r=>{
+    const delAt=Number(billingDeleteOrder[billingRecordCanonicalKey(r)]||0);
+    const savedAt=Number(r.savedAt||r.updatedAt||0);
+    if(delAt>0 && delAt>=savedAt) return false;
+    return String(r.trainer||r.name||'').trim().toUpperCase()===target;
+  }).filter(r=>{
     const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
   });
 

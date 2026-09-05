@@ -566,6 +566,20 @@ function initCloudSync(){
     initMemberDirectCloudSync();
     try{ initTrainersDirectSync(); }catch(e){}
     try{ initBillingDirectSync(); }catch(e){}
+    // Firebase may not be ready yet at the first call. Retry initialization
+    // until the billing realtime listener is actually attached.
+    if(!window.__gtBillingInitRetry){
+      window.__gtBillingInitRetry=setInterval(()=>{
+        try{
+          if(!window.__gtBillingDirectSyncStarted && typeof db!=='undefined' && db){
+            initBillingDirectSync();
+          }else if(window.__gtBillingDirectSyncStarted){
+            clearInterval(window.__gtBillingInitRetry);
+            window.__gtBillingInitRetry=null;
+          }
+        }catch(e){}
+      },500);
+    }
 
 }
 
@@ -10590,6 +10604,8 @@ function persistMonthlyBillingRecords(){
 function initBillingDirectSync(){
   try{
     if(typeof db==='undefined' || !db) return;
+    if(window.__gtBillingDirectSyncStarted) return;
+    window.__gtBillingDirectSyncStarted=true;
     console.log('🔄 Sync vyúčtovania zapnutý - admin uvidí všetky tréningy');
     // Okamžitý fetch pre admin/head - nech nečaká na snapshot
     const fetchBilling = ()=>{
@@ -10683,12 +10699,21 @@ function initBillingDirectSync(){
         setTimeout(fetchBilling, 1200);
         setTimeout(fetchBilling, 2500);
         if(!window.__gtBillingAutoPoll){
+          // Firestore onSnapshot can be delayed by Android WebView. Keep a
+          // lightweight server check while billing is open, and also refresh
+          // immediately when the app becomes visible/focused again.
           window.__gtBillingAutoPoll=setInterval(()=>{
             try{
               const hash=String(location.hash||'').toLowerCase();
-              if(hash==='#billing' || hash==='#trainer-month') fetchBilling();
+              const billingOpen = hash==='#billing' || hash==='#trainer-month' ||
+                !!document.querySelector('.head-billing, .monthly-billing-page');
+              if(billingOpen) fetchBilling();
             }catch(e){}
-          },2000);
+          },1500);
+          window.addEventListener('focus',()=>{ try{ fetchBilling(); }catch(e){} });
+          document.addEventListener('visibilitychange',()=>{
+            if(document.visibilityState==='visible'){ try{ fetchBilling(); }catch(e){} }
+          });
         }
       }
     }catch(e){}

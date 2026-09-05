@@ -6819,17 +6819,7 @@ function renderMemberProfile(id, backTarget){
  const currentRoute=(location.hash||'').replace('#','')||'home';
  if(currentRoute!=='memberProfile' && currentRoute!=='memberEdit'){
    const parentRoute=(backTarget && backTarget.route==='attendanceCurrent')?'attendance':(backTarget?.route||currentRoute);
-   // Pri otvorení profilu z konkrétnej dochádzky uchovaj CELÝ kontext
-   // tréningu v histórii. Po návrate sa nesmie znovu použiť posledný
-   // globálny dátum/skupina ani dátum z Domova/Kalendára.
-   const attendanceContext=(backTarget && backTarget.route==='attendanceCurrent') ? {
-     date:String(backTarget.date||attendanceState.date||''),
-     group:String(backTarget.group||attendanceState.group||''),
-     name:String(backTarget.name||attendanceState.name||''),
-     time:String(backTarget.time||attendanceState.trainingTime||''),
-     scheduleId:backTarget.scheduleId!=null?backTarget.scheduleId:(attendanceState.trainingScheduleId||null)
-   } : null;
-   try{ history.pushState({gtRoute:'memberProfile',gtParent:parentRoute,gtId:Number(id),attendanceContext},'',location.pathname+location.search+'#memberProfile'); }catch(e){ location.hash='memberProfile'; }
+   try{ history.pushState({gtRoute:'memberProfile',gtParent:parentRoute,gtId:Number(id)},'',location.pathname+location.search+'#memberProfile'); }catch(e){ location.hash='memberProfile'; }
  }
  // Prihláška je zdrojom oficiálneho dátumu vstupu do klubu.
  normalizeMember(m);
@@ -8624,17 +8614,7 @@ function openAttendanceMemberProfile(index){
    return;
  }
  saveCurrentTrainingAttendance();
- // Presný kontext tréningu, z ktorého sa otvoril profil člena.
- // Toto je zámerne uložené do history state, aby Android/system Back
- // obnovil presne rovnakú dochádzku.
- window.__gtBackTarget={
-   route:'attendanceCurrent',
-   date:String(attendanceState.date||''),
-   group:String(attendanceState.group||''),
-   name:String(attendanceState.name||''),
-   time:String(attendanceState.trainingTime||''),
-   scheduleId:attendanceState.trainingScheduleId||null
- };
+ window.__gtBackTarget={route:'attendanceCurrent'};
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
 function renderAttendanceRows(){
@@ -9119,11 +9099,13 @@ async function refreshCurrentAttendanceFromCloud(){
           localSaved=Number(o[wantedKey]||0);
         }catch(e){}
         localSaved=Math.max(localSaved,getAttendancePendingSaveAt(attendanceState.date,attendanceState.group));
-        // Samostatný admin dokument je zdroj pravdy pre trénerovo zobrazenie.
-        // NEPOROVNÁVAME tu hodiny zariadení: telefóny môžu mať rozdielne
-        // systémové časy a potom by tréner mohol zostať na 0 aj keď admin
-        // práve uložil 2 prítomných. Tento dokument zapisuje iba administrátor.
-        if(d.history && typeof d.history==='object'){
+        // Samostatný admin dokument je zdroj pravdy iba vtedy, keď je
+        // NOVŠÍ než posledné uloženie trénera pre tento istý dátum/skupinu.
+        // Toto je kritické: ak tréner po adminovi spätne upraví dochádzku,
+        // starý admin snapshot ho nesmie pri návrate znovu prepísať.
+        // NEPOROVNÁVAME hodiny zariadení – rozhoduje explicitný timestamp
+        // uloženia konkrétneho tréningu.
+        if(remoteAdmin > localSaved && d.history && typeof d.history==='object'){
           const hist=d.history;
           (attendanceState.members||[]).forEach(a=>{
             const x=hist[a.surname+'|'+a.name];
@@ -9143,6 +9125,9 @@ async function refreshCurrentAttendanceFromCloud(){
           refreshAttendance();
           console.log('📥 Priama admin dochádzka načítaná pre trénera',wantedKey);
           return;
+        }
+        if(direct.exists && remoteAdmin <= localSaved){
+          console.log('📥 Staršia admin dochádzka ignorovaná – tréner má novšie uloženie',wantedKey);
         }
       }
     }catch(e){ console.warn('Priame načítanie admin dochádzky zlyhalo',e); }
@@ -12729,26 +12714,7 @@ function appBack(){
     if(r==='home'){ renderHome(); return; }
     if(r==='statistics') renderStatistics();
     else if(r==='calendar') renderCalendar();
-    else if(r==='attendance'){
-      if(isHeadTrainer()){ nav('home'); }
-      else {
-        // Obnovenie konkrétneho tréningu po návrate z profilu člena.
-        // History state je zdroj pravdy pre návrat; nikdy neber dátum/skupinu
-        // z poslednej návštevy Domova alebo Kalendára.
-        const ac=e.state?.attendanceContext;
-        if(ac && ac.group){
-          window.__attendanceOpenSource='return-from-member-profile';
-          window.__attendanceHomeDate=null;
-          window.__attendanceOpenedFromCalendar=false;
-          attendanceState.date=String(ac.date||appToday().iso);
-          attendanceState.group=String(ac.group||'');
-          attendanceState.name=String(ac.name||'');
-          attendanceState.trainingTime=String(ac.time||'');
-          attendanceState.trainingScheduleId=ac.scheduleId||null;
-        }
-        attendance();
-      }
-    }
+    else if(r==='attendance'){ if(isHeadTrainer()){ nav('home'); } else attendance(); }
     else if(r==='training-billing') trainingBilling();
     else if(r==='trainer-month'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); else renderMonthlyBilling(); }
     else if(r==='billing'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); }

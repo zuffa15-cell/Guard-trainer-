@@ -10197,7 +10197,7 @@ function upsertBillingRecordFromAttendance(){
   const activeTrainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
   const key=`${dateKey}|${group}|${activeTrainer}`;
   const record={
-    key,trainer:activeTrainer,date:formatBillingDate(dateKey),group,
+    key,trainer:activeTrainer,trainerId:currentTrainerAccountId(),date:formatBillingDate(dateKey),group,
     name:attendanceState.name,paying,trainingPaid,trainingSum,membershipSum,registrationSum,
     trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,
     otherPlus,otherMinus,
@@ -10392,6 +10392,7 @@ function saveTrainingBilling(saveButton){
   const record = {
     key:trainingKey,
     trainer:activeTrainer,
+    trainerId:currentTrainerAccountId(),
     date, group:attendanceState.group, name:attendanceState.name,
     paying, trainingPaid, trainingSum, membershipSum, registrationSum, otherPlus, otherMinus,
     trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,
@@ -10465,6 +10466,7 @@ function saveTrainingBilling(saveButton){
       ...record,
       key:originalKey,
       trainer:substitution.from,
+      trainerId:(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===String(substitution.from||'').trim().toUpperCase())?.id ?? null,
       paying:0,
       trainingSum:0,
       membershipSum:0,
@@ -10680,7 +10682,15 @@ cleanupMayJune2026TrainingData();
 
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().toUpperCase();
-  let rows=monthlyBillingRecords.filter(r=>String(r.trainer||r.name||'').trim().toUpperCase()===target).filter(r=>{
+  // FINANČNÝ ZÁZNAM VLASTNÍ IDENTITA TRÉNERA PODĽA trainerId.
+  // Meno používame iba ako spätnú kompatibilitu pre staré záznamy bez ID.
+  const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===target);
+  const targetId=profile&&profile.id!=null?Number(profile.id):null;
+  let rows=monthlyBillingRecords.filter(r=>{
+    const rid=r&&r.trainerId!=null?Number(r.trainerId):null;
+    if(targetId!=null && Number.isFinite(targetId) && rid!=null && Number.isFinite(rid)) return rid===targetId;
+    return (rid==null || !Number.isFinite(rid)) && String(r?.trainer||r?.name||'').trim().toUpperCase()===target;
+  }).filter(r=>{
     const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
   });
 

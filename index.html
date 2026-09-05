@@ -4953,7 +4953,7 @@ function headHomeBirthdays(){
   }).filter(Boolean).sort((a,b)=>a.next-b.next).slice(0,5);
 }
 function headHomeNav(active='home'){
-  return `<nav class="bottom"><a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
+  return `<nav class="bottom"><a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return nav('attendance')"><span class="ico">✓</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
 }
 function renderHeadHomeList(title,rows,kind){
   try{
@@ -5494,7 +5494,6 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
  {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
  {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
 ];
@@ -10469,14 +10468,7 @@ cleanupMayJune2026TrainingData();
 
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().toUpperCase();
-  // Vyúčtovanie vlastní konkrétny tréner podľa trainerId. Meno používame
-  // iba ako spätnú kompatibilitu pri starých záznamoch bez trainerId.
-  const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===target);
-  const targetId=profile?.id!=null ? String(profile.id) : '';
-  let rows=monthlyBillingRecords.filter(r=>{
-    const rid=r?.trainerId!=null ? String(r.trainerId) : '';
-    const ownerMatches=rid ? (targetId && rid===targetId) : (String(r.trainer||r.name||'').trim().toUpperCase()===target);
-    if(!ownerMatches) return false;
+  let rows=monthlyBillingRecords.filter(r=>String(r.trainer||r.name||'').trim().toUpperCase()===target).filter(r=>{
     const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
   });
 
@@ -10801,13 +10793,8 @@ function enforceFixedRoleBottomNav(){
           a.innerHTML='<span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span>';
           members.parentNode.insertBefore(a,members);
         }
-      } else if(head && !attendance){
-        const members=navEl.querySelector('a[href="#members"]');
-        if(members){
-          const a=document.createElement('a'); a.className='nav nav-attendance'; a.href='#attendance'; a.onclick=()=>nav('attendance');
-          a.innerHTML='<span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span>';
-          members.parentNode.insertBefore(a,members);
-        }
+      } else if(head && attendance){
+        attendance.remove();
       }
       navEl.dataset.roleFixed='1';
     });
@@ -10825,7 +10812,15 @@ window.renderTrainerMonthlyFor = function(trainerName, month=null, year=null){
 };
 
 function getMainTrainerProfile(){
-  return (trainersData||[]).find(t=>String(t.role||'').toUpperCase()==='HLAVNÝ TRÉNER') || (trainersData||[])[0] || null;
+  try{
+    const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const id=Number(a&&a.trainer_id);
+    if(Number.isFinite(id)){
+      const mine=(trainersData||[]).find(t=>Number(t.id)===id);
+      if(mine && String(mine.role||'').trim().toUpperCase()==='HLAVNÝ TRÉNER') return mine;
+    }
+  }catch(e){}
+  return (trainersData||[]).find(t=>String(t.role||'').trim().toUpperCase()==='HLAVNÝ TRÉNER') || null;
 }
 function getMainTrainerDisplayName(){
   const t=getMainTrainerProfile();
@@ -13070,8 +13065,21 @@ function nav(route){
     if(route==='statistics'){ return openStatisticsScreen(); }
     if(route==='calendar'){ history.pushState({gtRoute:'calendar'},'',location.pathname+location.search+'#calendar'); renderCalendar(); return false; }
     if(route==='attendance'){
-      // Hlavný tréner môže dochádzku iba prezerať. Zamknutie úprav zabezpečuje
-      // isAttendanceFullyLocked()/isAttendancePaymentsLocked().
+      if(isHeadTrainer()){
+        window.__attendanceOpenedFromCalendar=false;
+        window.__attendanceOpenSource='head-home';
+        attendanceState.date=appToday().iso;
+        attendanceState.group='';
+        attendanceState.name='';
+        attendanceState.trainingTime='';
+        attendanceState.trainingScheduleId=null;
+        attendanceState.billingPaymentSnapshot=null;
+        attendanceState.billingAttendanceSnapshot=null;
+        attendanceState.billingRecordSnapshot=null;
+        history.pushState({gtRoute:'attendance',source:'head-home',date:attendanceState.date},'',location.pathname+location.search+'#attendance');
+        attendanceChooser();
+        return false;
+      }
       // DOCHÁDZKA z Domova / hlavnej navigácie je vždy dnešný deň.
       // Dátum z Kalendára sa nesmie preniesť do tejto vstupnej cesty.
       window.__attendanceOpenedFromCalendar=false;

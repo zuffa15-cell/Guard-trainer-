@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1015-BILLING-FIX</div>
+   <div class="gt-login-title">GUARD TRAINER v1016-BILLING-SYNC</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -10267,70 +10267,148 @@ function persistMonthlyBillingRecords(){
     try{
       if(typeof pushToCloud==='function'){
         pushToCloud(true);
-        setTimeout(()=>pushToCloud(true), 800);
+        setTimeout(()=>pushToCloud(true), 500);
+        setTimeout(()=>pushToCloud(true), 2000);
       }
     }catch(e){}
     try{
       if(typeof db!=='undefined' && db){
-        db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:true}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(e=>console.warn('billing cloud fail', e));
+        // Merge s existujúcim cloudom - neprepisuj menším
+        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+          let existing=[];
+          if(doc.exists && doc.data().records && Array.isArray(doc.data().records)) existing=doc.data().records;
+          const norm=s=>String(s||'').trim().toUpperCase();
+          const seen=new Map();
+          existing.forEach(r=>{
+            try{
+              const d=parsePaymentDate(r.date);
+              const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+              seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
+            }catch(e){}
+          });
+          monthlyBillingRecords.forEach(r=>{
+            try{
+              const d=parsePaymentDate(r.date);
+              const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+              seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
+            }catch(e){}
+          });
+          const merged=Array.from(seen.values());
+          db.collection('guard-trainer-billing').doc('all').set({records: merged, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', merged.length)).catch(e=>console.warn('billing cloud fail', e));
+        }).catch(e=>{
+          // Ak get zlyhá, proste ulož
+          db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:true}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(err=>console.warn('billing cloud fail', err));
+        });
       }
-    }catch(e){}
+    }catch(e){ console.warn('billing direct push fail', e); }
   }catch(e){ console.warn('Uloženie vyúčtovania sa nepodarilo',e); }
 }
 function initBillingDirectSync(){
   try{
     if(typeof db==='undefined' || !db) return;
-    console.log('🔄 Sync vyúčtovania zapnutý');
-    db.collection('guard-trainer-billing').doc('all').onSnapshot(doc=>{
-      if(!doc.exists) return;
-      const data=doc.data()||{};
-      if(!data.records || !Array.isArray(data.records) || data.records.length===0) return;
+    console.log('🔄 Sync vyúčtovania zapnutý - admin uvidí všetky tréningy');
+    // Okamžitý fetch pre admin/head - nech nečaká na snapshot
+    const fetchBilling = ()=>{
+      db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+        if(!doc.exists) return;
+        const data=doc.data()||{};
+        if(!data.records || !Array.isArray(data.records)) return;
+        mergeBillingRecords(data.records, 'fetch');
+      }).catch(e=>console.warn('billing fetch fail', e));
+    };
+    
+    const mergeBillingRecords = (remote, source)=>{
       try{
-        const remote=data.records;
         const localRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
         let local=[]; try{local=JSON.parse(localRaw)||[];}catch(e){}
-        // MERGE - nikdy neprepisuj menším, len pridaj chýbajúce
         const norm=s=>String(s||'').trim().toUpperCase();
         const seen=new Map();
         local.forEach(r=>{
-          const d=parsePaymentDate(r.date);
-          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-          const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
-          seen.set(key,r);
+          try{
+            const d=parsePaymentDate(r.date);
+            const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+            seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
+          }catch(e){}
         });
-        let added=0;
+        let added=0, updated=0;
         remote.forEach(r=>{
-          const d=parsePaymentDate(r.date);
-          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-          const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
-          if(!seen.has(key)){
-            seen.set(key,r);
-            added++;
-          } else {
-            // Ak existuje, ponechaj novší podľa savedAt
-            const existing=seen.get(key);
-            const existingTime=Number(existing.savedAt||0);
-            const remoteTime=Number(r.savedAt||0);
-            if(remoteTime>existingTime) seen.set(key,r);
-          }
+          try{
+            const d=parsePaymentDate(r.date);
+            const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+            const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
+            if(!seen.has(key)){
+              seen.set(key,r);
+              added++;
+            } else {
+              const existing=seen.get(key);
+              const existingTime=Number(existing.savedAt||existing.updatedAt||0);
+              const remoteTime=Number(r.savedAt||r.updatedAt||0);
+              if(remoteTime>existingTime){
+                seen.set(key,r);
+                updated++;
+              }
+            }
+          }catch(e){}
         });
-        if(added>0 || remote.length!==local.length){
+        if(added>0 || updated>0 || remote.length>local.length){
           const merged=Array.from(seen.values());
-          console.log('📥 Vyúčtovanie z cloudu - mergujem, pridané:', added, 'celkom:', merged.length);
+          console.log(`📥 [${source}] Vyúčtovanie mergujem - nové: ${added}, aktualizované: ${updated}, celkom: ${merged.length} (bolo ${local.length}, remote ${remote.length})`);
           try{
             originalSetItem('gt-monthly-billing-v221', JSON.stringify(merged));
             localStorage.setItem('gt-monthly-billing-v221', JSON.stringify(merged));
             originalSetItem('gt-billing', JSON.stringify(merged));
+            localStorage.setItem('gt-billing', JSON.stringify(merged));
           }catch(e){}
           if(typeof monthlyBillingRecords!=='undefined'){
             monthlyBillingRecords.splice(0, monthlyBillingRecords.length, ...merged);
           }
-          try{ if(location.hash.includes('billing') || location.hash==='#more'){ if(typeof renderHeadTrainerBilling==='function' && (isAdmin()||isHeadTrainer())) renderHeadTrainerBilling(); } }catch(e){}
+          try{ 
+            if(typeof renderHeadTrainerBilling==='function' && (isAdmin()||isHeadTrainer())){
+              if((location.hash||'').includes('billing')) renderHeadTrainerBilling();
+            }
+          }catch(e){}
         }
-      }catch(e){ console.warn('billing sync fail', e); }
+      }catch(e){ console.warn('merge billing fail', e); }
+    };
+    
+    window.mergeBillingRecords=mergeBillingRecords;
+    window.fetchBillingNow=fetchBilling;
+    
+    // Pre admin/head okamžitý fetch
+    try{
+      if(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer())){
+        setTimeout(fetchBilling, 1500);
+      }
+    }catch(e){}
+    
+    // Live sync
+    db.collection('guard-trainer-billing').doc('all').onSnapshot(doc=>{
+      if(!doc.exists) return;
+      const data=doc.data()||{};
+      if(!data.records || !Array.isArray(data.records)) return;
+      mergeBillingRecords(data.records, 'snapshot');
     });
+    
+    // Aj hlavný cloud doc (gt-monthly-billing-v221 v guard-trainer-app)
+    try{
+      if(typeof db!=='undefined' && db && typeof CLOUD_COLLECTION!=='undefined'){
+        db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).onSnapshot(doc=>{
+          if(!doc.exists) return;
+          const data=doc.data()||{};
+          const raw=data['gt-monthly-billing-v221'];
+          if(!raw) return;
+          try{
+            const remote=JSON.parse(raw);
+            if(Array.isArray(remote) && remote.length>0){
+              mergeBillingRecords(remote, 'main-cloud');
+            }
+          }catch(e){}
+        });
+      }
+    }catch(e){}
   }catch(e){ console.warn('init billing sync fail', e); }
 }
+
 window.manualBillingSync=function(){
   if(typeof db==='undefined' || !db){ alert('DB nie je pripojené'); return; }
   db.collection('guard-trainer-billing').doc('all').get().then(doc=>{

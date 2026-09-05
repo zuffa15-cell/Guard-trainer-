@@ -3895,7 +3895,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        activeUserRole=(role==='admin')?'admin':(role==='head'?'head':'trainer');
        localStorage.setItem('gt-user-role',activeUserRole);
        if(activeUserRole!=='head') localStorage.removeItem('gt-head-trainer-access');
-       document.body.classList.toggle('head-readonly',activeUserRole==='head');
+       document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
      }else{
        localStorage.setItem('gt-user-role',role==='admin'?'admin':(role==='head'?'head':'trainer'));
      }
@@ -5686,7 +5686,6 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
  {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
  {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
 ];
@@ -5715,13 +5714,30 @@ try{
       status: t.active===false || String(t.status||'').toUpperCase()==='NEAKTÍVNA' ? 'NEAKTÍVNA' : 'AKTÍVNA'
     })).filter(t=>t.full||t.name);
     const legacyDemo=new Set(['Martin Lukáč','Tomáš Varga','Ivana Kováčová','Róbert Horváth','Martin L.','Tomáš V.','Ivana K.','Róbert H.']);
-    const cleaned=normalized.filter(t=>!legacyDemo.has(String(t.full||t.name||'').trim()));
+    const removeExact=new Set(['Peter Kováč','Peter K.','VZOROVÝ TRÉNER','VZOROVY TRENER']);
+    const cleaned=normalized.filter(t=>{
+      const n=String(t.full||t.name||'').trim();
+      return !legacyDemo.has(n) && !removeExact.has(n);
+    });
     // Tréner 1/2 sa nepridávajú automaticky, aby neprepisovali zmeny
 
     trainersData.splice(0,trainersData.length,...cleaned);
     persistTrainersData();
   }
 }catch(e){ console.warn('Načítanie trénerov z pamäte sa nepodarilo',e); }
+function removeDeletedTrainerProfiles(){
+  try{
+    const removeNames=new Set(['PETER KOVÁČ','PETER K.','VZOROVÝ TRÉNER','VZOROVY TRENER']);
+    const before=trainersData.length;
+    trainersData.splice(0,trainersData.length,...trainersData.filter(t=>{
+      const n=String(t?.full||t?.name||'').trim().toUpperCase();
+      return !removeNames.has(n);
+    }));
+    return trainersData.length!==before;
+  }catch(e){ return false; }
+}
+removeDeletedTrainerProfiles();
+
 function persistTrainersData(){
   try{
     const json=JSON.stringify(trainersData);
@@ -5978,26 +5994,11 @@ function visibleTrainerProfiles(){
   // a login account and never included in trainer accounting.
   return (trainersData||[]).filter(t=>!isTestTrainerAccount(t));
 }
-function ensureTemplateTrainer(){
-  try{
-    if(!Array.isArray(trainersData)) return null;
-    let t=trainersData.find(x=>x.isTemplate===true || String(x.full||x.name||'').trim().toUpperCase()==='VZOROVÝ TRÉNER');
-    if(!t){
-      const id=Math.max(0,...trainersData.map(x=>Number(x.id)||0))+1;
-      t={id,full:'VZOROVÝ TRÉNER',name:'VZOROVÝ TRÉNER',email:'',phone:'',
-        role:'TRÉNER',license:'',valid:'',status:'VZOR',active:false,
-        groups:[],loginPassword:'',loginPasswordSet:false,isTemplate:true};
-      trainersData.push(t);
-      persistTrainersData();
-    }
-    return t;
-  }catch(e){return null;}
-}
+function ensureTemplateTrainer(){ return null; }
 function renderTrainers(){
- ensureTemplateTrainer();
+ removeDeletedTrainerProfiles();
  // Profile assignments are authoritative. Do not overwrite them from the
  // schedule when the trainer list is opened.
- ensureTemplateTrainer();
  const app=document.querySelector('.app');
  const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
@@ -7962,13 +7963,13 @@ function canEditTrainerProfile(){return isAdmin();}
 let headTrainerSelected='ALL';
 function isAdminTesting(){ return localStorage.getItem('gt-admin-testing')==='true'; }
 function hasHeadTrainerAccess(){ return isHeadTrainer() || localStorage.getItem('gt-head-trainer-access')==='true'; }
-document.body.classList.toggle('head-readonly',activeUserRole==='head');
+document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
 
 function setUserRole(role){
   activeUserRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
   localStorage.setItem('gt-user-role',activeUserRole);
   if(activeUserRole==='head') localStorage.setItem('gt-head-trainer-access','true');
-  document.body.classList.toggle('head-readonly',activeUserRole==='head');
+  document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
   toast(activeUserRole==='admin'?'Režim administrátora':activeUserRole==='head'?'Režim hlavného trénera':'Režim trénera');
   setTimeout(()=>renderMore(),250);
 }
@@ -8422,9 +8423,26 @@ function isAttendanceTodayForTrainer(){
     return String(attendanceState.date)===`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
   }catch(e){ return false; }
 }
+function isAnatoliiAttendanceEditor(){
+  // Anatolii Kuhal is the hlavný tréner, but he is also allowed to edit
+  // attendance retroactively, including membership and registration payments.
+  // This exception is intentionally limited to his real trainer profile.
+  try{
+    if(!isHeadTrainer()) return false;
+    const myId=currentTrainerAccountId();
+    if(myId!=null){
+      const t=(trainersData||[]).find(x=>Number(x.id)===Number(myId) && !x.isTemplate);
+      if(t && /ANATOLII\s+KUHAL/i.test(String(t.full||t.name||''))) return true;
+    }
+    const name=String(getCurrentTrainerDisplayName()||'').trim();
+    return /ANATOLII\s+KUHAL/i.test(name);
+  }catch(e){ return false; }
+}
+function attendanceEditorHeadAllowed(){ return isAnatoliiAttendanceEditor(); }
+
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
-  if(isHeadTrainer()) return true;
+  if(isHeadTrainer() && !isAnatoliiAttendanceEditor()) return true;
   // FIX: Tréner môže spätne opraviť svoju vlastnú dochádzku
   // Ak je to jeho skupina, môže upravovať aj staršie dni
   try{
@@ -8477,7 +8495,7 @@ function attendancePaymentLockKey(){
 }
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
-  if(isHeadTrainer()) return true;
+  if(isHeadTrainer() && !isAnatoliiAttendanceEditor()) return true;
   // FIX: Tréner môže spätne opraviť aj členské/registračné pre svoju skupinu
   try{
     const myId=currentTrainerAccountId();
@@ -8930,7 +8948,7 @@ function applyBillingSnapshotToAttendance(){
 }
 
 function attendance(){
-  if(!isAdmin() && !isHeadTrainer()){
+  if(!isAdmin() && (!isHeadTrainer() || isAnatoliiAttendanceEditor())){
     const accountId=currentTrainerAccountId();
     if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
     const wantedDate=attendanceState.date||appToday().iso;
@@ -9028,7 +9046,7 @@ function attendance(){
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
       <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
-    <main class="content attendance-page ${(isAttendanceFullyLocked()||isHeadTrainer())?'attendance-readonly':''}">
+    <main class="content attendance-page ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))?'attendance-readonly':''}">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
         <div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div>
@@ -9039,11 +9057,11 @@ function attendance(){
       <div class="att-meta">◷ ${attendanceDisplayTime}　⌖ Watsonova 4　♙ ${attendanceState.members.length} členov</div>
 
       <div class="finance">
-        <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
+        <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
         <button class="fin-card fin-membership" disabled onclick="toast('Členské sa zadáva pri členovi')"><b>ČLENSKÉ</b><strong id="sumMembership">0 €</strong><small id="countMembership">0 platieb</small></button>
         <button class="fin-card fin-registration" disabled onclick="toast('Registrácia je 30 €')"><b>REGISTRÁCIA</b><strong id="sumRegistration">0 €</strong><small id="countRegistration">0 platieb</small></button>
-        <button class="fin-card fin-plus" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
-        <button class="fin-card fin-minus" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
+        <button class="fin-card fin-plus" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
+        <button class="fin-card fin-minus" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
         <button class="fin-card fin-debt" disabled onclick="toast('Dlžné sa nezapočítava do vybraného súčtu')"><b>DLŽNÉ</b><strong id="sumDebt">0 €</strong><small id="countDebt">0 dlžníkov</small></button>
         <div class="finance-total"><span>SPOLU VYBRANÉ</span><strong id="sumSelected">0 €</strong><span>DLŽNÉ SPOLU <b id="sumDebtTotal">0 €</b></span></div>
       </div>
@@ -9088,7 +9106,7 @@ function openAttendanceMemberProfile(index){
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
 function renderAttendanceRows(){
- const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
+ const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
@@ -9393,7 +9411,7 @@ function adminCancelPayment(type,i){
 }
 
 function renderMembershipPaymentCell(m,i){
-  const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
   const dis=locked?'disabled':'';
   const key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
   const draft=attendanceState.membershipDrafts?.[key];
@@ -9435,7 +9453,7 @@ function renderMembershipPaymentCell(m,i){
   return `<button ${dis} class="pay-btn" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">ČLENSKÉ</button>`;
 }
 function renderRegistrationPaymentCell(m,i){
-  const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
   const dis=locked?'disabled':'';
   if(memberAccountDateMatches(m,m.registrationAccountDate) && Number(m.registrationAccountAmount||0)>0){
     const cls='pay-btn reg-account-on';
@@ -11666,7 +11684,7 @@ function resetHeadTrainerBillingMonth(){
 }
 
 function standardBottomNav(active='billing', forceAttendance=false){
-  const showAttendance = forceAttendance || !isHeadTrainer();
+  const showAttendance = forceAttendance || !isHeadTrainer() || isAnatoliiAttendanceEditor();
   const navClass = forceAttendance && isHeadTrainer() ? 'bottom head-billing-nav' : 'bottom';
   return `<nav class="${navClass}">
     <a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
@@ -13547,7 +13565,7 @@ function appBack(){
     if(r==='home'){ renderHome(); return; }
     if(r==='statistics') renderStatistics();
     else if(r==='calendar') renderCalendar();
-    else if(r==='attendance'){ if(isHeadTrainer()){ nav('home'); } else attendance(); }
+    else if(r==='attendance'){ if(isHeadTrainer() && !isAnatoliiAttendanceEditor()){ nav('home'); } else attendance(); }
     else if(r==='training-billing') trainingBilling();
     else if(r==='trainer-month'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); else renderMonthlyBilling(); }
     else if(r==='billing'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); }

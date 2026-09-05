@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1024-ATT-SAVE-FIX</div>
+   <div class="gt-login-title">GUARD TRAINER v1026-BACKUP-UI</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8374,7 +8374,149 @@ function findAttendanceHistory(date,group){
 function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
   return `${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
 }
+function backupAttendanceLocally(){
+  try{
+    const data=JSON.stringify(trainingAttendanceByGroup||{});
+    const backupKey='gt-attendance-backup-v1';
+    const timestamp=Date.now();
+    const backupEntry={ts:timestamp, data:data, date:new Date().toISOString()};
+    let backups=[];
+    try{ backups=JSON.parse(originalGetItem(backupKey)||'[]'); }catch(e){ backups=[]; }
+    backups.push(backupEntry);
+    // Ponechaj posledných 20 záloh
+    if(backups.length>20) backups=backups.slice(-20);
+    originalSetItem(backupKey, JSON.stringify(backups));
+    localStorage.setItem(backupKey, JSON.stringify(backups));
+    console.log('💾 Záloha dochádzky uložená, záloh:', backups.length);
+    // Aj do sessionStorage ako extra poistka
+    try{ sessionStorage.setItem('gt-attendance-last', data); }catch(e){}
+  }catch(e){ console.warn('Backup fail', e); }
+}
+function restoreAttendanceFromBackup(){
+  try{
+    const backupKey='gt-attendance-backup-v1';
+    let backups=[];
+    try{ backups=JSON.parse(originalGetItem(backupKey)||'[]'); }catch(e){}
+    if(backups.length===0){
+      const last=sessionStorage.getItem('gt-attendance-last');
+      if(last){
+        trainingAttendanceByGroup=JSON.parse(last);
+        originalSetItem('gt-training-attendance-history', last);
+        localStorage.setItem('gt-training-attendance-history', last);
+        toast('Dochádzka obnovená z poslednej session');
+        return true;
+      }
+      toast('Žiadna záloha nenájdená');
+      return false;
+    }
+    // Najnovšia záloha
+    backups.sort((a,b)=>b.ts-a.ts);
+    const latest=backups[0];
+    trainingAttendanceByGroup=JSON.parse(latest.data);
+    originalSetItem('gt-training-attendance-history', latest.data);
+    localStorage.setItem('gt-training-attendance-history', latest.data);
+    console.log('♻️ Obnovená záloha z', new Date(latest.ts).toLocaleString());
+    toast('Dochádzka obnovená zo zálohy '+new Date(latest.ts).toLocaleString());
+    return true;
+  }catch(e){ console.error('Restore fail', e); toast('Obnova zlyhala'); return false; }
+}
+window.backupAttendanceLocally=backupAttendanceLocally;
+window.restoreAttendanceFromBackup=restoreAttendanceFromBackup;
+function renderAttendanceBackups(){
+  try{
+    const backups=JSON.parse(originalGetItem('gt-attendance-backup-v1')||'[]');
+    const history=JSON.parse(originalGetItem('gt-training-attendance-history')||'{}');
+    const historyKeys=Object.keys(history||{}).length;
+    let totalMembers=0;
+    Object.values(history||{}).forEach(v=>{ totalMembers+=Object.keys(v||{}).length; });
+    
+    const app=document.querySelector('.app');
+    app.innerHTML=`
+      <header class="topbar">
+        <button class="menu" onclick="appBack()" aria-label="Späť">‹</button>
+        <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+      </header>
+      <main class="content">
+        <div class="section-title">💾 ZÁLOHY DOCHÁDZKY V MOBILE</div>
+        <div style="background:#1a1a1a;border:1px solid gold;border-radius:12px;padding:16px;margin:12px 0;">
+          <div style="color:gold;font-weight:900;margin-bottom:8px;">📱 AKTUÁLNA DOCHÁDZKA V MOBILE</div>
+          <div style="color:#fff;">Tréningov uložených: <b>${historyKeys}</b></div>
+          <div style="color:#fff;">Záznamov členov: <b>${totalMembers}</b></div>
+          <div style="color:#aaa;font-size:12px;margin-top:8px;">Uložené v: localStorage gt-training-attendance-history<br>Zostáva v mobile, neprepisuje sa z cloudu</div>
+        </div>
+        
+        <div style="background:#1a1a1a;border:1px solid #444;border-radius:12px;padding:16px;margin:12px 0;">
+          <div style="color:gold;font-weight:900;margin-bottom:8px;">💾 ZÁLOHY (${backups.length}/20)</div>
+          ${backups.length===0?'<div style="color:#aaa;">Žiadne zálohy - urob dochádzku a ulož</div>':''}
+          <div style="max-height:300px;overflow-y:auto;">
+            ${backups.slice().reverse().map((b,i)=>{
+              const d=new Date(b.ts);
+              let keys=0; try{ keys=Object.keys(JSON.parse(b.data||'{}')).length; }catch(e){}
+              return `<div style="border:1px solid #333;border-radius:8px;padding:10px;margin:6px 0;background:#222;">
+                <div style="color:#fff;font-weight:700;">${d.toLocaleString('sk-SK')}</div>
+                <div style="color:#aaa;font-size:12px;">${keys} tréningov | ${new Date(b.ts).toISOString().slice(0,10)}</div>
+                <button onclick="restoreSpecificBackup(${backups.length-1-i})" style="margin-top:6px;background:gold;color:#000;border:0;border-radius:6px;padding:6px 12px;font-weight:900;width:100%;">♻️ OBNOVIŤ TÚTO ZÁLOHU</button>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+        
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">
+          <button onclick="backupAttendanceLocally(); setTimeout(()=>renderAttendanceBackups(), 300);" style="flex:1;background:#333;color:#fff;border:1px solid gold;border-radius:8px;padding:12px;font-weight:700;">💾 UROBIŤ ZÁLOHU TERAZ</button>
+          <button onclick="if(confirm('Vymazať všetky zálohy?')){ originalSetItem('gt-attendance-backup-v1','[]'); localStorage.setItem('gt-attendance-backup-v1','[]'); renderAttendanceBackups(); }" style="flex:1;background:#e52b2b;color:#fff;border:0;border-radius:8px;padding:12px;font-weight:700;">🗑️ VYMAZAŤ ZÁLOHY</button>
+        </div>
+        
+        <div style="background:#222;border:1px solid #444;border-radius:12px;padding:12px;margin:12px 0;">
+          <div style="color:#fff;font-weight:700;margin-bottom:6px;">ℹ️ KDE SÚ ZÁLOHY?</div>
+          <div style="color:#ccc;font-size:13px;line-height:1.5;">
+            • V mobile v prehliadači Chrome/Safari<br>
+            • localStorage: <code>gt-attendance-backup-v1</code><br>
+            • localStorage: <code>gt-training-attendance-history</code><br>
+            • sessionStorage: <code>gt-attendance-last</code> (posledná)<br>
+            • Zostávajú aj po zatvorení appky<br>
+            • Vymažú sa len ak vymažeš dáta prehliadača<br>
+            • Každé ULOŽIŤ dochádzku = automatická záloha
+          </div>
+        </div>
+        
+        <button onclick="appBack()" style="width:100%;background:gold;color:#000;border:0;border-radius:12px;padding:14px;font-weight:900;font-size:16px;margin-top:12px;">‹ SPÄŤ</button>
+      </main>
+      ${standardBottomNav('more')}
+      <div id="toast" class="toast"></div>
+    `;
+  }catch(e){ console.error(e); toast('Zálohy sa nepodarilo načítať'); }
+}
+window.renderAttendanceBackups=renderAttendanceBackups;
+window.restoreSpecificBackup=function(idx){
+  try{
+    const backups=JSON.parse(originalGetItem('gt-attendance-backup-v1')||'[]');
+    if(!backups[idx]){ toast('Záloha neexistuje'); return; }
+    if(!confirm(`Obnoviť zálohu z ${new Date(backups[idx].ts).toLocaleString()}? Aktuálna dochádzka bude prepísaná zálohou.`)) return;
+    const data=backups[idx].data;
+    trainingAttendanceByGroup=JSON.parse(data);
+    originalSetItem('gt-training-attendance-history', data);
+    localStorage.setItem('gt-training-attendance-history', data);
+    toast('✅ Záloha obnovená');
+    setTimeout(()=>renderAttendanceBackups(), 500);
+  }catch(e){ console.error(e); toast('Obnova zlyhala'); }
+};
+
+window.listAttendanceBackups=function(){
+  try{
+    const backups=JSON.parse(originalGetItem('gt-attendance-backup-v1')||'[]');
+    console.log('=== ZÁLOHY DOCHÁDZKY ===');
+    backups.forEach((b,i)=>{
+      const d=new Date(b.ts);
+      const keys=Object.keys(JSON.parse(b.data||'{}')).length;
+      console.log(`${i}: ${d.toLocaleString()} - ${keys} tréningov`);
+    });
+    return backups;
+  }catch(e){ console.warn(e); return []; }
+};
+
 function persistTrainingAttendanceHistory(){
+  try{ backupAttendanceLocally(); }catch(e){}
+
   try{
     localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup));
   }catch(e){ console.warn('Attendance history save failed',e); }
@@ -8561,13 +8703,13 @@ function saveCurrentTrainingAttendance(){
     }catch(e){ adminSavedAt=Date.now(); }
   }
   persistTrainingAttendanceHistory();
+  // Pre trénera: dochádzka ostáva lokálna, neposielaj ako hlavný sync kľúč do cloudu pre iných trénerov
+  // Len ako záloha pre admina ak treba, ale admin ju nebude posielať späť trénerom
   try{
-    const json=JSON.stringify(trainingAttendanceByGroup);
-    originalSetItem('gt-training-attendance-history', json);
-    localStorage.setItem('gt-training-attendance-history', json);
-    if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true), 300);
-    if(typeof db!=='undefined' && db && typeof CLOUD_COLLECTION!=='undefined'){
-      db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set({ 'gt-training-attendance-history': json }, {merge:true});
+    if(typeof isAdmin==='function' && !isAdmin() && !isHeadTrainer()){
+      // Tréner - ulož len lokálne + záloha, nepushuj ako gt-training-attendance-history do hlavného cloudu pre sync
+      // Billing sa pushne samostatne
+      console.log('📱 Tréner dochádzka uložená lokálne, nebude sa prepisovať z cloudu');
     }
   }catch(e){}
   if(adminSavedAt){
@@ -8976,15 +9118,13 @@ function attendance(){
       }
     }
   }catch(e){}
+  // v1025: Pre trénera je lokálna história pravda, nie cloud
   const _attKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
   let _adminEditAt=0;
   try{ _adminEditAt=Number(JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')[_attKey]||0); }catch(e){}
   let _billingAt=0;
   try{ _billingAt=Number(attendanceState.billingRecordSnapshot?.savedAt||0); }catch(e){}
-  // Ak sme otvorili z vyúčtovania (fromBilling), vždy použij billing snapshot ako pravdu
-  const openedFromBilling=attendanceState.billingRecordSnapshot && (history.state?.fromBilling || window.__attendanceOpenedFromBilling);
-  if(attendanceState.billingRecordSnapshot && (openedFromBilling || _adminEditAt<=_billingAt)){
-    console.log('✅ [TRUTH] Používam dochádzku z vyúčtovania', attendanceState.date, attendanceState.group, 'členov:', attendanceState.billingRecordSnapshot.attendanceStateSnapshot?.length);
+  if(attendanceState.billingRecordSnapshot && _adminEditAt<=_billingAt){
     applyBillingSnapshotToAttendance();
   } else {
     try{
@@ -10945,6 +11085,27 @@ function saveTrainingBilling(saveButton){
     monthlyBillingRecords.push(originalRecord);
   }
   persistMonthlyBillingRecords();
+  // Billing + údaje o členovi idú na server, dochádzka ostáva lokálne
+  try{
+    if(typeof pushToCloud==='function'){
+      // Push len billing, nie celú históriu dochádzky pre trénera
+      setTimeout(()=>{ 
+        try{
+          const billingJson=JSON.stringify(monthlyBillingRecords);
+          originalSetItem('gt-monthly-billing-v221', billingJson);
+          localStorage.setItem('gt-monthly-billing-v221', billingJson);
+          if(typeof db!=='undefined' && db){
+            db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false});
+            if(typeof CLOUD_COLLECTION!=='undefined'){
+              const p={}; p['gt-monthly-billing-v221']=billingJson; p['gt-billing']=billingJson;
+              db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(p, {merge:true});
+            }
+          }
+          console.log('📤 Vyúčtovanie + členovia odoslané na server, dochádzka ostáva v mobile');
+        }catch(e){ console.warn(e); }
+      }, 500);
+    }
+  }catch(e){}
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
   if(saveButton){
@@ -12912,7 +13073,6 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
     }catch(e){ console.warn('Billing payment snapshot load failed',e); }
 
     window.__attendanceOpenedFromCalendar=false;
-    window.__attendanceOpenedFromBilling=true;
     history.pushState({gtRoute:'attendance',fromBilling:true},'',location.pathname+location.search+'#attendance');
     attendance();
   }catch(err){

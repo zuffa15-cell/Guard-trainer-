@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -358,8 +358,12 @@ function initCloudSync(){
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
         if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
-          originalSetItem(k, data[k]);
-          changed = true;
+          if((k==='gt-trainers' || k==='gt-trainers-v395') && (!data[k] || data[k]==='[]')){
+            console.warn('Cloud má prázdnych trénerov, neprepisujem');
+          } else {
+            originalSetItem(k, data[k]);
+            changed = true;
+          }
         }
       });
       if(data._updatedAt) lastCloudUpdate = data._updatedAt;
@@ -3779,7 +3783,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER</div>
+   <div class="gt-login-title">GUARD TRAINER v1001-TRAINERS-SYNC</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -5543,9 +5547,48 @@ try{
   }
 }catch(e){ console.warn('Načítanie trénerov z pamäte sa nepodarilo',e); }
 function persistTrainersData(){
-  try{ localStorage.setItem(TRAINERS_STORAGE_KEY,JSON.stringify(trainersData)); }
-  catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
+  try{
+    const json=JSON.stringify(trainersData);
+    try{ localStorage.setItem(TRAINERS_STORAGE_KEY,json); }catch(e){}
+    try{ originalSetItem(TRAINERS_STORAGE_KEY,json); }catch(e){}
+    try{ originalSetItem('gt-trainers',json); }catch(e){}
+    try{ originalSetItem('gt-trainers-v395',json); }catch(e){}
+    // Ulož aj do direct cloud kolekcie pre 100% sync
+    try{ if(typeof saveTrainersDirectCloud==='function') saveTrainersDirectCloud(); }catch(e){}
+    try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),150); }catch(e){}
+  }catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
 }
+const TRAINERS_DIRECT_COLLECTION='guard-trainer-trainers';
+function saveTrainersDirectCloud(){
+  try{
+    if(!db) return;
+    db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').set({trainers: trainersData, updatedAt: Date.now()}, {merge:true});
+  }catch(e){ console.warn('trainers direct save failed',e); }
+}
+function initTrainersDirectSync(){
+  if(!db) return;
+  db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').onSnapshot(doc=>{
+    if(!doc.exists) return;
+    const data=doc.data()||{};
+    if(!data.trainers || !Array.isArray(data.trainers) || data.trainers.length===0) return;
+    try{
+      const remote=data.trainers;
+      const localRaw=originalGetItem(TRAINERS_STORAGE_KEY)||'[]';
+      let local=[]; try{local=JSON.parse(localRaw)||[];}catch(e){}
+      if(remote.length>=local.length || JSON.stringify(remote)!==JSON.stringify(local)){
+        console.log('📥 Tréneri prišli z direct cloudu', remote.length);
+        originalSetItem(TRAINERS_STORAGE_KEY, JSON.stringify(remote));
+        originalSetItem('gt-trainers', JSON.stringify(remote));
+        originalSetItem('gt-trainers-v395', JSON.stringify(remote));
+        if(typeof trainersData!=='undefined'){
+          trainersData.splice(0,trainersData.length, ...remote);
+        }
+        try{ if(location.hash==='#more' || location.hash==='#trainers') { if(typeof renderTrainers==='function') renderTrainers(); } }catch(e){}
+      }
+    }catch(e){ console.warn('trainers direct sync failed',e); }
+  });
+}
+
 
 /* v531 – synchronizácia priradenia tréner ↔ skupina.
    Zdrojom sú uložené rozvrhy (trainerIds + groupCode). Profil trénera

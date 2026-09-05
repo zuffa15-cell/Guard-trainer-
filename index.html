@@ -7992,14 +7992,15 @@ function isAttendanceTodayForTrainer(){
 }
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
-  // Hlavný tréner má dochádzku iba na čítanie. Bežný tréner môže
-  // svoju dochádzku spätne upravovať bez obmedzenia na dnešný deň.
   if(isHeadTrainer()) return true;
-  return false;
+  // Tréner môže upravovať iba aktuálny kalendárny deň.
+  // Každý starší deň je vždy iba na čítanie, bez ohľadu na to,
+  // či bol uložený cez Kalendár, Vyúčtovanie alebo inou cestou.
+  return !isAttendanceTodayForTrainer();
 }
 function attendanceEditGuard(){
   if(isAttendanceFullyLocked()){
-    toast(isHeadTrainer() ? 'Hlavný tréner má dochádzku iba na čítanie.' : 'Dochádzku nie je možné upraviť.');
+    toast('Uloženú dochádzku môže meniť iba administrátor.');
     return false;
   }
   return true;
@@ -8016,10 +8017,10 @@ function attendancePaymentLockKey(){
 }
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
-  // Hlavný tréner je iba na čítanie. Bežný tréner môže spätne meniť
-  // členské aj registračné rovnako ako svoju dochádzku.
   if(isHeadTrainer()) return true;
-  return false;
+  // Aj členské a registračné môže tréner upravovať iba v aktuálnom dni.
+  // Pri každom staršom dni sú automaticky zamknuté.
+  return !isAttendanceTodayForTrainer();
 }
 function attendancePaymentEditGuard(){
   if(isAttendancePaymentsLocked()){
@@ -8452,45 +8453,6 @@ function applyBillingSnapshotToAttendance(){
   attendanceState.otherMinusReason=String(r.otherMinusReason||'');
 }
 
-function deleteCurrentTrainerAttendance(){
-  if(isAdmin()){ toast('Administrátor môže dochádzku spravovať priamo.'); return false; }
-  if(isHeadTrainer()){ toast('Hlavný tréner má dochádzku iba na čítanie.'); return false; }
-  if(!attendanceEditGuard()) return false;
-  const date=String(attendanceState.date||'').trim();
-  const group=canonicalAttendanceGroup(attendanceState.group||'');
-  const key=trainingAttendanceKey(group,date);
-  if(!date || !group){ toast('Dochádzka nemá platný dátum alebo skupinu.'); return false; }
-  if(!confirm(`Naozaj vymazať celú dochádzku?\n\n${formatAttendanceDate(date)} – ${attendanceState.name||group}\n\nVymaže sa dochádzka, členské, registračné a vyúčtovanie tohto tréningu.`)) return false;
-  try{
-    Object.keys(trainingAttendanceByGroup).forEach(k=>{ if(canonicalAttendanceHistoryKey(k)===key) delete trainingAttendanceByGroup[k]; });
-    persistTrainingAttendanceHistory();
-    markAttendanceSavedNow(date,group);
-    markAttendancePendingSave(date,group);
-    membershipPayments=membershipPayments.filter(p=>!(canonicalAttendanceDate(p&&p.date)===canonicalAttendanceDate(date) && canonicalAttendanceGroup(p&&p.paidGroup)===group));
-    registrationPayments=registrationPayments.filter(p=>!(canonicalAttendanceDate(p&&p.date)===canonicalAttendanceDate(date) && canonicalAttendanceGroup(p&&p.paidGroup)===group));
-    persistPaymentHistory();
-    const myName=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
-    const myId=String(currentTrainerAccountId()==null?'':currentTrainerAccountId());
-    monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
-      const rd=parsePaymentDate(r&&r.date);
-      const rdate=rd?`${rd.year}-${String(rd.month).padStart(2,'0')}-${String(rd.day).padStart(2,'0')}`:canonicalAttendanceDate(r&&r.date);
-      const rg=canonicalAttendanceGroup(r&&r.group);
-      const rn=String(r&&r.trainer||r&&r.name||'').trim().toUpperCase();
-      const rid=String(r&&r.trainerId==null?'':r.trainerId);
-      const sameOwner=myId && rid ? rid===myId : rn===myName;
-      return !(rdate===canonicalAttendanceDate(date) && rg===group && sameOwner);
-    });
-    persistMonthlyBillingRecords();
-    attendanceState.members=(attendanceState.members||[]).map(m=>({...m,training:false,trainingAccount:false,newMember:false,membershipAmount:0,membershipAccountAmount:0,membershipAccountDate:'',registration:false,registrationAccountAmount:0,registrationAccountDate:'',debt:0,debtReason:''}));
-    attendanceState.billingRecordSnapshot=null; attendanceState.billingAttendanceSnapshot=null; attendanceState.billingPaymentSnapshot=null;
-    try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(),100); }catch(e){}
-    toast('Dochádzka bola vymazaná.');
-    setTimeout(()=>{ try{ nav('calendar'); }catch(e){ renderCalendar(); } },250);
-  }catch(e){ console.error('DELETE TRAINER ATTENDANCE:',e); toast('Dochádzku sa nepodarilo vymazať.'); }
-  return false;
-}
-window.deleteCurrentTrainerAttendance=deleteCurrentTrainerAttendance;
-
 function attendance(){
   if(!isAdmin() && !isHeadTrainer()){
     const accountId=currentTrainerAccountId();
@@ -8587,7 +8549,6 @@ function attendance(){
 
       <div class="members-list" id="attendanceList">${renderAttendanceRows()}</div>
       <button class="club-billing-button" ${isAttendanceFullyLocked()&&!isAdmin()?'disabled':''} onclick="return openTrainingBillingFromAttendance()">✓ POTVRDIŤ DOCHÁDZKU</button>
-      ${(!isAdmin()&&!isHeadTrainer())?`<button type="button" class="club-billing-button" style="background:#8b1515!important;border-color:#b51e1e!important;color:#fff!important;margin-top:8px;" onclick="return deleteCurrentTrainerAttendance()">🗑 VYMAZAŤ DOCHÁDZKU</button>`:''}
       <div class="attendance-pdf-actions">
         <button type="button" onclick="return saveAttendancePaymentsPDF()">PDF</button>
         <button type="button" onclick="return shareAttendancePaymentsPDF()">ZDIEĽAŤ</button>
@@ -8617,7 +8578,17 @@ function openAttendanceMemberProfile(index){
    return;
  }
  saveCurrentTrainingAttendance();
+ // Zachovaj presný kontext otvoreného tréningu. Pri návrate z profilu
+ // nesmie hashchange otvoriť dnešný chooser ani inú skupinu.
  window.__gtBackTarget={route:'attendanceCurrent'};
+ window.__gtReturnToAttendance=true;
+ window.__gtAttendanceReturnContext={
+   date:String(attendanceState.date||''),
+   group:String(attendanceState.group||''),
+   name:String(attendanceState.name||''),
+   trainingTime:String(attendanceState.trainingTime||''),
+   trainingScheduleId:attendanceState.trainingScheduleId||null
+ };
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
 function renderAttendanceRows(){
@@ -10047,8 +10018,7 @@ function upsertBillingRecordFromAttendance(){
     locked:true
   };
   const idx=monthlyBillingRecords.findIndex(r=>r.key===key);
-  // Bežný tréner môže svoje uložené vyúčtovanie spätne aktualizovať po
-  // úprave dochádzky. Záznam sa vždy prepíše novým stavom.
+  if(idx>=0 && !isAdmin() && monthlyBillingRecords[idx].locked){ return; }
   record.locked=true;
   if(idx>=0) monthlyBillingRecords[idx]=record; else monthlyBillingRecords.push(record);
   normalizeMonthlyBillingRecords();
@@ -13141,6 +13111,23 @@ window.addEventListener('hashchange',()=>{
   if(r==='statistics'){ renderStatistics(); return; }
   if(r==='calendar'){ renderCalendar(); return; }
   if(r==='attendance'){
+    if(window.__gtReturnToAttendance && window.__gtAttendanceReturnContext){
+      const ctx=window.__gtAttendanceReturnContext;
+      window.__gtReturnToAttendance=false;
+      window.__gtAttendanceReturnContext=null;
+      window.__attendanceOpenedFromCalendar=false;
+      window.__attendanceOpenSource='return';
+      attendanceState.date=ctx.date||appToday().iso;
+      attendanceState.group=ctx.group||'';
+      attendanceState.name=ctx.name||'';
+      attendanceState.trainingTime=ctx.trainingTime||'';
+      attendanceState.trainingScheduleId=ctx.trainingScheduleId||null;
+      attendanceState.billingPaymentSnapshot=null;
+      attendanceState.billingAttendanceSnapshot=null;
+      attendanceState.billingRecordSnapshot=null;
+      attendance();
+      return;
+    }
     if(window.__attendanceOpenedFromCalendar){
       window.__attendanceOpenedFromCalendar=false;
       window.__attendanceOpenSource='calendar';

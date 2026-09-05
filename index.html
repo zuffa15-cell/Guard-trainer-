@@ -8426,21 +8426,7 @@ function isAttendanceTodayForTrainer(){
     return String(attendanceState.date)===`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
   }catch(e){ return false; }
 }
-function isAnatoliiAttendanceEditor(){
-  // Anatolii Kuhal is the hlavný tréner, but he is also allowed to edit
-  // attendance retroactively, including membership and registration payments.
-  // This exception is intentionally limited to his real trainer profile.
-  try{
-    if(!isHeadTrainer()) return false;
-    const myId=currentTrainerAccountId();
-    if(myId!=null){
-      const t=(trainersData||[]).find(x=>Number(x.id)===Number(myId) && !x.isTemplate);
-      if(t && /ANATOLII\s+KUHAL/i.test(String(t.full||t.name||''))) return true;
-    }
-    const name=String(getCurrentTrainerDisplayName()||'').trim();
-    return /ANATOLII\s+KUHAL/i.test(name);
-  }catch(e){ return false; }
-}
+function isAnatoliiAttendanceEditor(){ return false; }
 function attendanceEditorHeadAllowed(){ return isAnatoliiAttendanceEditor(); }
 
 function isAttendanceFullyLocked(){
@@ -13600,7 +13586,7 @@ function appBack(){
     if(r==='home'){ renderHome(); return; }
     if(r==='statistics') renderStatistics();
     else if(r==='calendar') renderCalendar();
-    else if(r==='attendance'){ if(isHeadTrainer() && !isAnatoliiAttendanceEditor()){ nav('home'); } else attendance(); }
+    else if(r==='attendance'){ if(isHeadTrainer()){ nav('home'); } else attendance(); }
     else if(r==='training-billing') trainingBilling();
     else if(r==='trainer-month'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); else renderMonthlyBilling(); }
     else if(r==='billing'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); }

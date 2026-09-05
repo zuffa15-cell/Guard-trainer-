@@ -10853,8 +10853,30 @@ window.renderTrainerMonthlyFor = function(trainerName, month=null, year=null){
   renderHeadTrainerDetail(String(trainerName||'').trim(),targetMonth,targetYear);
 };
 
+function isExplicitAnatoliiTrainer(t){
+  const n=String(t?.full||t?.name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+  return n==='ANATOLII KUHAL' || n==='KUHAL ANATOLII';
+}
+function isMainTrainerProfile(t){
+  if(!t) return false;
+  const role=String(t.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+  return role==='HLAVNY TRENER';
+}
 function getMainTrainerProfile(){
-  return (trainersData||[]).find(t=>String(t.role||'').toUpperCase()==='HLAVNÝ TRÉNER') || (trainersData||[])[0] || null;
+  const list=Array.isArray(trainersData)?trainersData:[];
+  // Hlavný tréner je konkrétny prihlásený účet. Nikdy ho neurčuj podľa
+  // poradia v zozname trénerov – tým sa predtým mohol zobraziť Anatolii.
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const id=Number(account?.trainer_id);
+    if(String(account?.role||'').trim().toLowerCase()==='head' && Number.isFinite(id)){
+      const own=list.find(t=>Number(t.id)===id);
+      if(own && isMainTrainerProfile(own) && !isExplicitAnatoliiTrainer(own)) return own;
+    }
+  }catch(e){}
+  // Fallback: nájdi skutočný profil s rolou HLAVNÝ TRÉNER, nie prvého
+  // trénera v poli. Anatolii je vždy obyčajný tréner.
+  return list.find(t=>isMainTrainerProfile(t) && !isExplicitAnatoliiTrainer(t)) || null;
 }
 function getMainTrainerDisplayName(){
   const t=getMainTrainerProfile();
@@ -12002,7 +12024,7 @@ function renderHeadTrainerYear(view='trainers'){
   <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing annual-screen">
     <section class="head-profile head-profile-main">
-      <div class="head-avatar">M</div>
+      <div class="head-avatar">${String(getMainTrainerDisplayName()||'H').trim().charAt(0).toUpperCase()}</div>
       <div class="head-trainer-title"><b>${getMainTrainerDisplayName().toUpperCase()}</b><span>HLAVNÝ TRÉNER</span></div>
       <button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button>
     </section>

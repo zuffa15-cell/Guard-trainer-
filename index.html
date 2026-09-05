@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1017-NO-OVERWRITE</div>
+   <div class="gt-login-title">GUARD TRAINER v1018-ATTENDANCE-TRUTH</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8936,15 +8936,47 @@ function attendance(){
     isTrainingCancelled(attendanceState.date,attendanceState.group,'',attendanceState.name);
   if(attendanceCancelled){ renderCancelledAttendance(); return; }
   loadAttendanceFromMembers();
-  // Ak existuje novšia explicitná úprava administrátora, história dochádzky
-  // je autoritatívna a starý snapshot vyúčtovania ju nesmie prepísať.
+  // FIX: Ak existuje vyúčtovanie pre tento dátum/skupinu, je to pravda - načítaj dochádzku z vyúčtovania
+  // Aj keď otváram z kalendára, nie len z vyúčtovania
+  try{
+    if(!attendanceState.billingRecordSnapshot){
+      // Nenačítané z vyúčtovania - skús nájsť vyúčtovanie pre tento dátum/skupinu
+      const parsedDate=attendanceState.date;
+      const code=String(attendanceState.group||'').trim().toUpperCase();
+      const trainerName=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+      const candidates=(getBillingRecords()||[]).filter(r=>{
+        const d=parsePaymentDate(r.date);
+        if(!d) return false;
+        const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+        return iso===parsedDate && String(r.group||'').trim().toUpperCase()===code && !r.substituteReference;
+      });
+      // Preferuj záznam aktuálneho trénera
+      const myRecords=candidates.filter(r=>String(r.trainer||'').trim().toUpperCase()===trainerName.toUpperCase());
+      const chosen=myRecords.length?myRecords[0]:(candidates[0]||null);
+      if(chosen && Array.isArray(chosen.attendanceStateSnapshot) && chosen.attendanceStateSnapshot.length>0){
+        console.log('📋 Načítavam dochádzku z vyúčtovania pre', parsedDate, code, 'záznamov:', chosen.attendanceStateSnapshot.length);
+        attendanceState.billingRecordSnapshot=chosen;
+        attendanceState.billingAttendanceSnapshot=Array.isArray(chosen.attendanceSnapshot)?chosen.attendanceSnapshot.slice():[];
+        if(Array.isArray(chosen.paymentSnapshot)){
+          attendanceState.billingPaymentSnapshot={};
+          chosen.paymentSnapshot.forEach(x=>{
+            attendanceState.billingPaymentSnapshot[String(x.surname||'').trim()+'|'+String(x.name||'').trim()]=x;
+          });
+        }
+      }
+    }
+  }catch(e){ console.warn('billing auto-load fail', e); }
+  
   const _attKey=trainingAttendanceKey(attendanceState.group,attendanceState.date);
   let _adminEditAt=0;
   try{ _adminEditAt=Number(JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')[_attKey]||0); }catch(e){}
   let _billingAt=0;
   try{ _billingAt=Number(attendanceState.billingRecordSnapshot?.savedAt||0); }catch(e){}
-  if(_adminEditAt<=_billingAt){ applyBillingSnapshotToAttendance(); }
-  else {
+  // Ak máme billing snapshot, vždy ho použijeme ako pravdu (okrem admin edit novšieho)
+  if(attendanceState.billingRecordSnapshot && _adminEditAt<=_billingAt){
+    console.log('✅ Používam dochádzku z vyúčtovania ako pravdu');
+    applyBillingSnapshotToAttendance();
+  } else if(_adminEditAt>_billingAt){
     try{
       const _hist=findAttendanceHistory(attendanceState.date,attendanceState.group)||{};
       (attendanceState.members||[]).forEach(a=>{
@@ -8956,6 +8988,24 @@ function attendance(){
           a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
         }
       });
+    }catch(e){}
+  } else {
+    // Nemáme billing ani admin edit - načítaj z histórie dochádzky
+    try{
+      const _hist=findAttendanceHistory(attendanceState.date,attendanceState.group)||{};
+      const hasHistory=Object.keys(_hist).length>0;
+      if(hasHistory){
+        console.log('📚 Načítavam dochádzku z histórie', Object.keys(_hist).length);
+        (attendanceState.members||[]).forEach(a=>{
+          const x=_hist[a.surname+'|'+a.name];
+          if(x){
+            a.training=!!x.training;
+            a.trainingAccount=!!x.trainingAccount;
+            a.newMember=!!x.newMember;
+            a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
+          }
+        });
+      }
     }catch(e){}
   }
   const app=document.querySelector('.app');

@@ -3969,7 +3969,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
            }catch(e){}
            if(fullProfile){
              if(String(fullProfile.full||'').toUpperCase().includes('VZOROV')) continue;
-             return fullProfile;
+             return resolveRealTrainerIdentity(fullProfile);
            }
            // Ak profil nie je, vráť aspoň entry ako trainer
            if(String(entry.name||'').toUpperCase().includes('VZOROV')) continue;
@@ -3988,7 +3988,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
          const arr=JSON.parse(localStorage.getItem(kk)||'[]');
          if(Array.isArray(arr)){
            const hit=arr.find(x=>x && !x.isTemplate && x.active!==false && String(x.loginPassword||'').trim()===cleanPass && !String(x.full||'').toUpperCase().includes('VZOROV'));
-           if(hit) return hit;
+           if(hit) return resolveRealTrainerIdentity(hit);
          }
        }catch(e){}
      }
@@ -4001,7 +4001,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        const arr=JSON.parse(raw);
        if(Array.isArray(arr)){
          const hit=arr.find(x=>x && !x.isTemplate && x.active!==false && String(x.loginPassword||'').trim()===cleanPass);
-         if(hit) return hit;
+         if(hit) return resolveRealTrainerIdentity(hit);
        }
      }
    }catch(e){}
@@ -4009,7 +4009,39 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    return null;
  }
  
- function openTrainer(t){
+ function resolveRealTrainerIdentity(t){
+  try{
+    if(!t || t.isTemplate) return t;
+    const name=String(t.full||t.name||'').trim().toLowerCase();
+    const legacy=name==='tréner 1'||name==='trener 1'||name==='tréner 2'||name==='trener 2';
+    if(!legacy) return t;
+
+    // Staré testovacie meno sa nesmie používať ako identita reálneho trénera.
+    // Ak už existuje Peter Onuščák, použij jeho skutočný profil a zachovaj
+    // heslo/ID zo starého účtu iba ako prihlasovací alias.
+    const peter=(trainersData||[]).find(x=>!x.isTemplate && x.active!==false &&
+      String(x.full||x.name||'').trim().toLowerCase()==='peter onuščák');
+    if(peter) return peter;
+
+    // Migrácia starého účtu Tréner 1 -> Peter Onuščák. Toto je potrebné pre
+    // staré zariadenia, ktoré ešte majú uložený účet pod testovacím menom.
+    if(name==='tréner 1'||name==='trener 1'){
+      const migrated={...t, full:'Peter Onuščák', name:'Peter Onuščák', role:'TRÉNER'};
+      try{
+        const idx=(trainersData||[]).findIndex(x=>Number(x.id)===Number(t.id));
+        if(idx>=0){
+          trainersData[idx]={...trainersData[idx],...migrated};
+          persistTrainersData();
+        }
+      }catch(e){}
+      return migrated;
+    }
+  }catch(e){}
+  return t;
+}
+
+function openTrainer(t){
+   t=resolveRealTrainerIdentity(t);
    if(!t || t.isTemplate || String(t.full||'').toUpperCase().includes('VZOROV')){
      console.warn('⛔ Pokus o prihlásenie ako VZOROVÝ - blokované');
      return;
@@ -4074,11 +4106,12 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
              const found=Object.values(pw||{}).find(x=>x && x.active!==false && !x.isTemplate && String(x.password||'').trim()===pass);
              if(found){
                const live=(trainersData||[]).find(t=>Number(t.id)===Number(found.id));
+               const resolved=resolveRealTrainerIdentity(live||{id:found.id,full:found.name,name:found.name,role:found.role,groups:found.groups});
                finish({
-                 id:found.id,
-                 full:String(live?.full||live?.name||found.name||'').trim(),
-                 role:live?.role||found.role,
-                 groups:Array.isArray(live?.groups)?[...live.groups]:(Array.isArray(found.groups)?[...found.groups]:[])
+                 id:resolved?.id ?? found.id,
+                 full:String(resolved?.full||resolved?.name||found.name||'').trim(),
+                 role:resolved?.role||found.role,
+                 groups:Array.isArray(resolved?.groups)?[...resolved.groups]:(Array.isArray(found.groups)?[...found.groups]:[])
                });
                return;
              }
@@ -4099,7 +4132,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
            try{const x=JSON.parse(data.trainersData||'[]');if(Array.isArray(x))arr=x;}catch(e){}
          }
          const found=arr.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
-         if(found) finish(found);
+         if(found) finish(resolveRealTrainerIdentity(found));
        }).catch(()=>{});
      }
    }catch(e){}

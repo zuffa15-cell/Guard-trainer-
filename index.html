@@ -3895,7 +3895,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        activeUserRole=(role==='admin')?'admin':(role==='head'?'head':'trainer');
        localStorage.setItem('gt-user-role',activeUserRole);
        if(activeUserRole!=='head') localStorage.removeItem('gt-head-trainer-access');
-       document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
+       document.body.classList.toggle('head-readonly',false);
      }else{
        localStorage.setItem('gt-user-role',role==='admin'?'admin':(role==='head'?'head':'trainer'));
      }
@@ -7962,13 +7962,13 @@ function canEditTrainerProfile(){return isAdmin();}
 let headTrainerSelected='ALL';
 function isAdminTesting(){ return localStorage.getItem('gt-admin-testing')==='true'; }
 function hasHeadTrainerAccess(){ return isHeadTrainer() || localStorage.getItem('gt-head-trainer-access')==='true'; }
-document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
+document.body.classList.toggle('head-readonly',false);
 
 function setUserRole(role){
   activeUserRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
   localStorage.setItem('gt-user-role',activeUserRole);
   if(activeUserRole==='head') localStorage.setItem('gt-head-trainer-access','true');
-  document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
+  document.body.classList.toggle('head-readonly',false);
   toast(activeUserRole==='admin'?'Režim administrátora':activeUserRole==='head'?'Režim hlavného trénera':'Režim trénera');
   setTimeout(()=>renderMore(),250);
 }
@@ -8423,25 +8423,15 @@ function isAttendanceTodayForTrainer(){
   }catch(e){ return false; }
 }
 function isAnatoliiAttendanceEditor(){
-  // Anatolii Kuhal is the hlavný tréner, but he is also allowed to edit
-  // attendance retroactively, including membership and registration payments.
-  // This exception is intentionally limited to his real trainer profile.
-  try{
-    if(!isHeadTrainer()) return false;
-    const myId=currentTrainerAccountId();
-    if(myId!=null){
-      const t=(trainersData||[]).find(x=>Number(x.id)===Number(myId) && !x.isTemplate);
-      if(t && /ANATOLII\s+KUHAL/i.test(String(t.full||t.name||''))) return true;
-    }
-    const name=String(getCurrentTrainerDisplayName()||'').trim();
-    return /ANATOLII\s+KUHAL/i.test(name);
-  }catch(e){ return false; }
+  // Spätná úprava dochádzky a platieb patrí každému skutočnému
+  // hlavnému trénerovi podľa jeho účtu/role. Nie podľa mena.
+  return isHeadTrainer();
 }
-function attendanceEditorHeadAllowed(){ return isAnatoliiAttendanceEditor(); }
+function attendanceEditorHeadAllowed(){ return isHeadTrainer(); }
 
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
-  if(isHeadTrainer() && !isAnatoliiAttendanceEditor()) return true;
+  if(isHeadTrainer()) return false;
   // FIX: Tréner môže spätne opraviť svoju vlastnú dochádzku
   // Ak je to jeho skupina, môže upravovať aj staršie dni
   try{
@@ -8494,7 +8484,7 @@ function attendancePaymentLockKey(){
 }
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
-  if(isHeadTrainer() && !isAnatoliiAttendanceEditor()) return true;
+  if(isHeadTrainer()) return false;
   // FIX: Tréner môže spätne opraviť aj členské/registračné pre svoju skupinu
   try{
     const myId=currentTrainerAccountId();
@@ -8947,7 +8937,8 @@ function applyBillingSnapshotToAttendance(){
 }
 
 function attendance(){
-  if(!isAdmin() && (!isHeadTrainer() || isAnatoliiAttendanceEditor())){
+  if(!isAdmin()){
+
     const accountId=currentTrainerAccountId();
     if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
     const wantedDate=attendanceState.date||appToday().iso;
@@ -9045,7 +9036,7 @@ function attendance(){
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
       <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
-    <main class="content attendance-page ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))?'attendance-readonly':''}">
+    <main class="content attendance-page ${(isAttendanceFullyLocked()||false)?'attendance-readonly':''}">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
         <div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div>
@@ -9056,11 +9047,11 @@ function attendance(){
       <div class="att-meta">◷ ${attendanceDisplayTime}　⌖ Watsonova 4　♙ ${attendanceState.members.length} členov</div>
 
       <div class="finance">
-        <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
+        <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||false)&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
         <button class="fin-card fin-membership" disabled onclick="toast('Členské sa zadáva pri členovi')"><b>ČLENSKÉ</b><strong id="sumMembership">0 €</strong><small id="countMembership">0 platieb</small></button>
         <button class="fin-card fin-registration" disabled onclick="toast('Registrácia je 30 €')"><b>REGISTRÁCIA</b><strong id="sumRegistration">0 €</strong><small id="countRegistration">0 platieb</small></button>
-        <button class="fin-card fin-plus" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
-        <button class="fin-card fin-minus" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
+        <button class="fin-card fin-plus" ${(isAttendanceFullyLocked()||false)&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
+        <button class="fin-card fin-minus" ${(isAttendanceFullyLocked()||false)&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
         <button class="fin-card fin-debt" disabled onclick="toast('Dlžné sa nezapočítava do vybraného súčtu')"><b>DLŽNÉ</b><strong id="sumDebt">0 €</strong><small id="countDebt">0 dlžníkov</small></button>
         <div class="finance-total"><span>SPOLU VYBRANÉ</span><strong id="sumSelected">0 €</strong><span>DLŽNÉ SPOLU <b id="sumDebtTotal">0 €</b></span></div>
       </div>
@@ -9105,7 +9096,7 @@ function openAttendanceMemberProfile(index){
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
 function renderAttendanceRows(){
- const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
+ const locked=(isAttendanceFullyLocked()||false)&&!isAdmin();
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
@@ -9410,7 +9401,7 @@ function adminCancelPayment(type,i){
 }
 
 function renderMembershipPaymentCell(m,i){
-  const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||false)&&!isAdmin();
   const dis=locked?'disabled':'';
   const key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
   const draft=attendanceState.membershipDrafts?.[key];
@@ -9452,7 +9443,7 @@ function renderMembershipPaymentCell(m,i){
   return `<button ${dis} class="pay-btn" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">ČLENSKÉ</button>`;
 }
 function renderRegistrationPaymentCell(m,i){
-  const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||false)&&!isAdmin();
   const dis=locked?'disabled':'';
   if(memberAccountDateMatches(m,m.registrationAccountDate) && Number(m.registrationAccountAmount||0)>0){
     const cls='pay-btn reg-account-on';
@@ -11370,27 +11361,19 @@ function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appTod
   const targetNorm=norm(target);
   // Nájdeme skutočný profil trénera a jeho ID. ID je primárne, meno je iba
   // fallback pre historické záznamy, ktoré ešte trainerId nemajú.
-  // Jeden tréner môže mať po starších migráciách viac profilov s rovnakým menom.
-  // Preto nepoužívaj iba prvé nájdené ID – vyúčtovanie môže byť uložené pod
-  // ktorýmkoľvek platným profilovým ID toho istého trénera.
-  const matchingProfiles=(trainersData||[]).filter(t=>norm(t.full||t.name)===targetNorm);
-  const targetIds=new Set(matchingProfiles.map(t=>Number(t.id)).filter(id=>Number.isFinite(id)&&id>0));
+  const profile=(trainersData||[]).find(t=>norm(t.full||t.name)===targetNorm);
+  const targetId=profile ? Number(profile.id) : null;
 
   let rows=(monthlyBillingRecords||[]).filter(r=>{
     const delAt=Number(billingDeleteOrder[billingRecordCanonicalKey(r)]||0);
     const savedAt=Number(r.savedAt||r.updatedAt||0);
     if(delAt>0 && delAt>=savedAt) return false;
     const rid=Number(r?.trainerId);
-    if(Number.isFinite(rid) && rid>0){
-      // Nové záznamy: stačí, ak trainerId patrí niektorému z profilov
-      // s týmto menom. Toto rieši staré duplicitné profily po migrácii účtov.
-      if(targetIds.has(rid)) return true;
-      // Ak je v starom zázname trainerId historicky chybné, ale uložený autor
-      // je jednoznačne meno požadovaného trénera, ponechaj ho v jeho vyúčtovaní.
-      const author=String(r?.savedBy||r?.trainer||'').trim();
-      return norm(author)===targetNorm;
+    if(targetId!=null && Number.isFinite(rid) && rid>0){
+      return rid===targetId;
     }
-    // Staré záznamy bez trainerId sa určujú podľa uloženého autora.
+    // Iba staré záznamy bez trainerId sa určujú podľa uloženého autora.
+    if(String(r?.trainerId||'').trim()!=='') return false;
     const author=String(r?.savedBy||r?.trainer||r?.name||'').trim();
     return norm(author)===targetNorm;
   }).filter(r=>{
@@ -11691,7 +11674,7 @@ function resetHeadTrainerBillingMonth(){
 }
 
 function standardBottomNav(active='billing', forceAttendance=false){
-  const showAttendance = forceAttendance || !isHeadTrainer() || isAnatoliiAttendanceEditor();
+  const showAttendance = true;
   const navClass = forceAttendance && isHeadTrainer() ? 'bottom head-billing-nav' : 'bottom';
   return `<nav class="${navClass}">
     <a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
@@ -11709,15 +11692,13 @@ function enforceFixedRoleBottomNav(){
     document.querySelectorAll('nav.bottom').forEach(navEl=>{
       if(!navEl || navEl.dataset.roleFixed==='1') return;
       const attendance=navEl.querySelector('a[href="#attendance"]');
-      if(!head && !attendance){
+      if(!attendance){
         const members=navEl.querySelector('a[href="#members"]');
         if(members){
           const a=document.createElement('a'); a.className='nav nav-attendance'; a.href='#attendance'; a.onclick=()=>nav('attendance');
           a.innerHTML='<span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span>';
           members.parentNode.insertBefore(a,members);
         }
-      } else if(head && attendance){
-        attendance.remove();
       }
       navEl.dataset.roleFixed='1';
     });
@@ -13572,7 +13553,7 @@ function appBack(){
     if(r==='home'){ renderHome(); return; }
     if(r==='statistics') renderStatistics();
     else if(r==='calendar') renderCalendar();
-    else if(r==='attendance'){ if(isHeadTrainer() && !isAnatoliiAttendanceEditor()){ nav('home'); } else attendance(); }
+    else if(r==='attendance'){ attendance(); }
     else if(r==='training-billing') trainingBilling();
     else if(r==='trainer-month'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); else renderMonthlyBilling(); }
     else if(r==='billing'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); }

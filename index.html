@@ -9542,11 +9542,13 @@ async function refreshCurrentAttendanceFromCloud(){
           localSaved=Number(o[wantedKey]||0);
         }catch(e){}
         localSaved=Math.max(localSaved,getAttendancePendingSaveAt(attendanceState.date,attendanceState.group));
-        // Samostatný admin dokument je zdroj pravdy pre trénerovo zobrazenie.
-        // NEPOROVNÁVAME tu hodiny zariadení: telefóny môžu mať rozdielne
-        // systémové časy a potom by tréner mohol zostať na 0 aj keď admin
-        // práve uložil 2 prítomných. Tento dokument zapisuje iba administrátor.
-        if(d.history && typeof d.history==='object'){
+        // Samostatný admin dokument môže prepísať trénerovu dochádzku
+        // IBA vtedy, ak je adminova úprava novšia než posledné uloženie trénera.
+        // Predtým sa tu admin snapshot prijal vždy, takže staršia admin verzia
+        // mohla po uložení trénera jeho aktuálnu dochádzku spätne prepísať.
+        // Toto porovnanie je podľa konkrétneho dátumu + skupiny.
+        const adminIsNewer = remoteAdmin > localSaved;
+        if(adminIsNewer && d.history && typeof d.history==='object'){
           const hist=d.history;
           (attendanceState.members||[]).forEach(a=>{
             const x=hist[a.surname+'|'+a.name];

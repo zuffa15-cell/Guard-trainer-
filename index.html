@@ -1,5 +1,4 @@
 <!doctype html>
-<!-- Guard Trainer v959:  oprava cloud synchronizácie vyúčtovania medzi zariadeniami; prázdne lokálne vyúčtovanie už neprepíše cloud a prijaté vyúčtovanie sa na otvorenej karte okamžite zobrazí.
 <!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
@@ -45,14 +44,12 @@ try {
     cloudEnabled = true;
     console.log("✅ Firebase pripojené - sync zapnutý");
     initCloudSync();
-    setTimeout(()=>{try{ensureMemberCloudInitialized();}catch(e){}},100);
-    setTimeout(()=>{try{ensureTrainerCloudInitialized();}catch(e){}},150);
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-authoritative-v1','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-deleted-trainers-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -80,151 +77,6 @@ const GT_LOCAL_AUTH_KEYS = new Set([
 function isGTLocalAuthKey(key){ return GT_LOCAL_AUTH_KEYS.has(String(key||'')); }
 
 
-async function ensureMemberCloudInitialized(){
-  // SERVER JE ZDROJ PRAVDY. Lokálne členovia sa použijú iba pri úplne prvom
-  // vytvorení členského poľa na serveri. Ak server už pole obsahuje, lokálne
-  // dáta sa tam nikdy nesmú naslepo zapísať.
-  try{
-    if(!db || !cloudEnabled) return false;
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      if(Object.prototype.hasOwnProperty.call(data,'gt-members-real-2026-v847')) return;
-      let local=[];
-      try{ const x=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]'); if(Array.isArray(x)) local=x; }catch(e){}
-      const clean=local.filter(m=>m&&m.id!=null).map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;});
-      let order={};
-      try{ order=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}')||{}; }catch(e){}
-      tx.set(ref,{
-        'gt-members-real-2026-v847':JSON.stringify(clean),
-        'gt-member-save-order-v1':JSON.stringify(order),
-        'gt-member-delete-order-v1':originalGetItem('gt-member-delete-order-v1')||'{}',
-        _updatedAt:Date.now()
-      },{merge:true});
-    });
-    return true;
-  }catch(e){ console.warn('Guard Trainer: inicializácia členov na serveri zlyhala',e); return false; }
-}
-
-function applyAuthoritativeRemoteMembers(data){
-  // Toto je jediný spôsob, ktorým sa členovia prijímajú zo servera.
-  // Ak server členské pole má, jeho obsah kompletne nahradí lokálnu kópiu.
-  // Žiadny merge lokálnych členov späť do serverovej pravdy.
-  try{
-    if(!data || !Object.prototype.hasOwnProperty.call(data,'gt-members-real-2026-v847')) return false;
-    let remoteMembers=[];
-    try{ const x=JSON.parse(data['gt-members-real-2026-v847']||'[]'); if(Array.isArray(x)) remoteMembers=x; }catch(e){}
-    let remoteDelete={};
-    try{ const x=JSON.parse(data['gt-member-delete-order-v1']||'{}'); if(x&&typeof x==='object') remoteDelete=x; }catch(e){}
-    const clean=remoteMembers.filter(m=>m&&m.id!=null && Number(remoteDelete[String(m.id)]||0)<=0)
-      .map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;});
-    membersData.splice(0,membersData.length,...clean);
-    try{ normalizeAllMembers(); }catch(e){}
-    originalSetItem('gt-members-real-2026-v847',JSON.stringify(membersData));
-    if(Object.prototype.hasOwnProperty.call(data,'gt-member-save-order-v1'))
-      originalSetItem('gt-member-save-order-v1',String(data['gt-member-save-order-v1']||'{}'));
-    if(Object.prototype.hasOwnProperty.call(data,'gt-member-delete-order-v1'))
-      originalSetItem('gt-member-delete-order-v1',String(data['gt-member-delete-order-v1']||'{}'));
-    console.log('📥 ČLENOVIA: server je zdroj pravdy – lokálny zoznam nahradený serverovým');
-    return true;
-  }catch(e){ console.warn('Guard Trainer: prijatie serverového zoznamu členov zlyhalo',e); return false; }
-}
-
-async function ensureTrainerCloudInitialized(){
-  // TRÉNERI: server je zdroj pravdy. Lokálna štvorica sa použije iba pri
-  // prvom vytvorení autoritatívneho registra na serveri.
-  try{
-    if(!db || !cloudEnabled) return false;
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      if(Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1')) return;
-      let local=[];
-      try{ const x=JSON.parse(originalGetItem(TRAINERS_STORAGE_KEY)||'[]'); if(Array.isArray(x)) local=x; }catch(e){}
-      const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-      const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
-      const clean=wanted.map((w,idx)=>{
-        const hit=local.find(t=>t&&norm(t.full||t.name)===norm(w[0]));
-        const base=hit?{...hit}:{};
-        return {...base,id:base.id!=null?base.id:(idx+1),name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?[...base.groups]:[]};
-      });
-      tx.set(ref,{
-        'gt-trainers-authoritative-v1':JSON.stringify(clean),
-        'gt-trainers':JSON.stringify(clean),
-        [TRAINERS_STORAGE_KEY]:JSON.stringify(clean),
-        _lastUpdateBy:firebase.auth().currentUser?.uid||'unknown',
-        _updatedAt:Date.now()
-      },{merge:true});
-    });
-    return true;
-  }catch(e){ console.warn('Guard Trainer: inicializácia trénerov na serveri zlyhala',e); return false; }
-}
-
-function applyAuthoritativeRemoteTrainers(data){
-  try{
-    if(!data || !Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1')) return false;
-    let remote=[];
-    try{ const x=JSON.parse(data['gt-trainers-authoritative-v1']||'[]'); if(Array.isArray(x)) remote=x; }catch(e){}
-    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
-    const exact=wanted.map((w,idx)=>{
-      const hit=remote.find(t=>t&&norm(t.full||t.name)===norm(w[0]));
-      const base=hit?{...hit}:{};
-      return {...base,id:base.id!=null?base.id:(idx+1),name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?[...base.groups]:[]};
-    });
-    trainersData.splice(0,trainersData.length,...exact);
-    originalSetItem(TRAINERS_STORAGE_KEY,JSON.stringify(exact));
-    originalSetItem('gt-trainers',JSON.stringify(exact));
-    console.log('📥 TRÉNERI: server je zdroj pravdy – lokálny zoznam nahradený serverovým');
-    return true;
-  }catch(e){ console.warn('Guard Trainer: prijatie serverových trénerov zlyhalo',e); return false; }
-}
-
-async function syncTrainerProfileToCloud(trainer){
-  try{
-    if(!db || !cloudEnabled || !trainer || trainer.id==null) return false;
-    const id=String(trainer.id), uid=firebase.auth().currentUser?.uid||'unknown';
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      let current=[];
-      try{ const x=JSON.parse(data['gt-trainers-authoritative-v1']||'[]'); if(Array.isArray(x)) current=x; }catch(e){}
-      if(!current.length){
-        try{ const x=JSON.parse(data[TRAINERS_STORAGE_KEY]||'[]'); if(Array.isArray(x)) current=x; }catch(e){}
-      }
-      const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
-      const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-      const byId=new Map(current.filter(x=>x&&x.id!=null).map(x=>[String(x.id),x]));
-      const byName=new Map(current.filter(x=>x).map(x=>[norm(x.full||x.name),x]));
-      const base=byId.get(id)||byName.get(norm(trainer.full||trainer.name));
-      const updated={...(base||{}),...trainer};
-      // ID, meno a funkcia zostávajú kanonické.
-      const canonical=wanted.find(w=>norm(w[0])===norm(updated.full||updated.name));
-      if(canonical){ updated.name=canonical[0]; updated.full=canonical[0]; updated.role=canonical[1]; }
-      updated.active=true; updated.status='AKTÍVNA';
-      const result=[];
-      wanted.forEach((w,idx)=>{
-        const existing=current.find(x=>x&&norm(x.full||x.name)===norm(w[0]));
-        let x=existing?{...existing}:{id:idx+1,name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:[]};
-        if(norm(w[0])===norm(updated.full||updated.name)) x={...x,...updated};
-        x.name=w[0]; x.full=w[0]; x.role=w[1]; x.active=true; x.status='AKTÍVNA'; x.groups=Array.isArray(x.groups)?x.groups:[];
-        result.push(x);
-      });
-      tx.set(ref,{
-        'gt-trainers-authoritative-v1':JSON.stringify(result),
-        'gt-trainers':JSON.stringify(result),
-        [TRAINERS_STORAGE_KEY]:JSON.stringify(result),
-        _lastUpdateBy:uid,
-        _updatedAt:Date.now()
-      },{merge:true});
-    });
-    return true;
-  }catch(e){ console.warn('Guard Trainer: uloženie trénera na server zlyhalo',e); return false; }
-}
-
 function initCloudSync(){
   if(!db) return;
   
@@ -234,13 +86,6 @@ function initCloudSync(){
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
     if(!data) return;
-    // ČLENOVIA: pri každom cudzom cloud snapshote je serverová verzia jediná pravda.
-    // Tento krok musí prebehnúť ešte pred globálnym stale-checkom, aby starší
-    // _updatedAt dokumentu nikdy nezablokoval nové členstvo.
-    const hasRemoteMembers=Object.prototype.hasOwnProperty.call(data,'gt-members-real-2026-v847');
-    const hasRemoteTrainers=Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1');
-    if(hasRemoteMembers && data._lastUpdateBy !== myUid) applyAuthoritativeRemoteMembers(data);
-    if(hasRemoteTrainers && data._lastUpdateBy !== myUid) applyAuthoritativeRemoteTrainers(data);
     if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
       // moje vlastné zmeny - ignoruj
       return;
@@ -251,8 +96,7 @@ function initCloudSync(){
       // _updatedAt môže byť vyšší, hoci admin-edit pre konkrétny tréning
       // je novší.
       let newerAttendance=false;
-      let newerBilling=false;
-      let newerMembers=hasRemoteMembers && data._lastUpdateBy !== myUid;
+      let newerMembers=false;
       // Členovia majú vlastný timestamp podľa ID. Globálny _updatedAt nesmie
       // zablokovať prijatie nového člena z administrátorského zariadenia.
       try{
@@ -284,32 +128,6 @@ function initCloudSync(){
           try{return JSON.stringify(local)!==JSON.stringify(m);}catch(e){return false;}
         });
       }catch(e){}
-      // VYÚČTOVANIE má vlastný záznamový čas (savedAt), preto globálny
-      // _updatedAt dokumentu nesmie zablokovať cloudové vyúčtovanie.
-      // Typický prípad: Kalendár/Dochádzka je novšia na mobile, ale samotné
-      // vyúčtovanie bolo uložené skôr na druhom zariadení. Ak by sme tu
-      // vyhodili celý snapshot ako starý, trénerovi by sa zobrazilo 0 tréningov.
-      try{
-        const remoteBillingRaw=data['gt-monthly-billing-v221'];
-        const localBillingRaw=originalGetItem('gt-monthly-billing-v221');
-        const remoteBilling=remoteBillingRaw?JSON.parse(remoteBillingRaw):[];
-        const localBilling=localBillingRaw?JSON.parse(localBillingRaw):[];
-        const normBilling=v=>String(v||'').trim().toUpperCase();
-        const billingKey=r=>{
-          const d=parsePaymentDate(r&&r.date);
-          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
-          return `${normBilling(r&&r.trainer)}|${dk}|${normBilling(r&&r.group)}`;
-        };
-        const localMap=new Map();
-        if(Array.isArray(localBilling)) localBilling.forEach(r=>localMap.set(billingKey(r),r));
-        if(Array.isArray(remoteBilling)) remoteBilling.forEach(r=>{
-          const key=billingKey(r), l=localMap.get(key);
-          if(!l){ newerBilling=true; return; }
-          const rt=Number(r&&r.savedAt||r&&r.updatedAt||r&&r.createdAt||0);
-          const lt=Number(l&&l.savedAt||l&&l.updatedAt||l&&l.createdAt||0);
-          if(rt>lt) newerBilling=true;
-        });
-      }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
         const localAdmin=originalGetItem('gt-attendance-admin-edits-v1')?JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')):{};
@@ -326,9 +144,8 @@ function initCloudSync(){
           });
         }
       }catch(e){}
-      if(!newerAttendance && !newerBilling && !newerMembers) return;
+      if(!newerAttendance && !newerMembers) return;
       if(newerMembers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších členov – prijímam');
-      else if(newerBilling) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšie vyúčtovanie – prijímam');
       else console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
     }
     
@@ -459,45 +276,6 @@ function initCloudSync(){
           if(mergedRaw!==originalGetItem(k)){ originalSetItem(k,mergedRaw); changed=true; }
           return;
         }
-        if(k==='gt-trainers-authoritative-v1'){
-          // Autoritatívny register trénerov sa prijíma celý zo servera.
-          applyAuthoritativeRemoteTrainers(data);
-          return;
-        }
-        if(k==='gt-trainers'){
-          // Starý kompatibilný register – autoritatívny register má prednosť.
-          let localTs=[], remoteTs=[];
-          try{ const x=originalGetItem(k); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localTs=p; }catch(e){}
-          try{ const p=data[k]?JSON.parse(data[k]):[]; if(Array.isArray(p)) remoteTs=p; }catch(e){}
-          const norm=n=>String(n||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-          const score=t=>!t||typeof t!=='object'?-1:Object.keys(t).filter(x=>t[x]!==''&&t[x]!=null).length+(t.loginPassword?20:0)+(Array.isArray(t.groups)?t.groups.length:0);
-          const merged=[], byName=new Map(), byId=new Map();
-          const put=t=>{
-            if(!t||typeof t!=='object') return;
-            const name=norm(t.full||t.name), id=String(t.id??''); let i=-1;
-            if(name&&byName.has(name)) i=byName.get(name); else if(id&&byId.has(id)) i=byId.get(id);
-            if(i<0){ i=merged.length; merged.push({...t}); if(name)byName.set(name,i); if(id)byId.set(id,i); return; }
-            const cur=merged[i]; merged[i]=score(t)>score(cur)?{...cur,...t}:{...t,...cur};
-          };
-          localTs.forEach(put); remoteTs.forEach(put);
-          const raw=JSON.stringify(merged);
-          if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
-          try{ if(Array.isArray(trainersData)){ trainersData.splice(0,trainersData.length,...merged); } }catch(e){}
-          try{ canonicalizeTrainers(); }catch(e){}
-          return;
-        }
-        if(k==='gt-trainer-login-passwords'){
-          let l={},r={};
-          try{l=JSON.parse(originalGetItem(k)||'{}')||{};}catch(e){}
-          try{r=JSON.parse(data[k]||'{}')||{};}catch(e){}
-          const m={...l};
-          Object.keys(r).forEach(id=>{
-            if(!m[id]) m[id]=r[id];
-            else { const ls=Object.keys(m[id]||{}).length+(m[id]?.password?20:0), rs=Object.keys(r[id]||{}).length+(r[id]?.password?20:0); if(rs>=ls)m[id]={...m[id],...r[id]}; }
-          });
-          const raw=JSON.stringify(m); if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
-          return;
-        }
         if(k==='gt-attendance-admin-edits-v1'){
           // Samostatný register úprav administrátora. Slúži iba na to,
           // aby zariadenie trénera vedelo, že konkrétny deň/skupinu zmenil
@@ -569,12 +347,6 @@ function initCloudSync(){
           memberSyncHandled=true;
           return;
         }
-        if((k==='gt-attendance' || k==='gt-training-attendance' || k==='gt-trainer-login-passwords') && !String(data[k]||'').trim() && String(originalGetItem(k)||'').trim()) return;
-        if(/^gt-trainers-v\d+$/.test(k)){
-          const raw=JSON.stringify(mergeTrainerRegistersSafe(originalGetItem(k),data[k]));
-          if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
-          return;
-        }
         if(originalGetItem(k) !== data[k]) {
           originalSetItem(k, data[k]);
           changed = true;
@@ -584,8 +356,7 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1' || k==='gt-trainers-authoritative-v1' || k==='gt-trainers' || k===TRAINERS_STORAGE_KEY) return;
-        if(/^gt-trainers-v\d+$/.test(k)) return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           originalSetItem(k, data[k]);
           changed = true;
@@ -600,10 +371,6 @@ function initCloudSync(){
       setTimeout(()=>pushToCloud(true), 100);
     }
     try{ applyMemberApplicationFiles(); }catch(e){}
-    try{ canonicalizeTrainers(); }catch(e){}
-    try{ syncTrainerGroupsFromSchedules(); }catch(e){}
-    // Autoritatívni tréneri: po snapshote používaj presne serverový register.
-    try{ if(Object.prototype.hasOwnProperty.call(data,'gt-trainers-authoritative-v1')) applyAuthoritativeRemoteTrainers(data); }catch(e){}
     cloudInitialSnapshotReady = true;
 
         if(changed) {
@@ -664,15 +431,8 @@ function initCloudSync(){
         // Dáta sa iba aktualizujú na pozadí; navigáciu ovláda výhradne používateľ.
 
         try{if(typeof updateHomeGroupCounts==='function') updateHomeGroupCounts();}catch(e){}
-        // Ak je práve otvorené Moje vyúčtovanie, po prijatí cloudového
-        // vyúčtovania ho okamžite prekresli. Ostatné obrazovky sa nemenia.
-        try{
-          if((location.hash==='#trainer-month' || location.hash==='#billing') &&
-             !isAdmin() && !isHeadTrainer() && typeof renderMonthlyBilling==='function'){
-            setTimeout(()=>{try{renderMonthlyBilling();}catch(e){console.warn('Billing cloud refresh failed:',e);}},0);
-          }
-        }catch(e){}
-        console.log('Cloud sync: dáta aktualizované na pozadí');
+        // ZIADNE auto prekreslovanie, ZIADNE tlacidlo - uzivatel spravi velky refresh rucne
+        console.log('Cloud sync: data aktualizovane na pozadi, caka na velky refresh');
         // Ak administrátor upravil dochádzku, zariadenie trénera musí zmenu
         // okamžite premietnuť aj do práve otvorenej obrazovky Dochádzka.
         // Rozhodujeme podľa timestampu konkrétneho dátumu/skupiny: starší
@@ -735,45 +495,6 @@ function initCloudSync(){
     syncEnabled = true;
 }
 
-const DELETED_TRAINERS_KEY='gt-deleted-trainers-v1';
-function getDeletedTrainerTombstones(){
-  try{ const x=JSON.parse(originalGetItem(DELETED_TRAINERS_KEY)||'{}'); return (x&&typeof x==='object')?x:{}; }catch(e){ return {}; }
-}
-function markTrainerDeleted(t){
-  try{
-    const d=getDeletedTrainerTombstones();
-    const id=t&&t.id!=null?String(t.id):'';
-    const full=String(t&& (t.full||t.name)||'').trim();
-    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    if(id) d['id:'+id]={name:full,at:Date.now()};
-    if(full) d['name:'+norm(full)]={id:id,at:Date.now()};
-    originalSetItem(DELETED_TRAINERS_KEY,JSON.stringify(d));
-  }catch(e){}
-}
-function isTrainerDeleted(t){
-  try{
-    if(!t) return false;
-    const d=getDeletedTrainerTombstones();
-    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    const id=t.id!=null?String(t.id):''; const full=String(t.full||t.name||'').trim();
-    return (!!id && !!d['id:'+id]) || (!!full && !!d['name:'+norm(full)]);
-  }catch(e){return false;}
-}
-
-function mergeTrainerRegistersSafe(localRaw, remoteRaw){
-  let L=[],R=[];
-  try{const x=localRaw?JSON.parse(localRaw):[];if(Array.isArray(x))L=x;}catch(e){}
-  try{const x=remoteRaw?JSON.parse(remoteRaw):[];if(Array.isArray(x))R=x;}catch(e){}
-  const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const wanted=[['Peter Onuščák','TRÉNER'],['Viktor Žuffa','TRÉNER'],['Anatolii Kuhal','TRÉNER'],['Hlavný tréner','HLAVNÝ TRÉNER']];
-  const all=[...L,...R];
-  return wanted.map((w,idx)=>{
-    const hits=all.filter(x=>x&&norm(x.full||x.name)===norm(w[0])&&!isTrainerDeleted(x));
-    const base=hits.length?{...hits[hits.length-1]}:{};
-    return {...base,id:base.id!=null?base.id:(idx+1),name:w[0],full:w[0],role:w[1],active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?base.groups:[]};
-  });
-}
-
 function pushToCloud(force = false){
   if(!db || !cloudEnabled) return;
   // Ak práve spracúvame prichádzajúci cloud snapshot, zápis administrátora
@@ -787,9 +508,6 @@ function pushToCloud(force = false){
   const payload = {_lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
   lastCloudUpdate = payload._updatedAt;
   SYNC_KEYS.forEach(k=>{
-    // ČLENOVIA sa nikdy neposielajú cez všeobecný pushToCloud.
-    // Zápis člena robí výhradne syncMemberChangeToSharedCloud() transakčne po ID.
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY) return;
     let v = originalGetItem(k);
     if(k==='gt-members-real-2026-v847' && v){
       try{ const arr=JSON.parse(v); if(Array.isArray(arr)) v=JSON.stringify(arr.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})); }catch(e){}
@@ -798,7 +516,6 @@ function pushToCloud(force = false){
   });
   Object.keys(localStorage).forEach(k=>{
     if(isGTLocalAuthKey(k)) return;
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-trainers' || k==='gt-trainers-authoritative-v1' || k===TRAINERS_STORAGE_KEY) return;
     if(k.startsWith('gt-') && !payload[k]){
       const v=originalGetItem(k);
       if(v) payload[k]=v;
@@ -813,66 +530,30 @@ function pushToCloud(force = false){
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
     try{
       const remote=doc.exists?doc.data():{};
-      // TRÉNERI: autoritatívny register sa zapisuje výhradne transakciou
-      // syncTrainerProfileToCloud(). Všeobecný push ho nesmie prepísať.
-      // Login register trénerov: union, nikdy neprázdni účty na inom zariadení.
-      {
-        let l={},r={}; try{l=JSON.parse(payload['gt-trainer-login-passwords']||'{}')||{};}catch(e){} try{r=JSON.parse(remote['gt-trainer-login-passwords']||'{}')||{};}catch(e){}
-        const m={...r,...l}; Object.keys(r).forEach(id=>{if(!l[id])m[id]=r[id];});
-        payload['gt-trainer-login-passwords']=JSON.stringify(m);
-      }
       const mergeJsonMaps=(localRaw,remoteRaw)=>{
         let l={},r={};
         try{const x=localRaw?JSON.parse(localRaw):{};if(x&&typeof x==='object')l=x;}catch(e){}
         try{const x=remoteRaw?JSON.parse(remoteRaw):{};if(x&&typeof x==='object')r=x;}catch(e){}
         return {l,r};
       };
-      // ČLENOVIA: ŽIADNY všeobecný merge. Serverový zoznam sa mení iba
-      // transakciou syncMemberChangeToSharedCloud(member). Týmto sa zabráni,
-      // aby telefón so staršou lokálnou kópiou prepísal serverovú pravdu.
-
-      // VYÚČTOVANIE: nikdy neposielaj prázdnu/staršiu lokálnu kópiu cez
-      // existujúce cloudové vyúčtovanie. Presne toto spôsobovalo, že druhé
-      // zariadenie mohlo po synchronizácii ukázať 0 tréningov a následne
-      // prepísať spoločné vyúčtovanie prázdnym poľom. Zlúčime záznamy podľa
-      // tréner + dátum + skupina; pri konflikte vyhrá novšie uloženie.
+      // ČLENOVIA: zlúčenie po ID + tombstone pre vymazanie.
       {
-        let localRows=[], remoteRows=[];
-        try{ const x=payload['gt-monthly-billing-v221']; const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localRows=p; }catch(e){}
-        try{ const x=remote['gt-monthly-billing-v221']; const p=x?JSON.parse(x):[]; if(Array.isArray(p)) remoteRows=p; }catch(e){}
-        const normBilling=v=>String(v||'').trim().toUpperCase();
-        const billingKey=r=>{
-          const d=parsePaymentDate(r&&r.date);
-          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
-          return `${normBilling(r&&r.trainer)}|${dk}|${normBilling(r&&r.group)}`;
-        };
-        const mergedMap=new Map();
-        const putBilling=row=>{
-          if(!row) return;
-          const key=billingKey(row); if(!key || key.startsWith('|')) return;
-          const prev=mergedMap.get(key);
-          if(!prev){ mergedMap.set(key,row); return; }
-          // Reálny finančný záznam má prednosť pred informačným záznamom
-          // o zastupovaní. Ak sú oba reálne, rozhoduje savedAt/updatedAt.
-          if(prev.substituteReference && !row.substituteReference){ mergedMap.set(key,row); return; }
-          if(!prev.substituteReference && row.substituteReference){ return; }
-          const pa=Number(prev.savedAt||prev.updatedAt||prev.createdAt||0);
-          const ra=Number(row.savedAt||row.updatedAt||row.createdAt||0);
-          if(ra>=pa) mergedMap.set(key,row);
-        };
-        // Remote ide prvé: lokálny prázdny register už nikdy nevymaže cloud.
-        remoteRows.forEach(putBilling); localRows.forEach(putBilling);
-        const mergedRows=Array.from(mergedMap.values());
-        payload['gt-monthly-billing-v221']=JSON.stringify(mergedRows);
-        // Dôležité: ak telefón nemal vlastné vyúčtovanie, okamžite si ponechá
-        // zlúčenú cloudovú verziu aj lokálne. Nemusí čakať na ďalší refresh.
-        try{ monthlyBillingRecords=mergedRows; }catch(e){}
-        try{ originalSetItem('gt-monthly-billing-v221',JSON.stringify(mergedRows)); }catch(e){}
+        let localMembers=[], remoteMembers=[], localOrder={}, remoteOrder={}, localDel={}, remoteDel={};
+        try{const x=payload['gt-members-real-2026-v847']?JSON.parse(payload['gt-members-real-2026-v847']):[];if(Array.isArray(x))localMembers=x;}catch(e){}
+        try{const x=remote['gt-members-real-2026-v847']?JSON.parse(remote['gt-members-real-2026-v847']):[];if(Array.isArray(x))remoteMembers=x;}catch(e){}
+        try{localOrder=JSON.parse(payload['gt-member-save-order-v1']||'{}')||{};}catch(e){}
+        try{remoteOrder=JSON.parse(remote['gt-member-save-order-v1']||'{}')||{};}catch(e){}
+        try{localDel=JSON.parse(payload['gt-member-delete-order-v1']||'{}')||{};}catch(e){}
+        try{remoteDel=JSON.parse(remote['gt-member-delete-order-v1']||'{}')||{};}catch(e){}
+        const del={...remoteDel}; Object.keys(localDel).forEach(id=>del[id]=Math.max(Number(del[id]||0),Number(localDel[id]||0)));
+        const byId=new Map(); localMembers.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
+        remoteMembers.forEach(m=>{if(!m||m.id==null)return;const id=String(m.id);if(Number(del[id]||0)>0)return;const local=byId.get(id);const lt=Number(localOrder[id]||0),rt=Number(remoteOrder[id]||0);if(!local||rt>lt)byId.set(id,m);});
+        Object.keys(del).forEach(id=>{if(Number(del[id]||0)>0)byId.delete(id);});
+        payload['gt-members-real-2026-v847']=JSON.stringify(Array.from(byId.values()).map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;}));
+        const mergedOrder={}; new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0)));
+        payload['gt-member-save-order-v1']=JSON.stringify(mergedOrder); payload['gt-member-delete-order-v1']=JSON.stringify(del);
       }
 
-      ['gt-attendance','gt-training-attendance'].forEach(k=>{
-        if(!String(payload[k]||'').trim() && String(remote[k]||'').trim()) payload[k]=remote[k];
-      });
       // Save-order timestampy: vždy zachovaj union oboch zariadení.
       {
         const {l,r}=mergeJsonMaps(payload['gt-attendance-save-order-v1'],remote['gt-attendance-save-order-v1']);
@@ -4043,7 +3724,6 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
  padding:4px 7px;border-radius:8px;cursor:pointer;
 }
 .member-delete-btn:active{background:#dc2626;color:#fff}
-@media(max-width:700px){.member-delete-btn{display:inline-flex!important;align-items:center;justify-content:center;width:30px;height:30px;font-size:18px;padding:0!important;position:relative;z-index:5}.member-flags{display:flex!important;visibility:visible!important;opacity:1!important}}
 </style>
 <style id="gt-topbar-logged-user-v902">
 .topbar .brand.gt-brand-with-user{display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:1px!important;line-height:1.05!important;}
@@ -4209,17 +3889,6 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
          if(finished)return;
          const data=doc.exists?doc.data():{};
-
-         // 0) Autoritatívny profilový register zo servera.
-         try{
-           if(data['gt-trainers-authoritative-v1']){
-             const ar=JSON.parse(data['gt-trainers-authoritative-v1']||'[]');
-             if(Array.isArray(ar)){
-               const hit=ar.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
-               if(hit){ finish(hit); return; }
-             }
-           }
-         }catch(e){}
 
          // 1) Primárne vyhľadaj v samostatnom zozname hesiel.
          try{
@@ -5837,10 +5506,9 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:1,name:'Peter Onuščák',full:'Peter Onuščák',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
- {id:2,name:'Viktor Žuffa',full:'Viktor Žuffa',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
- {id:3,name:'Anatolii Kuhal',full:'Anatolii Kuhal',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
- {id:4,name:'Hlavný tréner',full:'Hlavný tréner',role:'HLAVNÝ TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'}
+ {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
+ {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
+ {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
 ];
 const TRAINERS_STORAGE_KEY='gt-trainers-v395';
 try{
@@ -5868,8 +5536,9 @@ try{
     })).filter(t=>t.full||t.name);
     const legacyDemo=new Set(['Martin Lukáč','Tomáš Varga','Ivana Kováčová','Róbert Horváth','Martin L.','Tomáš V.','Ivana K.','Róbert H.']);
     const cleaned=normalized.filter(t=>!legacyDemo.has(String(t.full||t.name||'').trim()));
+    if(!cleaned.some(t=>String(t.full||t.name||'').trim()==='Tréner 1')) cleaned.push({id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'});
+    if(!cleaned.some(t=>String(t.full||t.name||'').trim()==='Tréner 2')) cleaned.push({id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'});
     trainersData.splice(0,trainersData.length,...cleaned);
-    canonicalizeTrainers();
     persistTrainersData();
   }
 }catch(e){ console.warn('Načítanie trénerov z pamäte sa nepodarilo',e); }
@@ -5877,44 +5546,6 @@ function persistTrainersData(){
   try{ localStorage.setItem(TRAINERS_STORAGE_KEY,JSON.stringify(trainersData)); }
   catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
 }
-
-/* v975 – KANONICKÝ ZOZNAM TRÉNEROV: v aplikácii sú iba 4 profily. */
-function canonicalizeTrainers(){
-  try{
-    const wanted=[
-      {full:'Peter Onuščák',role:'TRÉNER'},
-      {full:'Viktor Žuffa',role:'TRÉNER'},
-      {full:'Anatolii Kuhal',role:'TRÉNER'},
-      {full:'Hlavný tréner',role:'HLAVNÝ TRÉNER'}
-    ];
-    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    const old=Array.isArray(trainersData)?trainersData:[];
-    const next=wanted.map((w,idx)=>{
-      const hit=old.find(x=>norm(x.full||x.name)===norm(w.full));
-      const base=hit?{...hit}:{};
-      return {...base,id:hit?.id!=null?hit.id:(idx+1),name:w.full,full:w.full,role:w.role,email:String(base.email||''),phone:String(base.phone||''),license:String(base.license||''),valid:String(base.valid||''),active:true,status:'AKTÍVNA',groups:Array.isArray(base.groups)?base.groups:[]};
-    });
-    trainersData.splice(0,trainersData.length,...next);
-    return next;
-  }catch(e){ return trainersData; }
-}
-canonicalizeTrainers();
-persistTrainersData();
-
-(function cleanupTrainerSchedules(){
-  try{
-    const schedules=JSON.parse(originalGetItem('gt-schedule')||'[]')||[];
-    const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    const allowed=new Set(['peter onuscak','viktor zuffa','anatolii kuhal','hlavny trener']);
-    schedules.forEach(s=>{
-      if(Array.isArray(s.trainers)) s.trainers=s.trainers.filter(n=>allowed.has(norm(n)));
-      if(s.trainer && !allowed.has(norm(s.trainer))) s.trainer='';
-      if(Array.isArray(s.trainerIds)) s.trainerIds=s.trainerIds.filter(id=>(trainersData||[]).some(x=>Number(x.id)===Number(id)));
-      if(s.trainerId!=null && !(trainersData||[]).some(x=>Number(x.id)===Number(s.trainerId))) s.trainerId=null;
-    });
-    originalSetItem('gt-schedule',JSON.stringify(schedules));
-  }catch(e){}
-})();
 
 /* v531 – synchronizácia priradenia tréner ↔ skupina.
    Zdrojom sú uložené rozvrhy (trainerIds + groupCode). Profil trénera
@@ -6019,17 +5650,28 @@ function visibleTrainerProfiles(){
   // a login account and never included in trainer accounting.
   return (trainersData||[]).filter(t=>!isTestTrainerAccount(t));
 }
-function ensureTemplateTrainer(){ return null; }
-function openTrainerManagement(){
-  try{ renderTrainers(); }catch(e){ console.error('SPRÁVA TRÉNEROV:',e); toast('Správa trénerov sa nepodarila otvoriť.'); }
-  return false;
+function ensureTemplateTrainer(){
+  try{
+    if(!Array.isArray(trainersData)) return null;
+    let t=trainersData.find(x=>x.isTemplate===true || String(x.full||x.name||'').trim().toUpperCase()==='VZOROVÝ TRÉNER');
+    if(!t){
+      const id=Math.max(0,...trainersData.map(x=>Number(x.id)||0))+1;
+      t={id,full:'VZOROVÝ TRÉNER',name:'VZOROVÝ TRÉNER',email:'',phone:'',
+        role:'TRÉNER',license:'',valid:'',status:'VZOR',active:false,
+        groups:[],loginPassword:'',loginPasswordSet:false,isTemplate:true};
+      trainersData.push(t);
+      persistTrainersData();
+    }
+    return t;
+  }catch(e){return null;}
 }
 function renderTrainers(){
- canonicalizeTrainers();
- persistTrainersData();
- // Profilové priradenia sú autoritatívne. Zoznam trénerov obsahuje presne 4 profily.
+ ensureTemplateTrainer();
+ // Profile assignments are authoritative. Do not overwrite them from the
+ // schedule when the trainer list is opened.
+ ensureTemplateTrainer();
  const app=document.querySelector('.app');
- const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>{ const vv=String(t.valid||'').trim(); const d=vv?new Date(vv.split('.').reverse().join('-')):null; return !t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && (!d || isNaN(d.getTime()) || d>=new Date()); }).length;
+ const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainers-page">
@@ -6133,29 +5775,9 @@ function deleteTrainerProfile(id){
  if(!canEditTrainerProfile()){toast('Trénera môže zmazať iba administrátor');return;}
  const t=trainersData.find(x=>x.id===id); if(!t)return;
  if(confirm(`Naozaj chcete zmazať trénera ${t.full}?`)){
-   const i=trainersData.findIndex(x=>Number(x.id)===Number(id));
+   const i=trainersData.findIndex(x=>x.id===id);
    if(i>=0) trainersData.splice(i,1);
-   // Trvalé vymazanie: zapíš tombstone ešte pred cloud synchronizáciou,
-   // aby staršia lokálna/cloudová kópia trénera nemohla profil znovu vytvoriť.
-   markTrainerDeleted(t);
-   try{
-     const keys=Object.keys(localStorage).filter(k=>/^gt-trainers-v\d+$/.test(k)||k==='gt-trainers');
-     keys.forEach(k=>{
-       try{
-         const a=JSON.parse(originalGetItem(k)||'[]');
-         if(Array.isArray(a)) originalSetItem(k,JSON.stringify(a.filter(x=>!isTrainerDeleted(x))));
-       }catch(e){}
-     });
-   }catch(e){}
-   try{
-     const lr=JSON.parse(originalGetItem('gt-trainer-login-passwords')||'{}')||{};
-     [String(id),String(t.id)].forEach(k=>{delete lr[k];});
-     const norm=n=>String(n||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-     Object.keys(lr).forEach(k=>{const v=lr[k];if(v&&norm(v.full||v.name)===norm(t.full||t.name))delete lr[k];});
-     originalSetItem('gt-trainer-login-passwords',JSON.stringify(lr));
-   }catch(e){}
    persistTrainersData();
-   try{ pushToCloud(true); }catch(e){}
    renderTrainers();
  }
 }
@@ -6171,7 +5793,7 @@ function lockTrainerProfileForTrainer(){
     el.onclick=null;
   });
 }
-async function saveTrainerProfile(id){
+function saveTrainerProfile(id){
  try{
    if(!canEditTrainerProfile()){toast('Údaje trénera môže meniť iba administrátor');return;}
    const list=visibleTrainerProfiles();
@@ -6229,12 +5851,17 @@ async function saveTrainerProfile(id){
      }catch(e){}
    }
    persistTrainersData();
-   // Profil trénera zapisuj transakčne podľa ID. Server je jediný zdroj pravdy.
-   const serverSaved = await syncTrainerProfileToCloud(t);
-   if(!serverSaved){
-     toast('Profil trénera sa nepodarilo uložiť na server');
-     return;
-   }
+   // Heslo trénera musí ísť okamžite aj do existujúceho Firebase cloudu,
+   // aby ho vedelo použiť druhé zariadenie.
+   try{
+     if(typeof pushToCloud==='function'){
+       setTimeout(()=>{try{pushToCloud()}catch(e){}},500);
+       setTimeout(()=>{try{pushToCloud()}catch(e){}},2500);
+       setTimeout(()=>{try{pushToCloud()}catch(e){}},5000);
+     }
+   }catch(e){}
+
+
    const btn=document.getElementById('trainerProfileSaveBtn');
    if(btn){
      btn.style.setProperty('background','#27c93f','important');
@@ -6818,11 +6445,17 @@ persistPaymentHistory();
 loadMemberNotes();
 
 /* v224 – lifetime payment history; membership status is year-specific. */
-/* v989: NIKDY automaticky nemaž vyúčtovania pri štarte aplikácie.
-   Starý jednorazový testovací cleanup v272 mazal gt-monthly-billing-v221
-   na zariadeniach, kde ešte nebol nastavený marker. To spôsobovalo, že
-   vyúčtovania trénerov (vrátane Viktora Žuffu) zmizli alebo sa zobrazili ako 0.
-   Historické dáta sa už pri štarte nesmú mazať. */
+/* v272 clean test start: remove old payment/billing test data once, then persist normally. */
+try{
+  if(localStorage.getItem('gt-clean-test-v272')!=='1'){
+    localStorage.removeItem('gt-member-payment-history-v224');
+    localStorage.removeItem('gt-monthly-billing-v221');
+    Object.keys(localStorage).forEach(k=>{
+      if(/^gt-monthly-billing-v/.test(k)) localStorage.removeItem(k);
+    });
+    localStorage.setItem('gt-clean-test-v272','1');
+  }
+}catch(e){}
 const PAYMENT_HISTORY_KEY='gt-member-payment-history-real-2026-v847';
 let paymentHistoryStore={membership:[{"memberId":1,"surname":"ABDI","name":"Samuel","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":1,"surname":"ABDI","name":"Samuel","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":2,"surname":"ANDEROVÁ","name":"Nina","groups":["B"],"paidGroup":"B","date":"","amount":25.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":7,"surname":"BAZHENOV","name":"Denis","groups":[""],"paidGroup":"","date":"","amount":5.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":7,"surname":"BAZHENOV","name":"Denis","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":9,"surname":"BEKEČ","name":"Tobias","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":10,"surname":"BENKO","name":"Karin","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":10,"surname":"BENKO","name":"Karin","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":11,"surname":"BODNÁR","name":"Jakub","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":12,"surname":"BOLDI","name":"Jakub","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":12,"surname":"BOLDI","name":"Jakub","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":13,"surname":"BOROVSKÝ","name":"Filip","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":13,"surname":"BOROVSKÝ","name":"Filip","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":14,"surname":"BOROVSKÝ","name":"František","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":14,"surname":"BOROVSKÝ","name":"František","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":15,"surname":"BOZHIEV","name":"Daniel","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":16,"surname":"BÔŽIK","name":"Juraj","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":17,"surname":"BRTÁŇOVÁ","name":"Eunika","groups":["B"],"paidGroup":"B","date":"","amount":5.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":19,"surname":"CSEFALVAY","name":"Dominik","groups":[""],"paidGroup":"","date":"","amount":10.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":19,"surname":"CSEFALVAY","name":"Dominik","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":20,"surname":"ČIŽMÁRIK","name":"Oskar","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":20,"surname":"ČIŽMÁRIK","name":"Oskar","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":21,"surname":"DINDOŠ","name":"Filip","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":21,"surname":"DINDOŠ","name":"Filip","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":24,"surname":"DORO","name":"Sebastián","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":24,"surname":"DORO","name":"Sebastián","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":25,"surname":"DULINOVÁ","name":"Zuzana","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":26,"surname":"DZIAMA","name":"Oleh","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":28,"surname":"FABIŠÍK","name":"Marek","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":29,"surname":"FEDÁK","name":"Alex","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":31,"surname":"FIL","name":"Mykyta","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":32,"surname":"FIO","name":"Jakub","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":33,"surname":"GALDUNOVÁ","name":"Zuzana","groups":["B"],"paidGroup":"B","date":"","amount":25.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":33,"surname":"GALDUNOVÁ","name":"Zuzana","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":34,"surname":"GAŽI","name":"Dominik","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":35,"surname":"GIRMANOVÁ","name":"Ivka","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":35,"surname":"GIRMANOVÁ","name":"Ivka","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":36,"surname":"GRIŠTÍK","name":"Zoran","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":36,"surname":"GRIŠTÍK","name":"Zoran","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":37,"surname":"GRIŠTÍKOVÁ","name":"Dominika","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":37,"surname":"GRIŠTÍKOVÁ","name":"Dominika","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":41,"surname":"HAVRILOVSKYI","name":"Radion","groups":[""],"paidGroup":"","date":"","amount":20.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":43,"surname":"HORZEI","name":"Yevhen","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":43,"surname":"HORZEI","name":"Yevhen","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":44,"surname":"HRYTSAI","name":"Lev","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":45,"surname":"HUDÁKOVÁ","name":"Dana","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":45,"surname":"HUDÁKOVÁ","name":"Dana","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":46,"surname":"HUDÁKOVÁ","name":"Juliana","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":47,"surname":"HUSIEV","name":"Ivan","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":48,"surname":"CHAPLINA","name":"Andrii","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":50,"surname":"ISTOMIN","name":"Ihor","groups":["D"],"paidGroup":"D","date":"","amount":20.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":52,"surname":"JAKUB","name":"Max","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":52,"surname":"JAKUB","name":"Max","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":53,"surname":"KALAFUS","name":"Teo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":54,"surname":"KALAFUS","name":"Tereza","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":55,"surname":"KAĽAVSKÝ","name":"Alex","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":56,"surname":"KANÁLIK","name":"Richard","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":57,"surname":"KANDRA","name":"Ján","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":58,"surname":"KARAMANYTS","name":"Platon","groups":["box"],"paidGroup":"box","date":"","amount":25.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":59,"surname":"KENDEREŠ","name":"Marko","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":59,"surname":"KENDEREŠ","name":"Marko","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":60,"surname":"KINLOVIČ","name":"Vladimír","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":61,"surname":"KIRALY","name":"Matúš","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":63,"surname":"KLIKA","name":"Michal","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":64,"surname":"KLYKAVKA","name":"Marian","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":64,"surname":"KLYKAVKA","name":"Marian","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":65,"surname":"KNAPOVÁ","name":"Lucia","groups":["A"],"paidGroup":"A","date":"","amount":10.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":65,"surname":"KNAPOVÁ","name":"Lucia","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":66,"surname":"KOCHAN","name":"Ostap","groups":["B"],"paidGroup":"B","date":"","amount":25.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":68,"surname":"KOLESÁROVÁ","name":"Ema","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":69,"surname":"KOLESÁROVÁ","name":"Daniela","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":70,"surname":"KOLESÁROVÁ","name":"Natália","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":71,"surname":"KORL","name":"Daniel","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":72,"surname":"KORNÚC","name":"Juraj","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":73,"surname":"KORYSHEV","name":"Oleksandr","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":74,"surname":"KOSTKOVÁ","name":"Saša","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":74,"surname":"KOSTKOVÁ","name":"Saša","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":75,"surname":"KOŠŤÁL","name":"Maxim","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":76,"surname":"KOVÁČ","name":"Juraj","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":77,"surname":"KOVALOV","name":"Andrii","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":80,"surname":"KRUPEĽÁKOVÁ","name":"Timea","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":80,"surname":"KRUPEĽÁKOVÁ","name":"Timea","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":81,"surname":"KUDELA","name":"Hlib","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":83,"surname":"KYRLIK","name":"Daniel","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":84,"surname":"LÁBOVSKÝ","name":"Marcel","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":84,"surname":"LÁBOVSKÝ","name":"Marcel","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":85,"surname":"LEITNER","name":"Noro","groups":["D"],"paidGroup":"D","date":"","amount":10.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":85,"surname":"LEITNER","name":"Noro","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":86,"surname":"LEJKO","name":"Matias","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":87,"surname":"LENĎÁK","name":"Stanko","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":87,"surname":"LENĎÁK","name":"Stanko","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":88,"surname":"LEPEKHA","name":"Anton","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":90,"surname":"LOUB","name":"Sara","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":92,"surname":"LUTSENKO","name":"Dima","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":92,"surname":"LUTSENKO","name":"Dima","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":93,"surname":"LYKHACH","name":"Yaroslav","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":93,"surname":"LYKHACH","name":"Yaroslav","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":94,"surname":"MAČUGA","name":"Martin","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":96,"surname":"MAJOROŠOVÁ","name":"Michaela","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":97,"surname":"MAKRANSKÝ","name":"Timur","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":98,"surname":"MALIUKOV","name":"Andrii","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":99,"surname":"MARKEVYCH","name":"Andrii","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":100,"surname":"MARYCH","name":"Mark","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":101,"surname":"MASYUKOVA","name":"Ksenia","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":103,"surname":"MATIKO","name":"Vasyl","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":104,"surname":"MATYČIN","name":"Max","groups":["B"],"paidGroup":"B","date":"","amount":20.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":104,"surname":"MATYČIN","name":"Max","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":106,"surname":"MINARČÍK","name":"Marko","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":107,"surname":"MINARČÍK","name":"Adam","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":108,"surname":"MOLČÁK","name":"Martin","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":108,"surname":"MOLČÁK","name":"Martin","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":109,"surname":"MOSKOVETS","name":"Tymofii","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":110,"surname":"MOŽNÝ","name":"Marcel","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":110,"surname":"MOŽNÝ","name":"Marcel","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":111,"surname":"NEMNA","name":"Vladyslav","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":112,"surname":"NOVYSEDLÁK","name":"Kiko","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":113,"surname":"ONUŠČÁK","name":"Peter","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":113,"surname":"ONUŠČÁK","name":"Peter","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":114,"surname":"ONUŠČÁK","name":"Matej","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":114,"surname":"ONUŠČÁK","name":"Matej","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":115,"surname":"ONUŠČÁK","name":"Jakub","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":115,"surname":"ONUŠČÁK","name":"Jakub","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":116,"surname":"ONUŠČÁKOVÁ","name":"Nelly","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":116,"surname":"ONUŠČÁKOVÁ","name":"Nelly","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":117,"surname":"OREIMUS","name":"Stepan","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":118,"surname":"OROSZ","name":"Peter","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":121,"surname":"PAŇÁK","name":"Richard","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":121,"surname":"PAŇÁK","name":"Richard","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":123,"surname":"PAVLIŠ","name":"Ján","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":124,"surname":"PAVLIŠOVÁ","name":"Anna","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":125,"surname":"PEREPELYTSIIA","name":"Daniil","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":126,"surname":"POLULIAKH","name":"Oleksii","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":127,"surname":"POPIK","name":"Ryan","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":128,"surname":"PUSHKAR","name":"Maksym","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":129,"surname":"RAŠKYOVÁ","name":"Alexandra","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":129,"surname":"RAŠKYOVÁ","name":"Alexandra","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":130,"surname":"REPÍK","name":"Peter","groups":["B"],"paidGroup":"B","date":"","amount":25.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":131,"surname":"ROSUL","name":"Nazar","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":132,"surname":"SADO","name":"Erik","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":133,"surname":"SHERBAKOV","name":"Oleksandr","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":133,"surname":"SHERBAKOV","name":"Oleksandr","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":134,"surname":"SHERBAKOV","name":"Serhii","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":134,"surname":"SHERBAKOV","name":"Serhii","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":135,"surname":"SCHWARZ","name":"Martin","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":137,"surname":"SIDOR","name":"Sebastian","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":137,"surname":"SIDOR","name":"Sebastian","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":138,"surname":"SLIVA","name":"Vladimír","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":138,"surname":"SLIVA","name":"Vladimír","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":139,"surname":"SMOLEJ","name":"Daniel","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":141,"surname":"SMORODINOV","name":"Maxim","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":142,"surname":"SOLOVII","name":"Oleksandr","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":143,"surname":"SOZANSKÝ","name":"Matias","groups":["D"],"paidGroup":"D","date":"","amount":15.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":144,"surname":"STADNYK","name":"Bohdan","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":145,"surname":"STAŇO","name":"Šimon","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":146,"surname":"STOHR","name":"Leo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":146,"surname":"STOHR","name":"Leo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":147,"surname":"STOHR","name":"Teo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":147,"surname":"STOHR","name":"Teo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":148,"surname":"STOHR","name":"Robo","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":149,"surname":"STULKIVSKII","name":"Anton","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":150,"surname":"SZILAGYI","name":"Leo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":150,"surname":"SZILAGYI","name":"Leo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":151,"surname":"SZOMBATHY","name":"Hugo","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":152,"surname":"ŠAFÁR","name":"Leoš","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":153,"surname":"ŠIMKO","name":"Martin","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":154,"surname":"ŠIMUN","name":"Jakub","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":156,"surname":"ŠOLC","name":"Rado","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":157,"surname":"ŠTIPČICOVÁ","name":"Diana","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":159,"surname":"TAMÁŠ","name":"Kiko","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":160,"surname":"TAMÁŠOVÁ","name":"Saška","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":161,"surname":"TANČÁKOVÁ","name":"Simona","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":161,"surname":"TANČÁKOVÁ","name":"Simona","groups":["A"],"paidGroup":"A","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":162,"surname":"TARASENKO","name":"Sviatoslav","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":162,"surname":"TARASENKO","name":"Sviatoslav","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":163,"surname":"TETERUK","name":"Yaroslav","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":164,"surname":"TILLISCH","name":"Alexandra","groups":["D"],"paidGroup":"D","date":"","amount":20.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":165,"surname":"TKACHUK","name":"Ilia","groups":["A"],"paidGroup":"A","date":"","amount":20.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":166,"surname":"TOKÁR","name":"Filip","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":167,"surname":"TOMČEJ","name":"Andrej","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":168,"surname":"TOTH","name":"Patrik","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":168,"surname":"TOTH","name":"Patrik","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":169,"surname":"TÓTH","name":"Nicolas","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":170,"surname":"TUSHEVSKA","name":"Yulia","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":170,"surname":"TUSHEVSKA","name":"Yulia","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":171,"surname":"TVERĎAK","name":"Damian","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":171,"surname":"TVERĎAK","name":"Damian","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":172,"surname":"UPALYUK","name":"Stas","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":173,"surname":"VAĽO","name":"Maximilian","groups":[""],"paidGroup":"","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":175,"surname":"VASIĽ","name":"Daniel","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":176,"surname":"VAVREK","name":"Dominik","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":176,"surname":"VAVREK","name":"Dominik","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":178,"surname":"VIAZNIKOV","name":"Artur","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":179,"surname":"VOJTEK","name":"Michal","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":179,"surname":"VOJTEK","name":"Michal","groups":["B"],"paidGroup":"B","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":181,"surname":"VOROBEĽOVÁ","name":"Jarka","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":182,"surname":"VÝROSTKOVÁ","name":"Karin","groups":["C"],"paidGroup":"C","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":183,"surname":"WIELGOSZ","name":"Jakub","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":184,"surname":"YATSUK","name":"Artem","groups":["B"],"paidGroup":"B","date":"","amount":25.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":185,"surname":"YERMAK","name":"Ilia","groups":["B"],"paidGroup":"B","date":"","amount":25.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":186,"surname":"YESHAZARIAN","name":"David","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":186,"surname":"YESHAZARIAN","name":"David","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"},{"memberId":187,"surname":"ŽILLA","name":"Alex","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":1,"year":2026,"source":"excel-import-2026"},{"memberId":187,"surname":"ŽILLA","name":"Alex","groups":["D"],"paidGroup":"D","date":"","amount":30.0,"period":2,"year":2026,"source":"excel-import-2026"}],registration:[{"memberId":1,"surname":"ABDI","name":"Samuel","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":2,"surname":"ANDEROVÁ","name":"Nina","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":3,"surname":"BABII","name":"Viktor","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":4,"surname":"BALEHA","name":"Ivan","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":5,"surname":"BALOG","name":"Elo","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":6,"surname":"BALOG","name":"Martin","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":7,"surname":"BAZHENOV","name":"Denis","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":8,"surname":"BAZIR","name":"Vladislav","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":9,"surname":"BEKEČ","name":"Tobias","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":10,"surname":"BENKO","name":"Karin","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":11,"surname":"BODNÁR","name":"Jakub","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":12,"surname":"BOLDI","name":"Jakub","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":13,"surname":"BOROVSKÝ","name":"Filip","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":14,"surname":"BOROVSKÝ","name":"František","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":15,"surname":"BOZHIEV","name":"Daniel","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":16,"surname":"BÔŽIK","name":"Juraj","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":17,"surname":"BRTÁŇOVÁ","name":"Eunika","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":18,"surname":"BURIAN","name":"Marko","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":19,"surname":"CSEFALVAY","name":"Dominik","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":20,"surname":"ČIŽMÁRIK","name":"Oskar","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":21,"surname":"DINDOŠ","name":"Filip","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":22,"surname":"DOJČÁK","name":"Jakub","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":23,"surname":"DOMČEJ","name":"Andrej","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":24,"surname":"DORO","name":"Sebastián","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":25,"surname":"DULINOVÁ","name":"Zuzana","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":26,"surname":"DZIAMA","name":"Oleh","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":27,"surname":"ELBERTOVÁ","name":"Lenka","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":28,"surname":"FABIŠÍK","name":"Marek","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":29,"surname":"FEDÁK","name":"Alex","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":30,"surname":"FERENCZ","name":"Linda","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":31,"surname":"FIL","name":"Mykyta","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":32,"surname":"FIO","name":"Jakub","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":33,"surname":"GALDUNOVÁ","name":"Zuzana","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":34,"surname":"GAŽI","name":"Dominik","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":35,"surname":"GIRMANOVÁ","name":"Ivka","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":36,"surname":"GRIŠTÍK","name":"Zoran","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":37,"surname":"GRIŠTÍKOVÁ","name":"Dominika","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":38,"surname":"HARAJBYDA","name":"Artem","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":39,"surname":"HARAJBYDA","name":"Dmytro","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":40,"surname":"HARAJDA","name":"Jozef","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":41,"surname":"HAVRILOVSKYI","name":"Radion","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":42,"surname":"HOLZTRÄGER","name":"Daniel","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":43,"surname":"HORZEI","name":"Yevhen","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":44,"surname":"HRYTSAI","name":"Lev","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":45,"surname":"HUDÁKOVÁ","name":"Dana","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":46,"surname":"HUDÁKOVÁ","name":"Juliana","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":47,"surname":"HUSIEV","name":"Ivan","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":48,"surname":"CHAPLINA","name":"Andrii","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":49,"surname":"ILKO","name":"Anna","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":50,"surname":"ISTOMIN","name":"Ihor","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":51,"surname":"JAKUB","name":"Šimon","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":52,"surname":"JAKUB","name":"Max","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":53,"surname":"KALAFUS","name":"Teo","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":54,"surname":"KALAFUS","name":"Tereza","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":55,"surname":"KAĽAVSKÝ","name":"Alex","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":56,"surname":"KANÁLIK","name":"Richard","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":57,"surname":"KANDRA","name":"Ján","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":58,"surname":"KARAMANYTS","name":"Platon","groups":["box"],"paidGroup":"box","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":59,"surname":"KENDEREŠ","name":"Marko","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":60,"surname":"KINLOVIČ","name":"Vladimír","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":61,"surname":"KIRALY","name":"Matúš","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":62,"surname":"KIŠOVÁ","name":"Anna","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":63,"surname":"KLIKA","name":"Michal","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":64,"surname":"KLYKAVKA","name":"Marian","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":65,"surname":"KNAPOVÁ","name":"Lucia","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":66,"surname":"KOCHAN","name":"Ostap","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":67,"surname":"KOLESÁR","name":"Samuel","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":68,"surname":"KOLESÁROVÁ","name":"Ema","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":69,"surname":"KOLESÁROVÁ","name":"Daniela","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":70,"surname":"KOLESÁROVÁ","name":"Natália","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":71,"surname":"KORL","name":"Daniel","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":72,"surname":"KORNÚC","name":"Juraj","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":73,"surname":"KORYSHEV","name":"Oleksandr","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":74,"surname":"KOSTKOVÁ","name":"Saša","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":75,"surname":"KOŠŤÁL","name":"Maxim","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":76,"surname":"KOVÁČ","name":"Juraj","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":77,"surname":"KOVALOV","name":"Andrii","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":78,"surname":"KOVAŘÍK","name":"Ivor","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":79,"surname":"KRÁLIK","name":"Adam","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":80,"surname":"KRUPEĽÁKOVÁ","name":"Timea","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":81,"surname":"KUDELA","name":"Hlib","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":82,"surname":"KUHAL","name":"Anatolii","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":83,"surname":"KYRLIK","name":"Daniel","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":84,"surname":"LÁBOVSKÝ","name":"Marcel","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":85,"surname":"LEITNER","name":"Noro","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":86,"surname":"LEJKO","name":"Matias","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":87,"surname":"LENĎÁK","name":"Stanko","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":88,"surname":"LEPEKHA","name":"Anton","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":89,"surname":"LITOVCHENKO","name":"Matvii","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":90,"surname":"LOUB","name":"Sara","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":91,"surname":"LUKÁČ","name":"Michal","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":92,"surname":"LUTSENKO","name":"Dima","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":93,"surname":"LYKHACH","name":"Yaroslav","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":94,"surname":"MAČUGA","name":"Martin","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":95,"surname":"MAHÚTOVÁ","name":"Petra","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":96,"surname":"MAJOROŠOVÁ","name":"Michaela","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":97,"surname":"MAKRANSKÝ","name":"Timur","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":98,"surname":"MALIUKOV","name":"Andrii","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":99,"surname":"MARKEVYCH","name":"Andrii","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":100,"surname":"MARYCH","name":"Mark","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":101,"surname":"MASYUKOVA","name":"Ksenia","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":102,"surname":"MATFIAK","name":"Roland","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":103,"surname":"MATIKO","name":"Vasyl","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":104,"surname":"MATYČIN","name":"Max","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":105,"surname":"MIHAĽOV","name":"Matej","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":106,"surname":"MINARČÍK","name":"Marko","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":107,"surname":"MINARČÍK","name":"Adam","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":108,"surname":"MOLČÁK","name":"Martin","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":109,"surname":"MOSKOVETS","name":"Tymofii","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":110,"surname":"MOŽNÝ","name":"Marcel","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":111,"surname":"NEMNA","name":"Vladyslav","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":112,"surname":"NOVYSEDLÁK","name":"Kiko","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":113,"surname":"ONUŠČÁK","name":"Peter","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":114,"surname":"ONUŠČÁK","name":"Matej","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":115,"surname":"ONUŠČÁK","name":"Jakub","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":116,"surname":"ONUŠČÁKOVÁ","name":"Nelly","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":117,"surname":"OREIMUS","name":"Stepan","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":118,"surname":"OROSZ","name":"Peter","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":119,"surname":"OŽDANUK","name":"Michal","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":120,"surname":"PAJTÁŠ","name":"Šimon","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":121,"surname":"PAŇÁK","name":"Richard","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":122,"surname":"PARLAGI","name":"Samuel","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":123,"surname":"PAVLIŠ","name":"Ján","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":124,"surname":"PAVLIŠOVÁ","name":"Anna","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":125,"surname":"PEREPELYTSIIA","name":"Daniil","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":126,"surname":"POLULIAKH","name":"Oleksii","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":127,"surname":"POPIK","name":"Ryan","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":128,"surname":"PUSHKAR","name":"Maksym","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":129,"surname":"RAŠKYOVÁ","name":"Alexandra","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":130,"surname":"REPÍK","name":"Peter","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":131,"surname":"ROSUL","name":"Nazar","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":132,"surname":"SADO","name":"Erik","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":133,"surname":"SHERBAKOV","name":"Oleksandr","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":134,"surname":"SHERBAKOV","name":"Serhii","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":135,"surname":"SCHWARZ","name":"Martin","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":136,"surname":"SCHWARZ","name":"Šimon","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":137,"surname":"SIDOR","name":"Sebastian","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":138,"surname":"SLIVA","name":"Vladimír","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":139,"surname":"SMOLEJ","name":"Daniel","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":140,"surname":"SMORGIN","name":"Nazar","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":141,"surname":"SMORODINOV","name":"Maxim","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":142,"surname":"SOLOVII","name":"Oleksandr","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":143,"surname":"SOZANSKÝ","name":"Matias","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":144,"surname":"STADNYK","name":"Bohdan","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":145,"surname":"STAŇO","name":"Šimon","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":146,"surname":"STOHR","name":"Leo","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":147,"surname":"STOHR","name":"Teo","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":148,"surname":"STOHR","name":"Robo","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":149,"surname":"STULKIVSKII","name":"Anton","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":150,"surname":"SZILAGYI","name":"Leo","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":151,"surname":"SZOMBATHY","name":"Hugo","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":152,"surname":"ŠAFÁR","name":"Leoš","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":153,"surname":"ŠIMKO","name":"Martin","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":154,"surname":"ŠIMUN","name":"Jakub","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":155,"surname":"ŠOLC","name":"Rado","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":156,"surname":"ŠOLC","name":"Rado","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":157,"surname":"ŠTIPČICOVÁ","name":"Diana","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":158,"surname":"TAKÁČ","name":"Karolína","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":159,"surname":"TAMÁŠ","name":"Kiko","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":160,"surname":"TAMÁŠOVÁ","name":"Saška","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":161,"surname":"TANČÁKOVÁ","name":"Simona","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":162,"surname":"TARASENKO","name":"Sviatoslav","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":163,"surname":"TETERUK","name":"Yaroslav","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":164,"surname":"TILLISCH","name":"Alexandra","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":165,"surname":"TKACHUK","name":"Ilia","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":166,"surname":"TOKÁR","name":"Filip","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":167,"surname":"TOMČEJ","name":"Andrej","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":168,"surname":"TOTH","name":"Patrik","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":169,"surname":"TÓTH","name":"Nicolas","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":170,"surname":"TUSHEVSKA","name":"Yulia","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":171,"surname":"TVERĎAK","name":"Damian","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":172,"surname":"UPALYUK","name":"Stas","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":173,"surname":"VAĽO","name":"Maximilian","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":174,"surname":"VASHCHENKO","name":"Maksym","groups":["A"],"paidGroup":"A","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":175,"surname":"VASIĽ","name":"Daniel","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":176,"surname":"VAVREK","name":"Dominik","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":177,"surname":"VERHILES","name":"Denis","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":178,"surname":"VIAZNIKOV","name":"Artur","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":179,"surname":"VOJTEK","name":"Michal","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":180,"surname":"VOLOSHIN","name":"Kamila","groups":[""],"paidGroup":"","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":181,"surname":"VOROBEĽOVÁ","name":"Jarka","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":182,"surname":"VÝROSTKOVÁ","name":"Karin","groups":["C"],"paidGroup":"C","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":183,"surname":"WIELGOSZ","name":"Jakub","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":184,"surname":"YATSUK","name":"Artem","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":185,"surname":"YERMAK","name":"Ilia","groups":["B"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":186,"surname":"YESHAZARIAN","name":"David","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":187,"surname":"ŽILLA","name":"Alex","groups":["D"],"paidGroup":"D","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"},{"memberId":188,"surname":"ŽUFFA","name":"Viktor","groups":["B","C"],"paidGroup":"B","date":"31. 08. 2026","amount":30,"type":"registration","year":2026,"source":"excel-import-2026"}]};
 
@@ -6959,14 +6592,15 @@ function memberRows(arr){
      <span class="${secondHalfMembershipVisual(m)} membership-period-icon" title="Členské 2. polrok">Č</span>
      <span class="${memberHasRegistration(m)?'icon-ok':'icon-no'}" title="Registrácia">R</span>
    </div>
-   <div class="member-flags"><button type="button" class="member-delete-btn" onclick="event.preventDefault();event.stopPropagation();return deleteMemberFromList(${m.id})">🗑</button></div>
+   <div class="member-flags">${(typeof isAdmin==='function'&&isAdmin())||(typeof isHeadTrainer==='function'&&isHeadTrainer())?`<button type="button" class="member-delete-btn" onclick="event.preventDefault();event.stopPropagation();return deleteMemberFromList(${m.id})">🗑</button>`:''}</div>
    <div class="member-arrow">›</div>
  </article>`).join('');
 }
 
 
 async function deleteMemberFromList(id){
- // Vymazanie člena je povolené administrátorovi, hlavnému trénerovi aj trénerovi.
+ const allowed=(typeof isAdmin==='function'&&isAdmin()) || (typeof isHeadTrainer==='function'&&isHeadTrainer());
+ if(!allowed){ toast('Nemáš oprávnenie vymazať člena'); return false; }
  const idx=membersData.findIndex(x=>Number(x.id)===Number(id));
  if(idx<0){ toast('Člen nebol nájdený'); return false; }
  const m=membersData[idx];
@@ -8364,7 +7998,7 @@ function renderMore(){
      
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
-       <button class="more-menu-item" onclick="return openTrainerManagement()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
+       <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
        <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
        <button type="button" class="more-menu-item gt-logout-button" onclick="return logoutGuardTrainer(this)">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>
      </div>
@@ -8458,14 +8092,13 @@ function isAttendanceTodayForTrainer(){
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // Tréner môže upravovať iba aktuálny kalendárny deň.
-  // Každý starší deň je vždy iba na čítanie, bez ohľadu na to,
-  // či bol uložený cez Kalendár, Vyúčtovanie alebo inou cestou.
-  return !isAttendanceTodayForTrainer();
+  // v966: Bežný tréner môže spätne upravovať svoju dochádzku.
+  // Zamknutý zostáva iba pohľad hlavného trénera.
+  return false;
 }
 function attendanceEditGuard(){
   if(isAttendanceFullyLocked()){
-    toast('Uloženú dochádzku môže meniť iba administrátor.');
+    toast('Dochádzku nie je možné upraviť v tomto režime.');
     return false;
   }
   return true;
@@ -8483,13 +8116,12 @@ function attendancePaymentLockKey(){
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // Aj členské a registračné môže tréner upravovať iba v aktuálnom dni.
-  // Pri každom staršom dni sú automaticky zamknuté.
-  return !isAttendanceTodayForTrainer();
+  // v966: Tréner môže spätne opraviť aj platby patriace ku svojej dochádzke.
+  return false;
 }
 function attendancePaymentEditGuard(){
   if(isAttendancePaymentsLocked()){
-    toast('Členské a registračné po uložení dochádzky môže meniť iba administrátor.');
+    toast('Platby nie je možné upraviť v tomto režime.');
     return false;
   }
   return true;
@@ -8536,68 +8168,6 @@ function getAttendancePendingSaveAt(date,group){
 // Nepoužíva sa na bežný sync celej databázy, preto ju nemôže prepísať
 // neúplná lokálna kópia trénera.
 const ATTENDANCE_DIRECT_COLLECTION = 'guard-trainer-attendance';
-// v959: živý listener pre administrátorskú dochádzku.
-// Samostatný admin dokument sa zapisuje do Firestore, ale predtým sa čítal iba
-// pri otvorení dochádzky. Preto už otvorený mobil trénera nevidel následnú
-// zmenu administrátora. Listener sleduje práve otvorený dátum + skupinu.
-let gtDirectAttendanceUnsubscribe=null;
-let gtDirectAttendanceListeningKey='';
-let gtDirectAttendanceLastApplied=0;
-function stopDirectAttendanceListener(){
-  try{ if(typeof gtDirectAttendanceUnsubscribe==='function') gtDirectAttendanceUnsubscribe(); }catch(e){}
-  gtDirectAttendanceUnsubscribe=null;
-  gtDirectAttendanceListeningKey='';
-  gtDirectAttendanceLastApplied=0;
-}
-function applyDirectAdminAttendanceSnapshot(data,key){
-  try{
-    if(!data || !data.history || typeof data.history!=='object') return false;
-    if(typeof attendanceState==='undefined') return false;
-    if(trainingAttendanceKey(attendanceState.group,attendanceState.date)!==key) return false;
-    const remoteAt=Number(data.adminSavedAt||data.updatedAt||0);
-    if(remoteAt && remoteAt<=gtDirectAttendanceLastApplied) return false;
-    const hist=data.history;
-    (attendanceState.members||[]).forEach(a=>{
-      const x=hist[a.surname+'|'+a.name];
-      if(!x) return;
-      a.training=!!x.training;
-      a.trainingAccount=!!x.trainingAccount;
-      a.newMember=!!x.newMember;
-      a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
-    });
-    trainingAttendanceByGroup[key]=hist;
-    if(remoteAt){
-      gtDirectAttendanceLastApplied=remoteAt;
-      const order=JSON.parse(originalGetItem('gt-attendance-save-order-v1')||'{}')||{};
-      order[key]=Math.max(Number(order[key]||0),remoteAt);
-      originalSetItem('gt-attendance-save-order-v1',JSON.stringify(order));
-      const pending=JSON.parse(originalGetItem(ATTENDANCE_PENDING_SAVE_KEY)||'{}')||{};
-      delete pending[attendanceSaveOrderKey(attendanceState.date,attendanceState.group)];
-      originalSetItem(ATTENDANCE_PENDING_SAVE_KEY,JSON.stringify(pending));
-    }
-    attendanceState.billingPaymentSnapshot=null;
-    attendanceState.billingAttendanceSnapshot=null;
-    attendanceState.billingRecordSnapshot=null;
-    persistTrainingAttendanceHistory();
-    refreshAttendance();
-    console.log('📥 Živá admin dochádzka načítaná pre trénera',key,remoteAt);
-    return true;
-  }catch(e){ console.warn('Živé načítanie admin dochádzky zlyhalo',e); return false; }
-}
-function startDirectAttendanceListener(key){
-  try{
-    if(!db || !cloudEnabled || isAdmin() || isHeadTrainer()) return;
-    if(gtDirectAttendanceListeningKey===key && gtDirectAttendanceUnsubscribe) return;
-    stopDirectAttendanceListener();
-    const docRef=db.collection(ATTENDANCE_DIRECT_COLLECTION).doc(attendanceDirectDocId(key));
-    gtDirectAttendanceListeningKey=key;
-    gtDirectAttendanceUnsubscribe=docRef.onSnapshot(snap=>{
-      if(!snap.exists) return;
-      const data=snap.data()||{};
-      applyDirectAdminAttendanceSnapshot(data,key);
-    },err=>console.warn('Živý listener admin dochádzky zlyhal',err));
-  }catch(e){ console.warn('Spustenie živého listenera admin dochádzky zlyhalo',e); }
-}
 function attendanceDirectDocId(key){
   return encodeURIComponent(String(key||'')).replace(/%/g,'_');
 }
@@ -8612,48 +8182,6 @@ function saveAdminAttendanceDirectCloud(key, history, savedAt){
       updatedAt:Date.now()
     },{merge:true});
   }catch(e){ console.warn('Priamy cloud zápis admin dochádzky zlyhal',e); }
-}
-
-// v960: Priame transakčné uloženie konkrétnej dochádzky na server.
-// Nečaká na všeobecný localStorage sync a nikdy neposiela späť celý lokálny
-// register. Zapíše iba aktuálny dátum + skupinu do serverového registra.
-async function saveAttendanceHistoryKeyToCloud(key, history, savedAt){
-  try{
-    if(!db || !cloudEnabled) return false;
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
-    const uid=firebase.auth().currentUser?.uid || 'unknown';
-    const at=Number(savedAt||Date.now());
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      let remoteHistory={};
-      let remoteOrder={};
-      let remoteAdmin={};
-      try{ const x=data['gt-training-attendance-history']?JSON.parse(data['gt-training-attendance-history']):{}; if(x&&typeof x==='object') remoteHistory=x; }catch(e){}
-      try{ const x=data['gt-attendance-save-order-v1']?JSON.parse(data['gt-attendance-save-order-v1']):{}; if(x&&typeof x==='object') remoteOrder=x; }catch(e){}
-      try{ const x=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{}; if(x&&typeof x==='object') remoteAdmin=x; }catch(e){}
-      const canonicalKey=canonicalAttendanceHistoryKey(key);
-      // Odstráň starú variantu rovnakého dátum|skupina a ulož novú.
-      Object.keys(remoteHistory).forEach(k=>{
-        if(canonicalAttendanceHistoryKey(k)===canonicalKey && k!==canonicalKey) delete remoteHistory[k];
-      });
-      remoteHistory[canonicalKey]=history||{};
-      remoteOrder[canonicalKey]=Math.max(Number(remoteOrder[canonicalKey]||0),at);
-      if(isAdmin()) remoteAdmin[canonicalKey]=Math.max(Number(remoteAdmin[canonicalKey]||0),at);
-      tx.set(ref,{
-        'gt-training-attendance-history':JSON.stringify(remoteHistory),
-        'gt-attendance-save-order-v1':JSON.stringify(remoteOrder),
-        'gt-attendance-admin-edits-v1':JSON.stringify(remoteAdmin),
-        _lastUpdateBy:uid,
-        _updatedAt:Date.now()
-      },{merge:true});
-    });
-    console.log('📤 Dochádzka uložená priamo na server:',key);
-    return true;
-  }catch(e){
-    console.warn('Priame transakčné uloženie dochádzky zlyhalo:',e);
-    return false;
-  }
 }
 
 function saveCurrentTrainingAttendance(){
@@ -8705,15 +8233,7 @@ function saveCurrentTrainingAttendance(){
   // Kritická ochrana dnešnej dochádzky: pri pomalom Firebase nesmie nový
   // lokálny zápis po reloadovaní ustúpiť staršiemu cloudovému snapshotu.
   markAttendancePendingSave(attendanceState.date,attendanceState.group);
-  // v960: najprv zapíš konkrétnu dochádzku priamo transakciou na server.
-  // Všeobecný sync je iba doplnkový; strata/oneskorenie localStorage pushu
-  // už nesmie znamenať, že trénerova dochádzka zostane iba v mobile.
-  try{
-    const directHistory=JSON.parse(JSON.stringify(next));
-    saveAttendanceHistoryKeyToCloud(key,directHistory,adminSavedAt||getAttendancePendingSaveAt(attendanceState.date,attendanceState.group)||Date.now())
-      .catch(e=>console.warn('Attendance direct cloud save:',e));
-  }catch(e){ console.warn('Attendance direct cloud save prepare:',e); }
-  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),300); }catch(e){}
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),100); }catch(e){}
 }
 function membershipDraftKey(memberId,date,group){
   return `${memberId}|${date}|${group}`;
@@ -9666,13 +9186,7 @@ async function refreshCurrentAttendanceFromCloud(){
           return;
         }
       }
-      // Dôležité: listener musí zostať aktívny aj keď pri prvom načítaní
-      // dokument ešte neexistoval. Admin ho môže vytvoriť až neskôr.
-      startDirectAttendanceListener(wantedKey);
-    }catch(e){
-      console.warn('Priame načítanie admin dochádzky zlyhalo',e);
-      startDirectAttendanceListener(wantedKey);
-    }
+    }catch(e){ console.warn('Priame načítanie admin dochádzky zlyhalo',e); }
 
     // Fallback pre staršie záznamy, ktoré ešte nemajú samostatný dokument.
     const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
@@ -10333,9 +9847,7 @@ try{
       const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
       return iso>=TRAINING_DATA_START_DATE;
     });
-    // Uložené vyúčtovanie zapíš späť iba ak sa skutočne načítalo.
-    // Nikdy nevytváraj prázdny register iba preto, že lokálne dáta chýbajú.
-    if(monthlyBillingRecords.length) persistMonthlyBillingRecords();
+    persistMonthlyBillingRecords();
   }
 }catch(e){ console.warn('Načítanie uložených vyúčtovaní sa nepodarilo',e); }
 function normalizeMonthlyBillingRecords(){
@@ -10601,7 +10113,7 @@ function upsertBillingRecordFromAttendance(){
 }
 let billingReturnScreen='attendance';
 function openTrainingBillingFromAttendance(){
-  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
+  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Dochádzku nie je možné upraviť v tomto režime.'); return false; }
   try{
     // Potvrdenie dochádzky najprv uloží aktuálny stav. Od tohto momentu
     // tréner už nesmie meniť členské ani registračné pre toto tréningové kolo.
@@ -10734,7 +10246,7 @@ function forceMyBillingScreen(){
 window.forceMyBillingScreen=forceMyBillingScreen;
 
 function saveTrainingBilling(saveButton){
-  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
+  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Dochádzku nie je možné upraviť v tomto režime.'); return false; }
   // Vyúčtovanie sa pre rovnaký tréning vždy aktualizuje do jedného záznamu.
   // Tréner teda môže uložiť vyúčtovanie opakovane po zmene dochádzky.
   // Členské a registračné sa po potvrdení dochádzky nemenia – ich úpravu

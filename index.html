@@ -1043,7 +1043,7 @@ body{overflow-x:hidden}
 .monthly-table th{color:#eee;font-weight:700;background:#080808}.monthly-table td{color:#ddd}.monthly-table small{display:block;font-size:8px;color:#999;margin-top:2px}
 .monthly-group{display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:4px;color:#fff;font-weight:800}
 .monthly-group.a{background:#e51b23}.monthly-group.b{background:#1676d2}.monthly-group.c{background:#42a72c}.monthly-group.d{background:#e79a0b}.monthly-group.dp{background:#7835b8}
-.monthly-table tbody .billing-clickable-row{cursor:pointer}.monthly-table tbody .billing-clickable-row:hover{background:rgba(255,209,43,.08)}.admin-delete-billing-btn{border:1px solid #a52a2a;background:#210707;color:#ff6262;border-radius:6px;padding:6px 8px;font-weight:900;font-size:11px;cursor:pointer;white-space:nowrap}.admin-delete-billing-btn:active{background:#b52a2a;color:#fff;transform:scale(.97)}.admin-delete-billing-cell{text-align:center;min-width:72px}
+.monthly-table tbody .billing-clickable-row{cursor:pointer}.monthly-table tbody .billing-clickable-row:hover{background:rgba(255,209,43,.08)}.admin-delete-billing-btn{border:1px solid #a52a2a;background:#210707;color:#ff6262;border-radius:6px;padding:6px 8px;font-weight:900;font-size:11px;cursor:pointer;white-space:nowrap}.admin-delete-billing-btn:active{background:#b52a2a;color:#fff;transform:scale(.97)}.admin-delete-billing-cell{text-align:center;min-width:72px}.admin-delete-billing-btn.billing-delete-confirmed{background:#c62828 !important;border-color:#ff5252 !important;color:#fff !important;box-shadow:0 0 8px rgba(198,40,40,.55)}
 .monthly-table .plus{color:#2fcf45}.monthly-table .minus{color:#e52626}.monthly-table .club-amount{color:#ffd12b;font-weight:800}.monthly-table tfoot{background:#090909}.monthly-table tfoot th{color:#ffd12b}
 .empty-monthly{padding:25px!important;color:#999!important}
 .club-total-card{margin-top:12px;border:1px solid #d49b00;border-radius:7px;background:linear-gradient(90deg,#1a1200,#050505);box-shadow:0 0 9px rgba(255,193,7,.25);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;color:#ffd12b;font-weight:800}
@@ -10309,7 +10309,7 @@ function persistBillingDeleteOrder(){
     localStorage.setItem(BILLING_DELETE_ORDER_KEY,raw);
   }catch(e){}
 }
-function deleteMyBillingRecord(recordKey){
+function deleteMyBillingRecord(recordKey, btn){
   if(isAdmin()) return false;
   const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
   const idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
@@ -10317,14 +10317,41 @@ function deleteMyBillingRecord(recordKey){
   const r=monthlyBillingRecords[idx];
   if(String(r.trainer||'').trim().toUpperCase()!==me){ toast('Môžeš vymazať iba svoje vyúčtovanie.'); return false; }
   if(!confirm('Naozaj vymazať toto vyúčtovanie? Dochádzka zostane zachovaná.')) return false;
+  if(btn){ btn.classList.add('billing-delete-confirmed'); btn.style.background='#c62828'; btn.style.borderColor='#ff5252'; btn.style.color='#fff'; btn.textContent='🗑'; }
   const canonical=billingRecordCanonicalKey(r);
-  billingDeleteOrder[canonical]=Date.now();
+  const deletedAt=Date.now();
+  billingDeleteOrder[canonical]=deletedAt;
   persistBillingDeleteOrder();
+  // Záznam odstráň okamžite z obrazovky aj z lokálnych dát.
   monthlyBillingRecords=monthlyBillingRecords.filter(x=>billingRecordCanonicalKey(x)!==canonical);
   persistMonthlyBillingRecords();
+  // A teraz pošli mazanie priamo na server. Serverová verzia sa prepíše
+  // bez tohto záznamu, aby ho hlavný tréner už nedostal späť.
+  try{ syncDeletedBillingRecordToCloud(canonical, deletedAt); }catch(e){ console.warn('billing delete cloud sync fail',e); }
   toast('Vyúčtovanie bolo vymazané');
   setTimeout(()=>renderMonthlyBilling(),50);
   return false;
+}
+function syncDeletedBillingRecordToCloud(canonical, deletedAt){
+  if(typeof db==='undefined' || !db) return;
+  const writeMain=(records)=>{
+    const json=JSON.stringify(records);
+    const writes=[];
+    try{ writes.push(db.collection('guard-trainer-billing').doc('all').set({records:records, updatedAt:Date.now()}, {merge:false})); }catch(e){}
+    try{
+      if(typeof CLOUD_COLLECTION!=='undefined'){
+        const patch={}; patch['gt-monthly-billing-v221']=json; patch['gt-billing']=json;
+        writes.push(db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(patch,{merge:true}));
+      }
+    }catch(e){}
+    return Promise.all(writes);
+  };
+  db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+    let records=[];
+    try{ records=doc.exists && Array.isArray(doc.data()?.records) ? doc.data().records : []; }catch(e){}
+    records=records.filter(r=>billingRecordCanonicalKey(r)!==canonical);
+    return writeMain(records);
+  }).catch(()=>writeMain(monthlyBillingRecords));
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;
 
@@ -10421,6 +10448,8 @@ function initBillingDirectSync(){
         let added=0, updated=0;
         remote.forEach(r=>{
           try{
+            const remoteKey=billingRecordCanonicalKey(r);
+            if(Number(billingDeleteOrder[remoteKey]||0) >= Number(r.savedAt||r.updatedAt||0)){ return; }
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
             const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
@@ -13126,7 +13155,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
               <td>${(r.substituteReference||r.cancelled) ? '' : `${r.gross} €`}</td>
               <td class="minus">${(r.substituteReference||r.cancelled) ? '' : `−${r.trainerReward} €`}</td>
               <td class="club-amount">${(r.substituteReference||r.cancelled) ? '' : `${r.clubReference?'0':r.clubAmount} € ›`}</td>
-              <td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.preventDefault();event.stopPropagation();return deleteMyBillingRecord(${JSON.stringify(String(r.key||''))})'>🗑</button></td>
+              <td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.preventDefault();event.stopPropagation();return deleteMyBillingRecord(${JSON.stringify(String(r.key||''))},this)'>🗑</button></td>
             </tr>`).join('')}
             ${!rows.length?`<tr><td colspan="11" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
           </tbody>

@@ -3835,7 +3835,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1010-OPEN-ALL-GROUPS</div>
+   <div class="gt-login-title">GUARD TRAINER v1011-FIXED</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -4138,144 +4138,1201 @@ const HOME_HTML = document.querySelector('.app').innerHTML;
 
 
 function getCurrentTrainerGroups(){
-  // BULLETPROOF: Vždy ber skupiny priamo z trainersData podľa ID, nie z cache
+  const schedules=getSavedSchedules();
+  const today=appToday().iso;
+  let trainer=null, trainerId=null, trainerName='';
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-    let trainerId=null;
-    if(account?.trainer_id!=null) trainerId=Number(account.trainer_id);
-    
-    let trainer=null;
-    if(trainerId!=null){
-      trainer=(trainersData||[]).find(t=>Number(t.id)===trainerId && !t.isTemplate);
+    if(account?.trainer_id!=null){
+      trainerId=Number(account.trainer_id);
+      trainer=(trainersData||[]).find(t=>Number(t.id)===trainerId)||null;
+      trainerName=String(trainer?.full||trainer?.name||account.display_name||'').trim();
+      if(!trainer){
+        const p=getCurrentTestTrainerProfile();
+        trainer=p; trainerName=String(p?.full||p?.name||account.display_name||'').trim();
+      }
+    }else if(account){
+      trainerName=String(account.display_name||account.name||'').trim();
+      trainer=(trainersData||[]).find(t=>{
+        const n=String(t.full||t.name||'').trim().toLowerCase();
+        return n && n===trainerName.toLowerCase();
+      })||null;
+      if(trainer) trainerId=Number(trainer.id);
     }
-    if(!trainer && account?.display_name){
-      const name=String(account.display_name||'').trim().toLowerCase();
-      trainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toLowerCase()===name && !t.isTemplate);
+  }catch(e){}
+  if(!trainer){
+    const p=getCurrentTestTrainerProfile();
+    if(p){
+      trainer=p;
+      trainerId=Number(p.id);
+      trainerName=String(p.full||p.name||trainerName||'').trim();
     }
-    if(!trainer){
-      const p=getCurrentTestTrainerProfile();
-      if(p && !p.isTemplate) trainer=p;
+  }
+  if(!trainer){
+    trainerName=String(trainerName||CURRENT_TRAINER_NAME||'').trim();
+    trainer=(trainersData||[]).find(t=>{
+      const n=String(t.full||t.name||'').trim().toLowerCase();
+      return n && n===trainerName.toLowerCase();
+    })||null;
+    if(trainer) trainerId=Number(trainer.id);
+  }
+
+  const groups=new Set();
+  (trainer?.groups||[]).forEach(g=>{ /* FIX: profil je autoritatívny */
+    const v=String(g).trim().toUpperCase();
+    if(v) groups.add(v);
+  });
+
+  // Active schedule assignments are authoritative as a second source.
+  schedules.forEach(x=>{
+    const active=(!x.startDate||today>=x.startDate)&&(!x.until||today<=x.until);
+    if(!active || !x.groupCode) return;
+
+    let assigned=false;
+    const ids=Array.isArray(x.trainerIds)?x.trainerIds.map(Number):[];
+    if(x.trainerId!=null) ids.push(Number(x.trainerId));
+    if(trainerId!=null && ids.includes(Number(trainerId))) assigned=true;
+
+    // Also accept an exact trainer name match. This covers older schedule
+    // rows which contain the trainer name but no usable trainer ID.
+    if(!assigned && trainerName){
+      const wanted=trainerName.trim().toLowerCase();
+      const candidates=[];
+      if(Array.isArray(x.trainers)) candidates.push(...x.trainers);
+      if(x.trainer) candidates.push(x.trainer);
+      try{
+        ids.forEach(id=>{
+          const tt=(trainersData||[]).find(z=>Number(z.id)===Number(id));
+          if(tt) candidates.push(tt.full||tt.name);
+        });
+      }catch(e){}
+      assigned=candidates.some(v=>String(v||'').trim().toLowerCase()===wanted);
     }
-    
-    const groups=new Set();
-    if(trainer && Array.isArray(trainer.groups)){
-      trainer.groups.forEach(g=>{
-        const v=String(g).trim().toUpperCase();
-        if(v) groups.add(v);
-      });
-      console.log('👤 Moje skupiny z profilu', trainer.full, ':', [...groups], 'ID:', trainer.id);
-    } else {
-      console.warn('⚠️ Tréner nemá skupiny v profile', trainer);
-    }
-    // Pridaj aj z rozvrhu kde je moje ID (pre istotu)
-    try{
-      const schedules=getSavedSchedules();
-      const today=appToday().iso;
-      schedules.forEach(x=>{
-        const active=(!x.startDate||today>=x.startDate)&&(!x.until||today<=x.until);
-        if(!active || !x.groupCode) return;
-        const ids=Array.isArray(x.trainerIds)?x.trainerIds.map(Number):[];
-        if(x.trainerId!=null) ids.push(Number(x.trainerId));
-        if(trainerId!=null && ids.includes(trainerId)){
-          groups.add(String(x.groupCode).trim().toUpperCase());
-        }
-      });
-    }catch(e){}
-    return groups;
-  }catch(e){ console.warn('getCurrentTrainerGroups fail', e); return new Set(); }
+
+    if(assigned) groups.add(String(x.groupCode).trim().toUpperCase());
+  });
+
+  return [...groups];
+}
+function getAdminCreatedGroups(){
+ const map=new Map();
+ getSavedSchedules().forEach(x=>{
+   const code=String(x.groupCode||'').trim().toUpperCase();
+   if(!code)return;
+   const name=String(x.name||'').trim() || `${code} – SKUPINA`;
+   if(!map.has(code)) map.set(code,name);
+ });
+ return [...map.entries()].sort((a,b)=>a[0].localeCompare(b[0],'sk',{numeric:true,sensitivity:'base'}));
+}
+function getAdminGroupCodes(){ return getAdminCreatedGroups().map(([c])=>c); }
+function getAdminGroupName(code){
+ const hit=getAdminCreatedGroups().find(([c])=>c===String(code||'').trim().toUpperCase());
+ return hit ? hit[1] : (String(code||'').trim().toUpperCase()||'SKUPINA');
+}
+let MY_TRAINER_GROUPS=[];
+const GROUP_NAMES={A:'A – TOP TÍM',B:'B – NÁBOR BUDOKAN',C:'C – NÁBOR GRUNT',D:'D – DETI','D+':'D+ – TOP DETI'};
+let substitutionOffers = [];
+try{
+  const savedOffers=JSON.parse(localStorage.getItem('gt-substitution-offers')||'null');
+  if(Array.isArray(savedOffers)) substitutionOffers=savedOffers;
+}catch(e){ console.warn('Načítanie ponúk zastupovania sa nepodarilo',e); }
+function persistSubstitutionOffers(){
+  try{ localStorage.setItem('gt-substitution-offers', JSON.stringify(Array.isArray(substitutionOffers)?substitutionOffers:[])); }
+  catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
+}
+const ALL_TRAINERS = ['JÁN NOVÁK','MATEJ KOVÁČ','LUCIA ŠIMKOVÁ','PETER TÓTH','ZUZANA MIHÁLOVÁ'];
+let CURRENT_TRAINER_NAME = 'TRÉNER 1';
+MY_TRAINER_GROUPS=[];
+
+function currentDateKey(){
+  return String(attendanceState.date||appToday().iso).replace(/\./g,'-');
+}
+function openSubstitutionOffer(code,name){
+ const today=attendanceState.date||appToday().iso;
+ const card0=document.querySelector(`.training[data-group-code="${CSS.escape(code)}"]`);
+ const meta0=card0?.querySelector('.meta')?.innerText||'';
+ const lines0=meta0.split('\n').map(x=>x.trim()).filter(Boolean);
+ const time0=(lines0[0]||'').replace('◷','').trim();
+ const me0=getCurrentTrainerDisplayName();
+ const duplicate=substitutionOffers.some(o=>o.from===me0 && o.date===today && String(o.code).toUpperCase()===String(code).toUpperCase() && String(o.time||'')===String(time0||''));
+ if(duplicate){ toast('Tento tréning už bol ponúknutý na zastupovanie.'); return; }
+
+ const card=document.querySelector(`.training[data-group-code="${CSS.escape(code)}"]`);
+ const meta=card?.querySelector('.meta')?.innerText||'';
+ const lines=meta.split('\n').map(x=>x.trim()).filter(Boolean);
+ const time=(lines[0]||'').replace('◷','').trim();
+ const place=(lines[1]||'').replace('⌖','').trim();
+ const selected = new Set();
+ const modal=document.createElement('div');
+ modal.id='substitutionModal';
+ modal.className='sub-modal';
+ modal.innerHTML=`<div class="sub-modal-card">
+   <div class="sub-modal-title">ZASTUPOVANIE</div>
+   <div class="sub-modal-group-row" style="background:${getGroupColor(code)}!important;background-image:none!important;">
+     <span class="sub-modal-group-code">${String(code||'?')}</span>
+     <strong>${getAdminGroupName(code)||name}</strong>
+   </div>
+   <div class="sub-modal-sub">
+   📅 ${formatAttendanceDate(attendanceState.date||appToday().iso)}<br>
+   🕐 ${time||'—'}<br>
+   📍 ${place||'—'}
+   </div>
+   <div class="sub-modal-label">VYBER JEDNÉHO ALEBO VIACERÝCH TRÉNEROV:</div>
+   <div class="sub-trainer-list">
+    ${(visibleTrainerProfiles()||[]).filter(t=>(t.full||t.name)!==getCurrentTrainerDisplayName()).map(t=>{
+   const n=t.full||t.name||'TRÉNER';
+   return `<button type="button" class="sub-trainer" data-name="${n}"><span class="sub-check">□</span>${n}</button>`;
+ }).join('')}
+   </div>
+   <div class="sub-modal-actions"><button type="button" class="sub-cancel">ZRUŠIŤ</button><button type="button" class="sub-send">PONÚKNUŤ ZÁSTUP</button></div>
+ </div>`;
+ document.body.appendChild(modal);
+ modal.querySelectorAll('.sub-trainer').forEach(b=>b.onclick=()=>{
+   const n=b.dataset.name;
+   if(selected.has(n)){selected.delete(n);b.classList.remove('selected');b.querySelector('.sub-check').textContent='□';}
+   else{selected.add(n);b.classList.add('selected');b.querySelector('.sub-check').textContent='✓';}
+ });
+ modal.querySelector('.sub-cancel').onclick=()=>modal.remove();
+ modal.querySelector('.sub-send').onclick=()=>{
+   if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
+   substitutionOffers.push({
+     id:Date.now(), code, groupName:name,
+     date:attendanceState.date||appToday().iso,
+     time,place,
+     from:getCurrentTrainerDisplayName(),
+     trainers:[...selected],
+     acceptedBy:null,
+     status:'ČAKÁ NA PRIJATIE'
+   });
+   persistSubstitutionOffers();
+   modal.remove();
+   updateHomeQuickOverview();
+   toast('Ponuka zastupovania odoslaná');
+ };
 }
 
+function showSubstitutionOffers(){
+ const existing=document.getElementById('substitutionOffersModal');
+ if(existing){existing.remove();return;}
+ const modal=document.createElement('div');
+ modal.id='substitutionOffersModal';
+ modal.className='sub-modal';
+ const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(getCurrentTrainerDisplayName()));
+ const outgoing=substitutionOffers.filter(o=>o.from===getCurrentTrainerDisplayName() || (o.acceptedBy===getCurrentTrainerDisplayName()));
+ const incomingHtml=incoming.map(o=>`<div class="sub-offer">
+   <b>⇄ PONUKA ZASTUPOVANIA</b>
+   <div class="sub-group-row">
+     <span class="sub-group-badge ${({'A':'ga','B':'gb','C':'gc','D':'gd','D+':'gdp','H':'gh','T':'gt'}[o.code]||'gother')}">${o.code||'?'}</span>
+     <div><strong>${getAdminGroupName(o.code)||o.groupName}</strong><small>${o.groupName}</small></div>
+   </div>
+   <span>📅 ${formatAttendanceDate(o.date)}</span>
+   <span>🕐 ${o.time||'—'} &nbsp; 📍 ${o.place||'—'}</span>
+   <span>Od: ${o.from}</span>
+   <button class="sub-accept" onclick="acceptSubstitution(${o.id})">✓ PRIJÍMAM ZÁSTUP</button>
+ </div>`).join('');
+ const outgoingHtml=outgoing.map(o=>`<div class="sub-offer ${o.acceptedBy?'accepted':''}">
+   <b>${o.acceptedBy?'✓ PONUKA ZASTUPOVANIA':'PONUKA ZASTUPOVANIA'}</b>
+   <div class="sub-group-row">
+     <span class="sub-group-badge ${({'A':'ga','B':'gb','C':'gc','D':'gd','D+':'gdp','H':'gh','T':'gt'}[o.code]||'gother')}">${o.code||'?'}</span>
+     <div><strong>${getAdminGroupName(o.code)||o.groupName}</strong><small>${o.groupName}</small></div>
+   </div>
+   <span>📅 ${formatAttendanceDate(o.date)}</span>
+   <span>🕐 ${o.time||'—'} &nbsp; 📍 ${o.place||'—'}</span>
+   <span>Ponuka pre: ${o.trainers.join(', ')}</span>
+   <strong>${o.acceptedBy ? '✓ PRIJAL: '+o.acceptedBy : 'ČAKÁ NA PRIJATIE'}</strong>
+   ${!o.acceptedBy && o.from===getCurrentTrainerDisplayName()?`<button type="button" class="sub-reject" onclick="cancelSubstitution(${o.id})">✕ ZRUŠIŤ PONUKU</button>`:''}
+ </div>`).join('');
+ modal.innerHTML=`<div class="sub-modal-card">
+  <div class="sub-modal-title">ZASTUPOVANIE</div>
+  ${incomingHtml || outgoingHtml || '<div class="quick-empty">Žiadne ponuky zastupovania.</div>'}
+  <button type="button" class="sub-cancel" onclick="this.closest('.sub-modal').remove()">ZAVRIEŤ</button>
+ </div>`;
+ document.body.appendChild(modal);
+}
+function cancelSubstitution(id){
+ const o=substitutionOffers.find(x=>x.id===id);
+ if(!o) return false;
+ if(o.acceptedBy){ toast('Tento zástup už bol prijatý – ponuku nemožno zrušiť.'); return false; }
+ if(o.from!==getCurrentTrainerDisplayName()){ toast('Túto ponuku môže zrušiť iba tréner, ktorý ju vytvoril.'); return false; }
+ substitutionOffers=substitutionOffers.filter(x=>x.id!==id);
+ persistSubstitutionOffers();
+ const modal=document.getElementById('substitutionOffersModal');
+ if(modal) modal.remove();
+ updateHomeQuickOverview();
+ renderHome();
+ toast('Ponuka zastupovania bola zrušená');
+ return false;
+}
+window.cancelSubstitution=cancelSubstitution;
+
+function clearTodaySubstitutionTests(){
+ if(!isAdmin()){ toast('Túto akciu môže vykonať iba administrátor.'); return false; }
+ const today=appToday().iso;
+ const todaysOffers=substitutionOffers.filter(o=>String(o.date||'')===String(today));
+ const todayKeys=new Set(todaysOffers.map(o=>`${today}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from||''}`));
+ if(!todaysOffers.length){ toast('Dnes nie sú uložené žiadne zastupovania.'); return false; }
+ if(!confirm(`Vymazať všetky dnešné testovacie zastupovania (${todaysOffers.length})?`)) return false;
+ substitutionOffers=substitutionOffers.filter(o=>String(o.date||'')!==String(today));
+ persistSubstitutionOffers();
+ try{
+   if(Array.isArray(monthlyBillingRecords)){
+     monthlyBillingRecords=monthlyBillingRecords.filter(r=>!(r && r.substituteReference && todayKeys.has(String(r.key||''))));
+     persistMonthlyBillingRecords();
+   }
+ }catch(e){ console.warn('Vyčistenie referencií zastupovania sa nepodarilo',e); }
+ updateHomeQuickOverview();
+ renderMore();
+ toast('Dnešné zastupovania boli vymazané z cloudu.');
+ return false;
+}
+window.clearTodaySubstitutionTests=clearTodaySubstitutionTests;
+
+function acceptSubstitution(id){
+ const o=substitutionOffers.find(x=>x.id===id);
+ if(!o)return;
+ o.acceptedBy=getCurrentTrainerDisplayName();
+ o.status='PRIJATÉ';
+ persistSubstitutionOffers();
+
+ // Create the original trainer's informational zero-value entry immediately.
+ // The actual substitute will later save the real billing record.
+ try{
+   const iso=String(o.date||appToday().iso);
+   const displayDate=formatBillingDate(iso);
+   const refKey=`${iso}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from}`;
+   const ref={
+     key:refKey,
+     trainer:o.from,
+     date:displayDate,
+     group:o.code||'',
+     name:o.groupName||'',
+     paying:0,trainingSum:0,membershipSum:0,registrationSum:0,
+     otherPlus:0,otherMinus:0,gross:0,trainerReward:0,clubAmount:0,
+     trainingFee:0,trainerRewardPerMember:0,
+     substitute:true,substituteReference:true,
+     substituteBy:o.acceptedBy,
+     substituteLabel:'ZASTUPOVAL: '+o.acceptedBy
+   };
+   const ri=monthlyBillingRecords.findIndex(r=>r.key===refKey);
+   if(ri>=0) monthlyBillingRecords[ri]=ref; else monthlyBillingRecords.push(ref);
+   persistMonthlyBillingRecords();
+ }catch(e){ console.error('substitution reference save',e); }
+
+ const modal=document.getElementById('substitutionOffersModal');
+ if(modal)modal.remove();
+ updateHomeQuickOverview();
+ renderHome();
+ toast('Zástup prijatý – ponúkol: '+o.from+' • prijal: '+o.acceptedBy);
+}
+
+function updateSubstitutionQuick(){
+ const slot=document.getElementById('substitutionQuickSlot');
+ if(!slot)return;
+ const me=getCurrentTrainerDisplayName();
+ const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
+ const outgoingWaiting=substitutionOffers.filter(o=>o.from===me && !o.acceptedBy).length;
+ const acceptedOutgoing=substitutionOffers.filter(o=>o.from===me && o.acceptedBy).length;
+ const acceptedIncoming=substitutionOffers.filter(o=>o.acceptedBy===me).length;
+ const acceptedTotal=acceptedOutgoing+acceptedIncoming;
+ const pendingTotal=incoming+outgoingWaiting;
+ const count=pendingTotal+acceptedTotal;
+ if(!count){slot.innerHTML='';return;}
+ const accepted=acceptedTotal>0;
+ const text=accepted ? `Zastupovanie prijaté (${acceptedTotal})` :
+   (incoming ? `Ponuka zastupovania (${incoming} nová)` : 'Ponuka zastupovania čaká na prijatie');
+ const cls=accepted ? 'accepted-offer' : (pendingTotal>0 ? 'important-offer' : '');
+ slot.innerHTML=`<button type="button" class="q substitution-q ${cls}" onclick="showSubstitutionOffers()">
+   <span class="qicon">⇄</span><span class="qtext"><b>ZASTUPOVANIE</b><small>${text}</small></span><strong>${count}</strong><span class="go">›</span>
+ </button>`;
+}
+function normalizeGroupCode(value){
+  return String(value||'').trim().toUpperCase().replace(/\s*\+\s*/g,'+');
+}
+function groupRosterCodes(code){
+  const key=normalizeGroupCode(code);
+  // B+C is a standalone TRAINING/permission group. It is NOT the same as B or C.
+  // Therefore permissions, schedule ownership and attendance access stay exact.
+  return key ? [key] : [];
+}
+function groupMemberRosterCodes(code){
+  const key=normalizeGroupCode(code);
+  // B+C is trained as one shared group, but its roster is the union of
+  // members assigned to B and members assigned to C. Keep the B+C group
+  // itself separate for permissions and scheduling.
+  if(key==='B+C') return ['B','C','B+C'];
+  return key ? [key] : [];
+}
+function trainerGroupMatches(trainingCode, assignedGroups){
+  const code=normalizeGroupCode(trainingCode);
+  if(!code || !assignedGroups) return false;
+  const raw = assignedGroups instanceof Set ? [...assignedGroups] : (Array.isArray(assignedGroups)?assignedGroups:[]);
+  return raw.some(x=>normalizeGroupCode(x)===code);
+}
+function getGroupMemberCount(code){
+  normalizeAllMembers();
+  const wanted=new Set(groupMemberRosterCodes(code));
+  if(!wanted.size || !Array.isArray(membersData)) return 0;
+  return membersData.filter(m=>{
+    const groups=Array.isArray(m.groups)?m.groups:[m.group];
+    return groups.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
+  }).length;
+}
+function getGroupTrainingProgress(code){
+  const today=appToday().iso;
+  const month=appToday().month, year=appToday().year;
+  const seen=new Set();
+  Object.keys(calendarDayGroups||{}).forEach(d=>{
+    const parts=d.split('-');
+    if(Number(parts[0])===year && Number(parts[1])===month &&
+       (calendarDayGroups[d]||[]).some(x=>x.code===code)) seen.add(d);
+  });
+  // Include admin-created recurring schedules for the current month.
+  if(typeof scheduleItemsForDate==='function'){
+    const days=new Date(year,month,0).getDate();
+    for(let n=1;n<=days;n++){
+      const iso=`${year}-${String(month).padStart(2,'0')}-${String(n).padStart(2,'0')}`;
+      if(scheduleItemsForDate(iso).some(x=>x.code===code)) seen.add(iso);
+    }
+  }
+  const dates=[...seen].sort();
+  const total=dates.length;
+  const completed=dates.filter(d=>d<=today).length;
+  return {current:completed,total};
+}
+
+function updateHomeGroupCounts(){
+  document.querySelectorAll('.training[data-group-code]').forEach(card=>{
+    const code=card.dataset.groupCode;
+    const count=getGroupMemberCount(code);
+    const num=card.querySelector('.people .num');
+    if(num) num.textContent=String(count);
+    const titleCount=card.querySelector('.info .title span');
+    if(titleCount){
+      const progress=getGroupTrainingProgress(code);
+      titleCount.textContent=`${progress.current}/${progress.total}`;
+    }
+  });
+}
+
+function calculateAge(dob){
+  const m=String(dob||'').match(/(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/);
+  if(!m)return '';
+  const today=new Date(), d=new Date(Number(m[3]),Number(m[2])-1,Number(m[1]));
+  let age=today.getFullYear()-d.getFullYear();
+  if(today.getMonth()<d.getMonth() || (today.getMonth()===d.getMonth() && today.getDate()<d.getDate())) age--;
+  return age;
+}
+function homeVisibleGroups(){
+  const groups=new Set(MY_TRAINER_GROUPS||[]);
+  if(typeof isAdmin==='function' && (isAdmin() || (typeof isHeadTrainer==='function' && isHeadTrainer()))){
+    try{
+      const today=appToday().iso;
+      getSavedSchedules().forEach(x=>{
+        const active=(!x.startDate||today>=x.startDate)&&(!x.until||today<=x.until);
+        if(active && x.groupCode) groups.add(String(x.groupCode).trim());
+      });
+    }catch(e){}
+    membersData.forEach(m=>(m.groups||[m.group]).forEach(g=>{if(g)groups.add(String(g).trim())}));
+  }
+  return [...groups].filter(Boolean);
+}
+function homeMyGroupMembers(){
+  normalizeAllMembers();
+  const groups=homeVisibleGroups();
+  return membersData.filter(m=>(m.groups||[m.group]).some(g=>groups.includes(g)));
+}
+function todayTrainingGroups(){
+  const t=appToday();
+  const all=new Set();
+  const items=typeof scheduleItemsForDate==='function'?scheduleItemsForDate(t.iso):[];
+  items.forEach(x=>{if(x.code) all.add(String(x.code).trim().toUpperCase());});
+  const base=(calendarDayGroups&&calendarDayGroups[t.iso])||[];
+  base.forEach(x=>{if(x.code) all.add(String(x.code).trim().toUpperCase());});
+
+  // Quick overview must follow exactly the groups the current trainer
+  // can see on Home today, not the whole club.
+  let allowed=null;
+  try{
+    if(typeof isAdmin==='function' && (isAdmin() || (typeof isHeadTrainer==='function' && isHeadTrainer()))){
+      allowed=null;
+    }else{
+      const testAllowed=getCurrentTestTrainerGroupCodes();
+      if(testAllowed instanceof Set) allowed=new Set(testAllowed);
+      else allowed=new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
+    }
+  }catch(e){
+    allowed=new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
+  }
+
+  if(allowed===null) return all;
+
+  const result=new Set([...all].filter(c=>trainerGroupMatches(c,allowed)));
+
+  // A trainer who accepted a substitution must also see that substituted
+  // group in today's quick overview.
+  try{
+    const me=getCurrentTrainerDisplayName();
+    substitutionOffers
+      .filter(o=>o.date===t.iso && o.acceptedBy===me)
+      .forEach(o=>result.add(String(o.code||'').trim().toUpperCase()));
+  }catch(e){}
+  return result;
+}
+function todayHomeVisibleGroupCodes(){
+  // Musí používať rovnaké údaje ako karta DNESNÉ TRÉNINGY.
+  // Niektoré zdroje majú kód v .code, iné v .groupCode.
+  const t=appToday();
+  const dynamic=typeof scheduleItemsForDate==='function'?scheduleItemsForDate(t.iso):[];
+  const base=(calendarDayGroups&&calendarDayGroups[t.iso])||[];
+  const raw=[...base,...dynamic].map(g=>({
+    ...g,
+    code:String(g?.code||g?.groupCode||g?.group||'').trim().toUpperCase()
+  })).filter(g=>g.code);
+
+  let visible=raw;
+  try{
+    if(typeof filterHomeItemsForCurrentRole==='function'){
+      const filtered=filterHomeItemsForCurrentRole(raw);
+      if(Array.isArray(filtered) && filtered.length) visible=filtered;
+    }
+  }catch(e){}
+
+  const result=new Set(visible.map(g=>quickGroupCode(g.code)).filter(Boolean));
+
+  // Zastupovanie prijaté trénerom je súčasť dnešných tréningov.
+  try{
+    const me=getCurrentTrainerDisplayName();
+    substitutionOffers.filter(o=>o.date===t.iso && o.acceptedBy===me)
+      .forEach(o=>{const c=quickGroupCode(o.code);if(c)result.add(c);});
+  }catch(e){}
+
+  // Bezpečnostná poistka: ak filtrovanie role z nejakého dôvodu nevráti kartu,
+  // ale dnešný rozvrh ju obsahuje, skupina sa nesmie zmeniť na „žiadne“.
+  if(!result.size) raw.forEach(g=>{const c=quickGroupCode(g.code);if(c)result.add(c);});
+  return result;
+}
+
+function quickGroupCode(value){
+  const v=String(value||'').trim().toUpperCase();
+  if(!v)return '';
+  const m=v.match(/^([A-ZČĎĽŇŠŤŽ0-9]+)(?:\s*[–—-].*)?$/);
+  return m?m[1]:v.split(/\s*[–—-]\s*/)[0].trim();
+}
+function quickMemberList(type){
+  normalizeAllMembers();
+  const paymentTypes=type==='membership'||type==='registration'||type==='debt';
+  const todayGroups=paymentTypes?todayHomeVisibleGroupCodes():null;
+
+  // Dôležité: pri dnešnom tréningu musí zoznam vychádzať z ČLENOV,
+  // ktorí patria do dnešnej viditeľnej skupiny. Nesmie sa tu použiť
+  // homeMyGroupMembers(), pretože tréner môže mať dnešný tréning cez zastupovanie.
+  let arr=membersData.slice();
+  if(paymentTypes && todayGroups && todayGroups.size){
+    arr=arr.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(quickGroupCode(g))));
+  }
+
+  const today=appToday();
+  if(type==='membership'){
+    const period=membershipPeriodForDate(today.iso) || (today.month<=6?1:2);
+    const year=Number(today.year);
+    return arr.filter(m=>{
+      const paid=membershipPaymentForPeriod(m.id,period,year);
+      const account=typeof membershipAccountForPeriod==='function' ? membershipAccountForPeriod(m.id,period,year) : null;
+      return !paid && !account;
+    });
+  }
+  if(type==='registration') return arr.filter(m=>typeof memberHasRegistration==='function'?!memberHasRegistration(m):!m.registration);
+  if(type==='debt') return arr.filter(m=>Number(m.debt||0)>0);
+  if(type==='birthday') return arr.filter(m=>{
+    const x=String(m.dob||'').match(/(\d{1,2})\.\s*(\d{1,2})\./);
+    return x && Number(x[2])===today.month && Number(x[1])===today.day;
+  });
+  return [];
+}
+
+function updateHomeQuickOverview(){
+  const counts={
+    membership:quickMemberList('membership').length,
+    registration:quickMemberList('registration').length,
+    debt:quickMemberList('debt').length,
+    birthday:quickMemberList('birthday').length
+  };
+  ['membership','registration','debt','birthday'].forEach(k=>{
+    const el=document.getElementById('quick'+k.charAt(0).toUpperCase()+k.slice(1)+'Count');
+    if(el)el.textContent=counts[k];
+  });
+  updateSubstitutionQuick();
+}
+function showQuickMembers(type){
+  const titles={
+    membership:'NEZAPLATENÉ ČLENSKÉ',
+    registration:'NEZAPLATENÉ REGISTRAČNÉ',
+    debt:'DLŽNÉ PLATBY',
+    birthday:'DNEŠNÉ NARODENINY'
+  };
+  const arr=quickMemberList(type);
+  const rows=arr.length?arr.map(m=>{
+    const visibleGroups=homeVisibleGroups(); const groups=(m.groups||[m.group]).filter(g=>visibleGroups.includes(g)).map(g=>`<span class="quick-group">${g}</span>`).join('');
+    const ageText=type==='birthday' ? ` · ${m.age||calculateAge(m.dob)} rokov` : '';
+    const debtText=type==='debt' ? `<strong class="quick-debt-amount">${Number(m.debt||0)} €</strong>` : '';
+    return `<div class="quick-member-row" onclick="closeQuickMembers();renderMemberProfile(${m.id})">
+      <div><b>${m.surname}</b> <span>${m.name}</span><small class="quick-age">${ageText}</small></div><div>${groups}${debtText}</div>
+    </div>`;
+  }).join(''):`<div class="quick-empty">Nikto z tvojich skupín.</div>`;
+  const modal=document.createElement('div');
+  modal.id='quickMembersModal';
+  modal.className='quick-members-modal';
+  modal.innerHTML=`<div class="quick-members-card">
+    <button type="button" class="quick-close" id="quickMembersClose" aria-label="Zavrieť" onclick="closeQuickMembers();return false;">×</button>
+    <h3>${titles[type]}</h3>
+    <small>${(type==='membership'||type==='registration'||type==='debt') ? `Dnešné skupiny: ${[...todayTrainingGroups()].join(', ') || 'žiadne'}` : `Moje skupiny: ${homeVisibleGroups().join(', ')}`}</small>
+    <div class="quick-members-list">${rows}</div>
+  </div>`;
+  document.body.appendChild(modal);
+  const closeBtn=modal.querySelector('#quickMembersClose');
+  if(closeBtn){
+    const closeNow=(ev)=>{ ev.preventDefault(); ev.stopPropagation(); closeQuickMembers(); };
+    closeBtn.addEventListener('pointerdown',closeNow,{capture:true});
+    closeBtn.addEventListener('click',closeNow,{capture:true});
+  }
+}
+function closeQuickMembers(){
+  const el=document.getElementById('quickMembersModal'); if(el)el.remove();
+}
+window.showQuickMembers=showQuickMembers;
+window.closeQuickMembers=closeQuickMembers;
+window.updateHomeQuickOverview=updateHomeQuickOverview;
 
 
+function getCurrentTestTrainerProfile(){
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const role=String(account?.role||'').trim().toLowerCase();
+    if(account && account.trainer_id!=null && (role==='trainer'||role==='tréner'||role==='trener')){
+      const id=Number(account.trainer_id);
+      const real=(trainersData||[]).find(t=>Number(t.id)===id);
+      if(real){
+        if(!Array.isArray(real.groups) && Array.isArray(account.groups)) real.groups=[...account.groups];
+        return real;
+      }
+      try{
+        const pw=JSON.parse(localStorage.getItem('gt-trainer-login-passwords')||'{}');
+        const hit=pw[String(id)];
+        if(hit) return {id,full:String(hit.name||account.display_name||''),name:String(hit.name||account.display_name||''),role:'TRÉNER',groups:Array.isArray(hit.groups)?hit.groups:[]};
+      }catch(e){}
+      return {id,full:String(account.display_name||''),name:String(account.display_name||''),role:'TRÉNER',groups:Array.isArray(account.groups)?account.groups:[]};
+    }
+  }catch(e){}
+  if(!window.GT_TEST_ROLE || window.GT_TEST_ROLE==='admin' || window.GT_TEST_ROLE==='head') return null;
+  const target=window.GT_TEST_ROLE==='trainer2'?'Tréner 2':(window.GT_TEST_ROLE==='trainer1'?'Tréner 1':CURRENT_TRAINER_NAME);
+  return (trainersData||[]).find(t=>String(t.full||t.name||'').trim()===target)||null;
+}
+function getCurrentTestTrainerGroupCodes(){
+  const p=getCurrentTestTrainerProfile();
+  return p ? new Set((p.groups||[]).map(c=>String(c).trim().toUpperCase()).filter(Boolean)) : null;
+}
+function getCurrentTrainerDisplayName(){
+  // Pri reálnom prihlásení používame ID účtu uložené prihlasovaním.
+  // Starý CURRENT_TRAINER_NAME / testovací profil je iba fallback pre staré testovanie.
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    if(account && account.trainer_id!=null){
+      const id=Number(account.trainer_id);
+      const t=(trainersData||[]).find(x=>Number(x.id)===id);
+      if(t) return String(t.full||t.name||'').trim();
+      if(account.display_name) return String(account.display_name).trim();
+    }
+  }catch(e){}
+  const p=getCurrentTestTrainerProfile();
+  return p ? (p.full||p.name||CURRENT_TRAINER_NAME) : (window.GT_TEST_ROLE==='head'?getMainTrainerDisplayName():CURRENT_TRAINER_NAME);
+}
+
+function currentTrainerAccountId(){
+  try{
+    const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const id=Number(a&&a.trainer_id);
+    return Number.isFinite(id)?id:null;
+  }catch(e){ return null; }
+}
 function trainerOwnsTraining(item){
   if(isAdmin() || isHeadTrainer()) return true;
   const myId=currentTrainerAccountId();
   if(myId==null || !item) return false;
 
-  // VZOROVÝ TRÉNER nikdy nevlastní žiadny tréning
-  try{
-    const me=(trainersData||[]).find(t=>Number(t.id)===myId);
-    if(me && (me.isTemplate || String(me.full||'').toUpperCase().includes('VZOROV'))) {
-      console.warn('⛔ VZOROVÝ TRÉNER nemôže otvoriť tréning');
-      return false;
-    }
-  }catch(e){}
-
-  // Profil trénera je primárny - ak má skupinu, môže otvoriť tréning tej skupiny
+  // The trainer's profile assignment is the primary group permission.
+  // Multiple trainers may legitimately be assigned to the same group.
+  // Therefore a training in one of my assigned groups is mine to open,
+  // even when an older schedule row still contains another/legacy trainerId.
   try{
     const profile=getCurrentTestTrainerProfile();
     const myGroups=new Set((profile?.groups||[])
       .map(x=>String(x).trim().toUpperCase()).filter(Boolean));
+    // Include groups resolved from the current trainer ID and active schedule.
+    // This fixes trainers whose profile copy is stale but whose group is
+    // correctly assigned in the current schedule.
     try{
       (getCurrentTrainerGroups()||[]).forEach(x=>myGroups.add(String(x).trim().toUpperCase()));
     }catch(e){}
     const code=normalizeGroupCode(item.groupCode||item.code||item.group||'');
-    if(code && myGroups.size>0 && groupRosterCodes(code).some(c=>myGroups.has(c))) {
-      console.log('✅ Tréner vlastní tréning podľa skupiny', code, 'moje skupiny:', [...myGroups]);
-      return true;
-    }
-  }catch(e){ console.warn('trainerOwnsTraining groups fail', e); }
+    if(groupRosterCodes(code).some(c=>myGroups.has(c))) return true;
+  }catch(e){}
 
-  // Fallback: explicit trainer IDs
+  // Backward-compatible ownership for schedules that are not represented in
+  // the trainer profile yet: use explicit trainer IDs, then trainer name.
   const ids=Array.isArray(item.trainerIds)?item.trainerIds.map(Number):[];
   if(item.trainerId!=null) ids.push(Number(item.trainerId));
   if(ids.includes(myId)) return true;
-  
-  // Fallback: meno - aj priezvisko stačí (Žuffa == Viktor Žuffa)
   try{
     const me=(trainersData||[]).find(t=>Number(t.id)===myId);
-    const myFull=String(me?.full||me?.name||'').trim().toLowerCase();
-    const mySurname=myFull.split(/\s+/).pop()||'';
-    const itemTrainer=String(item.trainer||'').trim().toLowerCase();
-    if(myFull && itemTrainer){
-      if(myFull===itemTrainer) return true;
-      if(mySurname && itemTrainer.includes(mySurname)) return true;
-      if(myFull.includes(itemTrainer) || itemTrainer.includes(myFull)) return true;
-      // "Žuffa" matches "Viktor Žuffa"
-      const itemParts=itemTrainer.split(/\s+/);
-      const myParts=myFull.split(/\s+/);
-      if(itemParts.some(p=> myParts.includes(p) && p.length>=3)) return true;
-    }
+    const myName=String(me?.full||me?.name||'').trim().toLowerCase();
+    return !!myName && myName===String(item.trainer||'').trim().toLowerCase();
   }catch(e){ return false; }
-  return false;
 }
 
 function filterHomeItemsForCurrentRole(items){
   const accountId=currentTrainerAccountId();
   if(accountId!=null && !isAdmin() && !isHeadTrainer()){
-    try{
-      const trainer=(trainersData||[]).find(t=>Number(t.id)===accountId && !t.isTemplate);
-      const myGroups=new Set((trainer?.groups||[]).map(g=>String(g).trim().toUpperCase()).filter(Boolean));
-      // Aj z rozvrhu
-      try{
-        const schedules=getSavedSchedules();
-        schedules.forEach(x=>{
-          const ids=Array.isArray(x.trainerIds)?x.trainerIds.map(Number):[];
-          if(x.trainerId!=null) ids.push(Number(x.trainerId));
-          if(ids.includes(Number(accountId))){
-            myGroups.add(String(x.groupCode||'').trim().toUpperCase());
-          }
-        });
-      }catch(e){}
-      console.log('🔍 Filtrujem pre', trainer?.full, 'skupiny:', [...myGroups]);
-      // Ak nemá žiadne skupiny, zobraz aspoň niečo pre debug
-      if(myGroups.size===0){
-        console.warn('⚠️ Tréner nemá žiadne skupiny, zobrazujem všetky pre debug');
-        return items;
-      }
-      return (items||[]).filter(g=>{
-        const code=String(g.code||g.groupCode||'').trim().toUpperCase();
-        const ok=myGroups.has(code);
-        if(!ok) console.log('🚫 Skrývam tréning', code, 'nie je v', [...myGroups]);
-        return ok;
-      });
-    }catch(e){ console.warn('filter fail', e); return items; }
+    // For a real trainer, the profile assignment is authoritative for which
+    // group cards are visible. Do NOT require trainerId on the schedule row:
+    // old/new schedule rows can legitimately lack that field, while the Admin
+    // has already assigned the group to this trainer.
+    const p=getCurrentTestTrainerProfile();
+    const allowed=new Set((p?.groups||[]).map(x=>String(x).trim().toUpperCase()).filter(Boolean));
+    try{ (getCurrentTrainerGroups()||[]).forEach(x=>allowed.add(String(x).trim().toUpperCase())); }catch(e){}
+    const iso=appToday().iso;
+    const me=getCurrentTrainerDisplayName();
+    const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
+    return (items||[]).filter(g=>{
+      const code=normalizeGroupCode(g?.code||'');
+      const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
+      return trainerGroupMatches(code, allowed) || incoming;
+    });
   }
-  return items;
+  const allowed=getCurrentTestTrainerGroupCodes();
+  if(!allowed) return items;
+  const iso=appToday().iso;
+  const me=getCurrentTrainerDisplayName();
+
+  const outgoingAccepted=substitutionOffers.filter(o=>o.acceptedBy && o.from===me && o.date===iso);
+  const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
+
+  return items.map(g=>{
+    const match=outgoingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
+    return match ? {...g,substitutionInactive:true,substitutionLabel:'ZASTUPOVANÝ TRÉNING',substitutionBy:match.acceptedBy} : g;
+  }).filter(g=>{
+    const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
+    return trainerGroupMatches(String(g.code||'').toUpperCase(), allowed) || incoming;
+  }).map(g=>{
+    const incoming=incomingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
+    return incoming ? {...g,substitutionActive:false,substitutionLabel:'',substitutionBy:''} : g;
+  });
 }
 
+function hasAcceptedSubstitutionAccess(code,date,time=''){
+  try{
+    const me=String(getCurrentTrainerDisplayName()||'').trim();
+    const wantedCode=normalizeGroupCode(code);
+    const wantedDate=String(date||'');
+    const wantedTime=String(time||'').trim();
+    if(!me || !wantedCode || !wantedDate) return false;
+    return substitutionOffers.some(o=>{
+      if(String(o.acceptedBy||'').trim()!==me) return false;
+      if(String(o.date||'')!==wantedDate) return false;
+      if(String(o.code||'').trim().toUpperCase()!==wantedCode) return false;
+      return !wantedTime || !String(o.time||'').trim() || String(o.time||'').trim()===wantedTime;
+    });
+  }catch(e){ return false; }
+}
+window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
 
+function openHomeTodayTraining(g){
+  if(!isAdmin() && !isHeadTrainer()){
+    const p=getCurrentTestTrainerProfile();
+    const myGroups=new Set((p?.groups||[]).map(x=>String(x).toUpperCase()));
+    try{ (getCurrentTrainerGroups()||[]).forEach(x=>myGroups.add(String(x).trim().toUpperCase())); }catch(e){}
+    const code=String(g?.code||g?.group||'').toUpperCase();
+    const today=appToday().iso;
+    const acceptedSubstitution=hasAcceptedSubstitutionAccess(code,today,String(g?.time||''));
+    if(code && trainerGroupMatches(code, myGroups)){
+      // Tréner má skupinu pridelenú.
+    }else if(acceptedSubstitution){
+      // PRIJATÝ ZÁSTUP: dočasný prístup k tomuto konkrétnemu tréningu,
+      // aj keď skupina nie je v profile trénera.
+    }else if(!trainerOwnsTraining(g)){
+      toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
+      return false;
+    }
+  }
+  // HARD SEPARATION: Home has its own entry context. It must never read the
+  // last date selected in Calendar, even if the Calendar was opened moments ago.
+  if(g && g.substitutionInactive){
+    toast('Tento tréning je zastupovaný trénerom '+(g.substitutionBy||'iným trénerom')+'.');
+    return false;
+  }
+  const todayIso=appToday().iso;
+  window.__attendanceOpenedFromCalendar=false;
+  window.__attendanceOpenSource='home';
+  window.__attendanceHomeDate=todayIso;
+  saveCurrentTrainingAttendance();
+  attendanceState.date=todayIso;
+  attendanceState.group=g && g.code ? g.code : '';
+  attendanceState.name=g && g.name ? g.name : '';
+  attendanceState.trainingTime=g && g.time ? String(g.time) : '';
+  attendanceState.trainingScheduleId=g && g.scheduleId ? g.scheduleId : null;
+  attendanceState.billingPaymentSnapshot=null;
+  attendanceState.billingAttendanceSnapshot=null;
+  attendanceState.billingRecordSnapshot=null;
+  applyTrainingSettingsForAttendance();
+  // Render directly as today's attendance. The hashchange handler is only a
+  // routing fallback and is explicitly told to keep this Home context.
+  location.hash='attendance';
+  attendance();
+  return false;
+}
+// Backward-compatible alias for any older stored markup.
+function openHomeTraining(g){ return openHomeTodayTraining(g); }
+function parseSkDateLoose(value){
+  if(!value)return null;
+  if(value instanceof Date)return isNaN(value)?null:value;
+  const m=String(value).match(/(\d{1,2})\.?\s*(\d{1,2})\.?\s*(\d{4})/);
+  if(!m)return null;
+  const d=new Date(Number(m[3]),Number(m[2])-1,Number(m[1]));
+  return isNaN(d)?null:d;
+}
+function headHomeGroupLabel(code){
+  return getAdminGroupName(code);
+}
+function headHomeGroupShort(code){const key=String(code||'').toUpperCase(); if(!key)return ''; const color=getGroupColor(key); return `<span class="head-group-badge" style="background:${color};">${key}</span>`;}
+function headHomeDateLabel(d){return `${d.getDate()}. ${String(d.getMonth()+1).padStart(2,'0')}.`}
+function headHomeWeekStart(){
+  const t=appToday(); const d=new Date(t.year,t.month-1,t.day); const dow=d.getDay(); const monday=new Date(d); monday.setDate(d.getDate()+(dow===0?-6:1-dow)); monday.setHours(0,0,0,0); return monday;
+}
+function headHomeMonthAttendance(){
+  // HLAVNÝ TRÉNER: tréning existuje iba vtedy, ak má reálne uložené
+  // vyúčtovanie. Samotný rozvrh ani osamotený záznam dochádzky tréning
+  // nevytvára.
+  //
+  // POČET ÚČASTÍ však vždy berieme priamo z konkrétnej uloženej dochádzky:
+  //   PRÍTOMNÍ = training && !newMember
+  //   NOVÍ     = newMember
+  //   ÚČASŤ    = PRÍTOMNÍ + NOVÍ
+  // Tým sa nepreberajú staré presentCount/newCount zo starých vyúčtovaní.
+  // Zároveň sa vynechajú prázdne/omylom vytvorené nulové vyúčtovania, napr.
+  // D, ak v ňom nikto nebol a nebola žiadna platba.
+  const t=appToday();
+  const out={};
+  const norm=v=>String(v||'').trim().toUpperCase();
+  const codeOf=v=>{
+    const x=norm(v); if(!x)return '';
+    const m=x.match(/^([A-ZČĎĽŇŠŤŽ0-9+]+)(?:\s*[–—-].*)?$/);
+    return m?m[1]:x.split(/\s*[–—-]\s*/)[0].trim();
+  };
+  getAdminGroupCodes().forEach(g=>{
+    const k=codeOf(g)||norm(g);
+    out[k]={sum:0,trainings:0,avg:0};
+  });
 
+  function dateIso(r){
+    const d=parsePaymentDate(r&&r.date);
+    return d ? `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}` : '';
+  }
+
+  try{
+    const latest=new Map();
+    (monthlyBillingRecords||[]).forEach(r=>{
+      if(!r || r.cancelled || r.substituteReference || r.substitute) return;
+      const iso=dateIso(r);
+      if(!iso || iso.slice(0,7)!==`${t.year}-${String(t.month).padStart(2,'0')}`) return;
+      if(iso>t.iso) return;
+      const group=codeOf(r.group||r.groupCode||r.code);
+      if(!group || !out[group]) return;
+      const trainer=norm(r.trainer||r.name||'');
+      const key=`${trainer}|${iso}|${group}`;
+      const old=latest.get(key);
+      const stamp=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+      const oldStamp=Number(old?.savedAt||old?.updatedAt||old?.createdAt||0);
+      if(!old || stamp>=oldStamp) latest.set(key,r);
+    });
+
+    latest.forEach(r=>{
+      const group=codeOf(r.group||r.groupCode||r.code);
+      if(!group || !out[group]) return;
+      const iso=dateIso(r);
+      const histKey=`${iso}|${String(r.group||r.groupCode||r.code||'').trim()}`;
+      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey]) || null;
+
+      // Dochádzka je jediný zdroj počtu PRÍTOMNÝCH a NOVÝCH.
+      let present=0, newCount=0;
+      if(hist && typeof hist==='object'){
+        Object.keys(hist).forEach(k=>{
+          const v=hist[k]||{};
+          if(v.training && !v.newMember) present++;
+          if(v.newMember) newCount++;
+        });
+      }else{
+        // Starší uložený záznam bez attendance history: použi snapshot iba
+        // ako kompatibilnú zálohu, nikdy nie súčet zo starého reportu.
+        const snap=Array.isArray(r.paymentSnapshot)?r.paymentSnapshot:[];
+        present=snap.filter(x=>x && x.training && !x.newMember).length;
+        newCount=snap.filter(x=>x && x.newMember).length;
+      }
+
+      // Nulové vyúčtovanie bez účasti/platby nie je uskutočnený tréning pre
+      // mesačnú účasť. Toto odstráni napr. starý nulový záznam D.
+      const hasFinancialOrAttendance =
+        present>0 || newCount>0 ||
+        Number(r.paying||0)>0 || Number(r.trainingPaid||0)>0 ||
+        Number(r.membershipSum||0)>0 || Number(r.registrationSum||0)>0 ||
+        Number(r.otherPlus||0)!==0 || Number(r.otherMinus||0)!==0;
+      if(!hasFinancialOrAttendance) return;
+
+      out[group].trainings++;
+      out[group].sum += present + newCount;
+    });
+  }catch(e){ console.warn('headHomeMonthAttendance attendance-source',e); }
+
+  Object.values(out).forEach(x=>x.avg=x.trainings?x.sum/x.trainings:0);
+  return out;
+}
+function headHomeLastVisit(m){
+  const rows=getSavedMemberTrainingData(m); if(rows.length)return rows[0].dateObj;
+  return parseSkDateLoose(m.last||m.lastTraining||'');
+}
+function headHomeNewMembers(){
+  const now=appTodayDate(), from=new Date(now); from.setDate(from.getDate()-30);
+  return membersData.filter(m=>{
+    const d=parseSkDateLoose(m.memberSince||m.newMemberDate||m.createdAt||'');
+    return !!m.newMember || (d && d>=from && d<=now);
+  }).sort((a,b)=>(headHomeLastVisit(b)||0)-(headHomeLastVisit(a)||0));
+}
+function headHomeNoVisitMembers(){
+  const now=appTodayDate(), cutoff=new Date(now); cutoff.setDate(cutoff.getDate()-30);
+  return membersData.filter(m=>{
+    const last=headHomeLastVisit(m); return !last || last<cutoff;
+  }).sort((a,b)=>{const da=headHomeLastVisit(a),db=headHomeLastVisit(b); if(!da&&!db)return (a.surname||'').localeCompare(b.surname||'','sk'); if(!da)return -1;if(!db)return 1;return da-db;});
+}
+function headHomeBirthdays(){
+  const now=appTodayDate();
+  return membersData.map(m=>{
+    const d=parseSkDateLoose(m.dob); if(!d)return null;
+    const y=now.getFullYear(); let next=new Date(y,d.getMonth(),d.getDate()); if(next<now)next.setFullYear(y+1);
+    const age=next.getFullYear()-d.getFullYear();
+    return {...m,next,age};
+  }).filter(Boolean).sort((a,b)=>a.next-b.next).slice(0,5);
+}
+function headHomeNav(active='home'){
+  return `<nav class="bottom"><a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
+}
+function renderHeadHomeList(title,rows,kind){
+  try{
+    history.pushState({gtRoute:'headHomeList',gtParent:'home',gtKind:kind||''},'',location.pathname+location.search+'#headHomeList');
+  }catch(e){}
+  const app=document.querySelector('.app');
+  const body=kind==='new'?rows.map(m=>`<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${m.memberSince||m.newMemberDate||'—'}</span></div>`).join(''):rows.map(m=>{const d=headHomeLastVisit(m);return `<div class="list-row"><b>${m.surname} ${m.name}</b><span>${headHomeGroupShort((m.groups||[m.group])[0])}</span><span>${d?d.toLocaleDateString('sk-SK'):'Žiadna návšteva'}</span></div>`}).join('');
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content"><section class="head-list-card head-home-card"><div class="head-card-title">${title}</div><div class="list-row list-head"><span>MENO</span><span>SKUPINA</span><span>${kind==='new'?'DÁTUM EVIDENCIE':'POSLEDNÁ NÁVŠTEVA'}</span></div>${body||'<div class="list-row"><span>Žiadni členovia.</span></div>'}</section></main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+}
+
+function getHeadHomeAttendancePaymentTotals(month,year){
+  const out={membership:0,registration:0,membershipAccount:0,registrationAccount:0};
+  try{
+    // Normal membership/registration = exactly the sums saved with each
+    // attendance billing record. Do not read member profile totals here.
+    const rows=(monthlyBillingRecords||[]).filter(r=>{
+      const d=parsePaymentDate(r?.date);
+      return d&&d.month===Number(month)&&d.year===Number(year)
+        && !r.cancelled && !r.substituteReference;
+    });
+
+    // A billing key identifies one trainer's attendance for one date/group.
+    // Keep only the latest saved record for that exact attendance.
+    const latest=new Map();
+    rows.forEach(r=>{
+      const d=parsePaymentDate(r.date);
+      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+      const trainer=String(r.trainer||r.name||'').trim().toUpperCase();
+      const group=String(r.group||'').trim().toUpperCase();
+      const key=`${trainer}|${dk}|${group}`;
+      const old=latest.get(key);
+      const stamp=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+      const oldStamp=Number(old?.savedAt||old?.updatedAt||old?.createdAt||0);
+      if(!old || stamp>=oldStamp) latest.set(key,r);
+    });
+
+    latest.forEach(r=>{
+      // These fields are already calculated by the attendance screen and
+      // intentionally contain only normal (cash/regular) payments.
+      out.membership+=Number(r.membershipSum||0);
+      out.registration+=Number(r.registrationSum||0);
+    });
+
+    // "NA ÚČET" is a separate bucket. It is written when the ACCOUNT
+    // payment is made in Dochádzka. Deduplicate identical history entries.
+    const seen=new Set();
+    (membersData||[]).forEach(m=>{
+      try{
+        ensureMemberAccountHistory(m).forEach(p=>{
+          const d=parsePaymentDate(p.date);
+          const amount=Number(p.amount||0);
+          if(!d||d.month!==Number(month)||d.year!==Number(year)||amount<=0)return;
+          const type=String(p.type||'');
+          if(type!=='membership' && type!=='registration')return;
+          const key=`${m.id}|${type}|${p.date}|${amount}`;
+          if(seen.has(key))return;
+          seen.add(key);
+          if(type==='membership') out.membershipAccount+=amount;
+          else out.registrationAccount+=amount;
+        });
+      }catch(e){}
+    });
+  }catch(e){console.warn('head home attendance payment totals',e)}
+  return out;
+}
+
+function renderHeadHome(){
+  const app=document.querySelector('.app'), t=appToday(), now=new Date(), greeting=now.getHours()<12?'DOBRÉ RÁNO':(now.getHours()<18?'DOBRÝ DEŇ':'DOBRÝ VEČER');
+  const week=headHomeWeekStart(), days=['PO','UT','ST','ŠT','PI','SO','NE'];
+  const active=membersData.length, newMembers=headHomeNewMembers(), noVisit=headHomeNoVisitMembers(), att=headHomeMonthAttendance(), birthdays=headHomeBirthdays();
+  // Platby hlavného trénera sú zdrojované priamo z uložených dochádzok.
+  const memberCard=`<section class="head-home-card"><div class="head-card-title">👥 ČLENOVIA</div><div class="member-stats"><div class="member-stat" onclick="return nav('members')"><strong>${active}</strong><span>Aktívnych členov</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat new" onclick="renderHeadHomeList('NOVÍ ČLENOVIA – POSLEDNÝCH 30 DNÍ',headHomeNewMembers(),'new')"><strong>${newMembers.length}</strong><span>Noví členovia<br>za posledných 30 dní</span><small>kliknutím zobraz zoznam</small></div><div class="member-stat warning" onclick="renderHeadHomeList('ČLENOVIA BEZ NÁVŠTEVY 30+ DNÍ',headHomeNoVisitMembers(),'old')"><strong>${noVisit.length}</strong><span>Členovia bez návštevy<br>30+ dní</span><small>kliknutím zobraz zoznam</small></div></div></section>`;
+  const weekHtml=days.map((dn,i)=>{const day=new Date(week);day.setDate(week.getDate()+i);const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;const todayIso=(()=>{const td=appTodayDate();return `${td.getFullYear()}-${String(td.getMonth()+1).padStart(2,'0')}-${String(td.getDate()).padStart(2,'0')}`;})();const todayClass=iso===todayIso?' week-today':'';let items=[];try{items=scheduleItemsForDate(iso)||[];}catch(e){}items=items.sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));return `<div class="week-day${todayClass}"><div class="week-day-name">${dn}</div><div class="week-date">${headHomeDateLabel(day)}</div>${items.length?items.slice(0,4).map(g=>`<div class="week-training"><b>${g.time||''}</b><span>${headHomeGroupShort(g.code)} · ${g.trainer||'—'}</span></div>`).join(''):'<div class="week-empty">—</div>'}</div>`}).join('');
+  const attendanceRows=getAdminGroupCodes().map(g=>`<tr><td><b>${headHomeGroupShort(g)}</b> – ${headHomeGroupLabel(g).split(' – ').slice(1).join(' – ')||''}</td><td>${att[g]?.sum||0}</td><td>${att[g]?.trainings||0}</td><td>${(att[g]?.avg||0).toFixed(2).replace('.',',')}</td></tr>`).join('');
+  const birthdayRows=birthdays.map(m=>`<div class="birthday-row"><span class="birthday-name">${m.surname} ${m.name} <strong class="birthday-age">— ${m.age} rokov</strong></span><span class="birthday-group">${headHomeGroupShort((m.groups||[m.group])[0])}</span><span class="birthday-date">${m.next.getDate()}. ${m.next.getMonth()+1}.</span></div>`).join('');
+  app.innerHTML=`<header class="topbar home-topbar"><div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header><main class="content head-home-dashboard">
+  <section class="head-welcome-card"><div class="welcome-small">${greeting}</div><div class="welcome-big">HLAVNÝ TRÉNER</div><div class="welcome-date">${t.day}. ${skMonths[t.month-1]} ${t.year}</div></section>
+  <section class="head-home-card"><div class="head-card-title">📅 AKTUÁLNY TÝŽDENNÝ ROZVRH</div><div class="week-grid">${weekHtml}</div></section>
+  ${memberCard}
+  <section class="head-home-card"><div class="head-card-title">🥊 ÚČASŤ – AKTUÁLNY MESIAC</div><table class="attendance-table"><thead><tr><th>SKUPINA</th><th>SÚČET ÚČASTÍ</th><th>POČET TRÉNINGOV</th><th>PRIEMER / 1 TRÉNING</th></tr></thead><tbody>${attendanceRows}</tbody></table></section>
+  <section class="head-home-card"><div class="head-card-title">🎂 NAJBLIŽŠÍCH 5 NARODENÍN</div>${birthdayRows||'<div class="birthday-row"><span>Žiadne údaje o narodeninách.</span></div>'}</section>
+  </main>${headHomeNav('home')}<div id="toast" class="toast"></div>`;
+}
+function getTopbarLoggedUserLabel(){
+  try{
+    const name=String(getCurrentTrainerDisplayName()||getLoggedTrainerDisplayName()||'').trim();
+    if(isAdmin()) return 'Administrátor';
+    if(isHeadTrainer()) return name ? `Hlavný tréner ${name}` : 'Hlavný tréner';
+    return name ? `Tréner ${name}` : '';
+  }catch(e){ return ''; }
+}
+function getLoggedTrainerDisplayName(){
+  try{
+    if(isAdmin()) return 'ADMIN';
+    const n=String(getCurrentTrainerDisplayName()||'').trim();
+    if(n && n!=='TRÉNER 1' && n!=='TRÉNER 2') return n;
+  }catch(e){}
+  return '';
+}
+
+function renderHome(){
+  if(!isAdmin() && !isHeadTrainer()){
+    try{
+      const p=getCurrentTestTrainerProfile();
+      if(p) MY_TRAINER_GROUPS=Array.isArray(p.groups)?[...p.groups]:getCurrentTrainerGroups();
+    }catch(e){}
+  }
+
+  if(isHeadTrainer()){ renderHeadHome(); return; }
+  const app=document.querySelector('.app');
+  const t=appToday();
+  const d=new Date(t.year,t.month-1,t.day);
+  const dayName=skDays[d.getDay()];
+  const monthName=skMonths[t.month-1];
+  const homeDynamic=typeof scheduleItemsForDate==='function'?scheduleItemsForDate(t.iso):[];
+  const homeBase=(calendarDayGroups&&calendarDayGroups[t.iso])||[];
+  const allHomeItems=[...homeBase.map(g=>({...g,color:getGroupColor(g.code,g.color)})),...homeDynamic.map(g=>({...g,color:getGroupColor(g.code,g.color)}))]
+    .filter((g,i,a)=>a.findIndex(x=>String(x.code).toUpperCase()===String(g.code).toUpperCase()&&x.time===g.time&&x.name===g.name)===i);
+  const items=filterHomeItemsForCurrentRole(allHomeItems).sort((a,b)=>{const ta=String(a.time||'').match(/(\d{1,2}):(\d{2})/);const tb=String(b.time||'').match(/(\d{1,2}):(\d{2})/);const ma=ta ? Number(ta[1])*60+Number(ta[2]) : 9999;const mb=tb ? Number(tb[1])*60+Number(tb[2]) : 9999;return ma-mb || String(a.code||'').localeCompare(String(b.code||''),'sk',{numeric:true,sensitivity:'base'}) || String(a.name||'').localeCompare(String(b.name||''),'sk');});
+  let html=HOME_HTML;
+  // Domov má vlastnú štruktúru brandu (home-brand + data-logged-trainer).
+  // Preto sa meno musí vložiť priamo do tejto šablóny, nie cez všeobecný
+  // topbar replacement.
+  html=html.replace(
+    /<div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small" data-logged-trainer><\/span><\/div>/,
+    `<div class="brand home-brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>`
+  );
+  html=html.replace(/<button class="menu"[^>]*>☰<\/button>/, '');
+  html=html.replace(/<div class="date">[\s\S]*?<\/div>/,`<div class="date"><b>${t.day}. ${monthName} ${t.year}</b><br>${dayName}</div>`);
+  const listHtml=items.length ? items.map(g=>{const p=typeof getGroupTrainingProgress==='function'?getGroupTrainingProgress(g.code):{current:0,total:0};const homeDate=appToday().iso;const cancelled=isTrainingCancelled(homeDate,g.code,g.time,g.name);const headInactive = isHeadTrainer();return `<article class="training ${g.substitutionInactive?'substitution-inactive':''} ${g.substitutionActive?'substitution-active':''} ${cancelled?'cancelled-training':''}" onclick="${cancelled||headInactive?'return false;':`return openHomeTodayTraining({code:'${g.code}',name:'${String(g.name||'').replace(/'/g,"\\'")}',substitutionInactive:${!!g.substitutionInactive},substitutionBy:'${String(g.substitutionBy||'').replace(/'/g,"\\'")}',scheduleId:${g.scheduleId?JSON.stringify(g.scheduleId):'null'},trainerId:${g.trainerId!=null?JSON.stringify(g.trainerId):'null'},trainerIds:${Array.isArray(g.trainerIds)?JSON.stringify(g.trainerIds):'[]'}})`}" data-group-code="${g.code}" data-group-name="${g.name}"><div class="badge ${g.code.toLowerCase().replace('+','p')}" style="background:${getGroupColor(g.code,g.color)} !important;background-image:none !important;">${g.code}</div><div class="info"><div class="title"><span>${p.current}/${p.total}</span> ${g.name}${cancelled?`<small class="cancelled-label">ZRUŠENÝ</small>`:''}${g.substitutionLabel?`<small class="sub-home-label">${g.substitutionLabel}${g.substitutionBy?` · ${g.substitutionBy}`:''}</small>`:''}</div><div class="meta"><i>◷</i>${g.time}<br><i>⌖</i>${g.location||'Watsonova 4'}${g.trainer?`<br><i>♟</i>${g.trainer}`:''}</div></div><div class="people"><div class="num">${getGroupMemberCount(g.code)}</div><div class="label">členov</div></div><div class="arrow">${cancelled?'':'›'}</div></article>`;}).join('') : `<div class="empty-day" style="padding:24px;text-align:center">Na dnešný deň nie je naplánovaný tréning.</div>`;
+  html=html.replace(/<section class="training-list">[\s\S]*?<\/section>/,`<section class="training-list">${listHtml}</section>`);
+  app.innerHTML=html;
+  // Vynútene nastav meno priamo po vykreslení Domova.
+  try{
+    const homeUserEl=app.querySelector('.home-topbar .logged-user-small');
+    if(homeUserEl){
+      let label='';
+      try{
+        const acc=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+        if(acc && String(acc.role||'').toLowerCase()!=='admin' && String(acc.display_name||'').trim()) label=`Tréner ${String(acc.display_name).trim()}`;
+      }catch(e){}
+      if(!label) label=getTopbarLoggedUserLabel();
+      homeUserEl.textContent=label;
+    }
+  }catch(e){}
+  updateHomeGroupCounts();updateHomeQuickOverview();
+}
+
+function renderCalendar(){
+  const t=appToday();
+  if(typeof selectedCalendarMonth!=='number' || typeof selectedCalendarYear!=='number'){
+    selectedCalendarMonth=t.month-1;
+    selectedCalendarYear=t.year;
+    selectedCalendarDay=t.day;
+  }
+  const app=document.querySelector('.app');
+  const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const currentMonthLabel=monthNames[selectedCalendarMonth]+' '+selectedCalendarYear;
+  app.innerHTML=`
+    <header class="topbar"><button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+    <main class="content">
+      <div class="calendar-head">
+        <div class="section-title"><span class="calendar-icon">▣</span> KALENDÁR</div>
+        <div class="calendar-month-nav">
+          <button type="button" onclick="changeCalendarMonth(-1)" aria-label="Predchádzajúci mesiac">‹</button>
+          <div class="calendar-month-label">${currentMonthLabel}</div>
+          <button type="button" onclick="changeCalendarMonth(1)" aria-label="Nasledujúci mesiac">›</button>
+        </div>
+      </div>
+      <section class="calendar-card">
+        <div class="week">${['PO','UT','ST','ŠT','PI','SO','NE'].map(x=>`<div>${x}</div>`).join('')}</div>
+        <div class="days">${calendarDays().map(d=>`
+          <button class="day ${d.today?'today':''} ${d.selected?'selected':''} ${d.weekend?'weekend':''}" ${d.n!==''?`onclick="selectDay(${d.n})"`:''}>
+            <span>${d.n}</span>${Array.isArray(d.dots)&&d.dots.length?`<i class="training-dots">${d.dots.map(c=>{const isHex=String(c).startsWith('#'); return `<b class="${isHex?'dot-custom':'dot-'+String(c).toLowerCase().replace('+','p')}" ${isHex?`style="background:${c} !important;"`:''}></b>`;}).join('')}</i>`:''}
+          </button>`).join('')}</div>
+      </section>
+      <div id="selectedDate" class="selected-date">${formatSkDate(selectedCalendarDay,selectedCalendarMonth,selectedCalendarYear)}</div>
+      <section id="dayTrainings" class="day-trainings">${dayRows()}</section>
+    </main>
+    <nav class="bottom">
+      <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
+      <a class="nav active" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
+      <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
+      <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
+    </nav><div id="toast" class="toast"></div>`;
+}
+function getGroupColors(){
+  try{return JSON.parse(localStorage.getItem('gt-group-colors')||'{}')||{};}catch(e){return {};}
+}
+function getGroupColor(code, fallback){
+  const key=String(code||'').trim().toUpperCase();
+  const colors=getGroupColors();
+  if(colors[key]) return scheduleColorValue(colors[key]);
+  try{
+    const schedules=getSavedSchedules();
+    const matches=schedules.filter(x=>String(x.groupCode||'').trim().toUpperCase()===key);
+    const colored=matches.find(x=>x.color);
+    if(colored) return scheduleColorValue(colored.color);
+  }catch(e){}
+  const fixed={
+    A:'#e4474d', B:'#3778e8', C:'#35b96b', D:'#f39a19',
+    'D+':'#19b9c9', ZZ:'#d9a91d', G:'#d9a91d', F:'#3f72d8'
+  };
+  return fixed[key] || scheduleColorValue(fallback||'gold');
+}
+function setGroupColor(code,color){
+  const key=String(code||'').trim().toUpperCase();
+  if(!key)return;
+  const colors=getGroupColors();
+  colors[key]=scheduleColorValue(color);
+  localStorage.setItem('gt-group-colors',JSON.stringify(colors));
+}
+
+function scheduleColorValue(c){
+ const colors={gold:'#dca10e',blue:'#3d7cff',green:'#35b76b',red:'#d94b4b',purple:'#9b59b6',orange:'#f28c28',cyan:'#19b6c9',pink:'#e95b9f',lime:'#8bc34a',teal:'#16a085',navy:'#3155a6',violet:'#6c5ce7',brown:'#9b6b43',gray:'#707070',black:'#2b2b2b'};
+ return colors[c]||c||colors.gold;
+}
+
+function removeHistoricalMayJuneTrainingRecords(){
+  const oldMonths=/^2026-(05|06)-/;
+  const keys=['gt-training-history','gt-training-records','gt-training-data','gt-attendance','gt-attendance-data','guard-trainer-attendance'];
+  keys.forEach(key=>{
+    try{
+      const raw=localStorage.getItem(key);
+      if(!raw)return;
+      const data=JSON.parse(raw);
+      if(Array.isArray(data)){
+        const filtered=data.filter(x=>!oldMonths.test(String(x?.date||x?.trainingDate||x?.day||x?.iso||'')));
+        if(filtered.length!==data.length)localStorage.setItem(key,JSON.stringify(filtered));
+      }else if(data && typeof data==='object'){
+        let changed=false;
+        Object.keys(data).forEach(k=>{
+          if(oldMonths.test(k)){delete data[k];changed=true;}
+          else if(data[k]&&typeof data[k]==='object'&&oldMonths.test(String(data[k].date||data[k].trainingDate||data[k].day||data[k].iso||''))){
+            delete data[k];changed=true;
+          }
+        });
+        if(changed)localStorage.setItem(key,JSON.stringify(data));
+      }
+    }catch(e){}
+  });
+}
+removeHistoricalMayJuneTrainingRecords();
+
+function getSavedSchedules(){
+  try{return JSON.parse(localStorage.getItem('gt-schedule')||'[]')||[];}catch(e){return [];}
+}
+function scheduleDayIndex(day){
+  return ['Pondelok','Utorok','Streda','Štvrtok','Piatok','Sobota','Nedeľa'].indexOf(day);
+}
+
+function displayTrainerSurnamesForGroup(x){
+  const out=[];
+  const add=v=>{
+    const raw=String(v||'').trim().replace(/\s+/g,' ');
+    if(!raw)return;
+    const surname=raw.split(' ').pop();
+    if(surname && !out.some(n=>n.toLocaleLowerCase('sk-SK')===surname.toLocaleLowerCase('sk-SK'))) out.push(surname);
+  };
+  try{
+    const ids=Array.isArray(x.trainerIds)?x.trainerIds:[];
+    ids.forEach(id=>{
+      const t=(typeof trainersData!=='undefined'&&Array.isArray(trainersData))
+        ? trainersData.find(z=>Number(z.id)===Number(id)) : null;
+      if(t) add(t.surname||t.lastName||t.name||t.fullName||t.displayName);
+    });
+  }catch(e){}
+  if(Array.isArray(x.trainers)) x.trainers.forEach(add);
+  if(!out.length) add(x.trainer);
+  return out.join(', ');
+}
+
+function scheduleItemsForDate(iso){
+  const out=[];
+  const d=new Date(iso+'T12:00:00');
+  const schedules=getSavedSchedules();
+  schedules.forEach(x=>{
+    const idx=scheduleDayIndex(x.day);
+    const dow=(d.getDay()+6)%7;
+    if(idx<0 || idx!==dow)return;
+    if(x.repeat){
+      if(x.until && iso>x.until)return;
+    }
+    const start=x.startDate||x.date||null;
+    if(start && iso<start)return;
+    out.push({
+      code:x.groupCode||'',
+      name:x.name,
+      time:`${x.from} – ${x.to}`,
+      trainer:displayTrainerSurnamesForGroup(x),
+      location:x.location||'',
+      color:getGroupColor(x.groupCode, x.color),
+      trainingFee:Number(x.trainingFee ?? (String(x.groupCode||'').toUpperCase()==='C'?6:5)),
+      trainerReward:Number(x.trainerReward ?? (String(x.groupCode||'').toUpperCase()==='C'?3:2)),
+      scheduleId:x.id,
+      trainerId:x.trainerId!=null?Number(x.trainerId):(
+        (trainersData||[]).find(t=>String(t.full||t.name||'').trim().toLowerCase()===String(x.trainer||'').trim().toLowerCase())?.id ?? null
+      ),
+      trainerIds:Array.isArray(x.trainerIds)?x.trainerIds.map(Number).filter(Number.isFinite):(
+        x.trainerId!=null?[Number(x.trainerId)]:(
+          (trainersData||[]).find(t=>String(t.full||t.name||'').trim().toLowerCase()===String(x.trainer||'').trim().toLowerCase())?.id != null
+            ? [Number((trainersData||[]).find(t=>String(t.full||t.name||'').trim().toLowerCase()===String(x.trainer||'').trim().toLowerCase()).id)]
+            : []
+        )
+      )
+    });
+  });
+  return out;
+}
 function dynamicCalendarGroups(){
   const map={};
   const y=selectedCalendarYear,m=selectedCalendarMonth;
@@ -4790,8 +5847,7 @@ function trainerBadge(c){
 // Testovacie roly používajú rovnaké profily ako Admin.
 function isTestTrainerAccount(t){
  const n=String(t?.full||t?.name||'').trim().toLowerCase();
- if(t?.isTemplate) return true;
- return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2'||n==='vzorový tréner'||n==='vzorovy trener';
+ return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2';
 }
 function visibleTrainerProfiles(){
   // The template is intentionally visible to the Admin, but never usable as

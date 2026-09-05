@@ -372,12 +372,13 @@ function initCloudSync(){
             const lt=Number(localOrder[id]||0), rt=Number(remoteOrder[id]||0);
             if(!l || rt>=lt) byId.set(id,m);
           });
-          // Vymazanie je silnejšie než starší member snapshot.
+          // VYMAZANIE JE TRVALÝ TOMBSTONE. Kým sa člen výslovne neobnoví,
+          // nesmie sa do aktívneho zoznamu vrátiť zo staršieho snapshotu ani
+          // z druhého zariadenia. Porovnanie s member-save timestampom tu
+          // zámerne nepoužívame – inak by staršia kópia mohla člena vzkriesiť.
           Object.keys(mergedDelete).forEach(id=>{
             const delAt=Number(mergedDelete[id]||0);
-            if(!delAt) return;
-            const lt=Number(localOrder[id]||0), rt=Number(remoteOrder[id]||0);
-            if(delAt>=lt && delAt>=rt) byId.delete(String(id));
+            if(delAt) byId.delete(String(id));
           });
           originalSetItem('gt-member-delete-order-v1',JSON.stringify(mergedDelete));
           // Členov, ktorí existujú iba lokálne, nikdy nemaž kvôli staršiemu
@@ -622,7 +623,10 @@ function pushToCloud(force = false){
           if(!m||m.id==null)return;
           const id=String(m.id);
           // A deletion tombstone newer than the member save always wins.
-          if(Number(mergedDelete[id]||0) >= Number(remoteOrder[id]||0) && Number(mergedDelete[id]||0) >= Number(localOrder[id]||0)){
+          // Tombstone má prednosť pred každým aktívnym snapshotom.
+          // Člen sa môže vrátiť iba cez explicitnú funkciu obnovenia, ktorá
+          // tombstone odstráni.
+          if(Number(mergedDelete[id]||0)){
             byId.delete(id); return;
           }
           const local=byId.get(id);
@@ -633,7 +637,7 @@ function pushToCloud(force = false){
         // Apply local deletion tombstones too, so an older local member can never
         // resurrect a member that was deleted on another admin device.
         for(const id of Object.keys(mergedDelete)){
-          if(Number(mergedDelete[id]||0) >= Number(localOrder[id]||0) && Number(mergedDelete[id]||0) >= Number(remoteOrder[id]||0)) byId.delete(id);
+          if(Number(mergedDelete[id]||0)) byId.delete(id);
         }
         const mergedMembers=Array.from(byId.values());
         const mergedOrder={};
@@ -6763,9 +6767,16 @@ function restoreArchivedMember(id){
   if(!archived)return;
   const restored=JSON.parse(JSON.stringify(archived));
   restored.archived=false; restored.deletedAt='';
+  // Explicitná obnova zároveň zruší tombstone, aby synchronizácia vedela,
+  // že člen sa smie znova objaviť na všetkých zariadeniach.
+  try{
+    const order=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
+    delete order[String(id)];
+    originalSetItem('gt-member-delete-order-v1',JSON.stringify(order));
+  }catch(e){}
   membersData.push(restored);
   removeArchivedMember(id);
-  normalizeAllMembers(); persistMembersData();
+  normalizeAllMembers(); persistMembersData(restored.id);
   try{pushToCloud(true);}catch(e){}
   renderMemberProfile(restored.id);
   toast('Člen bol obnovený');

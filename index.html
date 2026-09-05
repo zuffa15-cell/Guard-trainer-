@@ -3835,7 +3835,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1011-FIXED</div>
+   <div class="gt-login-title">GUARD TRAINER v1012-VIKTOR-NAME</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -3901,9 +3901,13 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        }
      }catch(e){}
    }
-   return trainers.find(x=>x && x.active!==false && String(x.loginPassword||'')===pass) || null;
+   return trainers.find(x=>x && !x.isTemplate && x.active!==false && String(x.loginPassword||'').trim()===pass && String(x.full||'').toUpperCase()!=='VZOROVÝ TRÉNER') || null;
  }
  function openTrainer(t){
+   if(!t || t.isTemplate || String(t.full||'').toUpperCase().includes('VZOROV')){
+     console.warn('⛔ Pokus o prihlásenie ako VZOROVÝ - blokované');
+     return;
+   }
    openApp({role:String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer',
      display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
  }
@@ -3994,14 +3998,44 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
  // Po obnovení stránky sa použije iba uložený účet/rola.
  try{
    const saved=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-   if(saved && (saved.role || saved.trainer_id!=null)){
-     openApp(saved);
-   }else{
+   if(saved){
+     // Ak je uložený účet VZOROVÝ TRÉNER, vymaž ho - je to bug
+     const isTemplateAccount = saved.display_name && String(saved.display_name).toUpperCase().includes('VZOROV');
+     const trainerId = saved.trainer_id;
+     let isTemplateId = false;
+     try{
+       const allTrainers = JSON.parse(localStorage.getItem('gt-trainers-v395')||'[]');
+       const t = allTrainers.find(x=>Number(x.id)===Number(trainerId));
+       if(t && (t.isTemplate || String(t.full||'').toUpperCase().includes('VZOROV'))) isTemplateId=true;
+     }catch(e){}
+     if(isTemplateAccount || isTemplateId){
+       console.warn('⛔ Detekovaný VZOROVÝ účet v localStorage - mažem a žiadam nové prihlásenie');
+       localStorage.removeItem('gt-simple-login-account');
+       localStorage.removeItem('gt-simple-login-step1');
+       overlay.style.display='flex';
+     } else if(saved.role || saved.trainer_id!=null){
+       openApp(saved);
+     } else {
+       overlay.style.display='flex';
+     }
+   } else {
      overlay.style.display='flex';
    }
  }catch(e){
    overlay.style.display='flex';
  }
+ // Dodatočná oprava: ak je prihlásený ako VZOROVÝ, odhlás
+ try{
+   const cur=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+   if(cur && String(cur.display_name||'').toUpperCase().includes('VZOROV')){
+     setTimeout(()=>{
+       alert('Bol si prihlásený ako VZOROVÝ TRÉNER (šablóna). Odhlasujem ťa, prihlás sa ako Viktor Žuffa.');
+       localStorage.removeItem('gt-simple-login-account');
+       location.reload();
+     }, 500);
+   }
+ }catch(e){}
+
 })();
 </script>
 

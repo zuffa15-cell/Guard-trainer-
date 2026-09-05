@@ -3781,6 +3781,24 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
  const error=document.getElementById('gtSimpleLoginError');
  const KEY='gt-simple-login-step1';
  function openApp(account){
+   // Hlavný tréner je samostatný účet/rola. Nikdy nepreberaj jeho identitu
+   // z Anatoliiho ani z predchádzajúceho prihláseného trénera. Ak má účet
+   // rolu HEAD, nájdi skutočný profil podľa role HLAVNÝ TRÉNER.
+   try{
+     const r=String(account?.role||'').trim().toLowerCase();
+     if(r==='head'){
+       const hp=(trainersData||[]).find(t=>String(t?.role||'').trim().toUpperCase()==='HLAVNÝ TRÉNER' && !isExplicitAnatoliiTrainer(t));
+       if(hp){
+         account={...account, role:'head', trainer_id:hp.id, display_name:String(hp.full||hp.name||'').trim(), groups:Array.isArray(hp.groups)?[...hp.groups]:[]};
+       }
+       // Zahod starý kontext dochádzky trénera, napr. Anatoliiho skupiny.
+       try{
+         attendanceState.date=appToday().iso; attendanceState.group=''; attendanceState.name='';
+         attendanceState.trainingTime=''; attendanceState.trainingScheduleId=null;
+         attendanceState.billingPaymentSnapshot=null; attendanceState.billingAttendanceSnapshot=null; attendanceState.billingRecordSnapshot=null;
+       }catch(e){}
+     }
+   }catch(e){}
    try{
      localStorage.setItem(KEY,'1');
      if(account){
@@ -4956,7 +4974,7 @@ function headHomeBirthdays(){
   }).filter(Boolean).sort((a,b)=>a.next-b.next).slice(0,5);
 }
 function headHomeNav(active='home'){
-  return `<nav class="bottom"><a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
+  return `<nav class="bottom"><a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
 }
 function renderHeadHomeList(title,rows,kind){
   try{
@@ -13074,7 +13092,21 @@ function nav(route){
     if(route==='home'){ if(location.hash!=='#home'){ history.pushState({gtRoute:'home'},'',location.pathname+location.search+'#home'); } renderHome(); return false; }
     if(route==='statistics'){ return openStatisticsScreen(); }
     if(route==='calendar'){ history.pushState({gtRoute:'calendar'},'',location.pathname+location.search+'#calendar'); renderCalendar(); return false; }
-    if(route==='attendance'){ if(isHeadTrainer()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
+    if(route==='attendance'){
+      // Hlavný tréner môže dochádzku iba prezerať. Vstupuje cez rovnaký
+      // výber tréningu ako admin, nikdy nie cez dochádzku predchádzajúceho trénera.
+      if(isHeadTrainer()){
+        window.__attendanceOpenedFromCalendar=false;
+        window.__attendanceOpenSource='home';
+        attendanceState.date=appToday().iso;
+        attendanceState.group=''; attendanceState.name=''; attendanceState.trainingTime='';
+        attendanceState.trainingScheduleId=null;
+        attendanceState.billingPaymentSnapshot=null;
+        attendanceState.billingAttendanceSnapshot=null;
+        attendanceState.billingRecordSnapshot=null;
+        history.pushState({gtRoute:'attendance',source:'home',date:attendanceState.date},'',location.pathname+location.search+'#attendance');
+        attendanceChooser(); return false;
+      }
       // DOCHÁDZKA z Domova / hlavnej navigácie je vždy dnešný deň.
       // Dátum z Kalendára sa nesmie preniesť do tejto vstupnej cesty.
       window.__attendanceOpenedFromCalendar=false;

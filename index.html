@@ -5702,12 +5702,14 @@ function syncTrainerGroupsFromSchedules(){
         const code=String(s.groupCode||'').trim().toUpperCase();
         if(assigned && code) derived.add(code);
       });
-      // The schedule is the source of truth for trainer↔group assignment.
-      // Keep the profile exactly synchronized with the groups assigned in schedules
-      // (including removals), instead of only merging newly found groups.
+      // PROFIL TRÉNERA JE ZDROJOM PRAVDY PRE JEHO PRIDELENÉ SKUPINY.
+      // Rozvrh môže profil iba doplniť o skupinu, nikdy ho nesmie po refreshe
+      // vynulovať alebo odstrániť skupiny, ktoré administrátor nastavil priamo
+      // v profile trénera. Predtým práve táto spätná synchronizácia mazala
+      // skupiny po novom načítaní aplikácie.
       const current=Array.isArray(t.groups)?t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean):[];
-      const next=[...derived];
-      if(next.join('|')!==current.join('|')){ t.groups=next; changed=true; }
+      const merged=[...new Set([...current,...derived])];
+      if(merged.join('|')!==current.join('|')){ t.groups=merged; changed=true; }
     });
     if(changed) persistTrainersData();
   }catch(e){ console.warn('Synchronizácia tréner ↔ skupina sa nepodarila',e); }

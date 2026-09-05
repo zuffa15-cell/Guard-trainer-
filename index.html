@@ -8487,20 +8487,56 @@ function attendancePaymentLockKey(){
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // FIX: Tréner môže spätne opraviť aj členské/registračné pre svoju skupinu
+  // Každý bežný tréner môže spätne meniť aj ČLENSKÉ a REGISTRAČNÉ
+  // vo svojej pridelenej skupine. Použi rovnaké robustné overenie ako pri
+  // spätnej úprave dochádzky – profil, účet, snapshot a nakoniec rozvrh.
   try{
     const myId=currentTrainerAccountId();
+    const account=(()=>{try{return JSON.parse(localStorage.getItem('gt-simple-login-account')||'null')}catch(e){return null}})();
+    const snapshot=(()=>{try{return JSON.parse(localStorage.getItem('gt-current-trainer-snapshot')||'null')}catch(e){return null}})();
+    const currentGroup=String(attendanceState.group||'').trim().toUpperCase();
+    const myGroups=new Set();
+
+    [snapshot?.groups, account?.groups].forEach(arr=>{
+      if(Array.isArray(arr)) arr.forEach(g=>{
+        const v=String(g||'').trim().toUpperCase();
+        if(v) myGroups.add(v);
+      });
+    });
+
     if(myId!=null){
-      const trainer=(trainersData||[]).find(t=>Number(t.id)===myId && !t.isTemplate);
-      if(trainer){
-        const myGroups=new Set((trainer.groups||[]).map(g=>String(g).trim().toUpperCase()).filter(Boolean));
-        const currentGroup=String(attendanceState.group||'').trim().toUpperCase();
-        if(myGroups.has(currentGroup)){
-          return false;
-        }
+      const trainer=(trainersData||[]).find(t=>Number(t.id)===Number(myId) && !t.isTemplate);
+      if(trainer && Array.isArray(trainer.groups)){
+        trainer.groups.forEach(g=>{
+          const v=String(g||'').trim().toUpperCase();
+          if(v) myGroups.add(v);
+        });
       }
     }
-  }catch(e){}
+
+    if(myGroups.has(currentGroup)){
+      console.log('✅ Tréner môže spätne meniť členské/registračné', currentGroup, [...myGroups]);
+      return false;
+    }
+
+    // Fallback cez aktuálny rozvrh – podľa ID alebo mena trénera.
+    try{
+      const schedules=getSavedSchedules();
+      const wantedName=String(snapshot?.display_name||account?.display_name||getCurrentTrainerDisplayName()||'').trim().toLowerCase();
+      const isOwn=schedules.some(s=>{
+        const code=String(s.groupCode||'').trim().toUpperCase();
+        if(code!==currentGroup) return false;
+        const ids=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
+        if(s.trainerId!=null) ids.push(Number(s.trainerId));
+        if(myId!=null && ids.includes(Number(myId))) return true;
+        const names=[];
+        if(Array.isArray(s.trainers)) names.push(...s.trainers);
+        if(s.trainer) names.push(s.trainer);
+        return !!wantedName && names.some(n=>String(n||'').trim().toLowerCase()===wantedName);
+      });
+      if(isOwn) return false;
+    }catch(e){}
+  }catch(e){ console.warn('isAttendancePaymentsLocked check fail', e); }
   return !isAttendanceTodayForTrainer();
 }
 function attendancePaymentEditGuard(){

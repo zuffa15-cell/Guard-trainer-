@@ -13758,6 +13758,22 @@ function renderStatistics(month=appToday().month,year=appToday().year){
         const iso=`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
         const hist=trainingAttendanceByGroup[histKey];
         if(!hist || typeof hist!=='object') return;
+
+        // Štatistika môže použiť iba tréning, ktorý v daný deň/skupine
+        // skutočne existoval. Staré/stale záznamy (napr. 2.9. C) sa preto
+        // vyradia podľa aktuálneho kalendára. Samotné počty potom berieme
+        // výhradne z uloženej dochádzky.
+        const groupKey=quickGroupCode(groupValue);
+        let scheduled=false;
+        try{
+          const scheduledItems=(typeof scheduleItemsForDate==='function' ? scheduleItemsForDate(iso) : [])||[];
+          scheduled=scheduledItems.some(x=>quickGroupCode(x.code)===groupKey);
+          if(!scheduled && typeof calendarDayGroups!=='undefined' && calendarDayGroups){
+            scheduled=(calendarDayGroups[iso]||[]).some(x=>quickGroupCode(x.code)===groupKey);
+          }
+        }catch(e){}
+        if(!scheduled) return;
+
         const people=[];
         const paymentSnapshot=[];
         let newCount=0;
@@ -13775,6 +13791,10 @@ function renderStatistics(month=appToday().month,year=appToday().year){
             }
           }
         });
+
+        // Prázdny/starý snapshot nie je vykonaný tréning. Počítame iba
+        // skutočne uloženú účasť (TRÉNING alebo NOVÝ).
+        if(people.length===0 && newCount===0) return;
         entries.push({date:iso,group:groupValue,people,paymentSnapshot,newCount,attendanceHistory:hist});
       });
     }

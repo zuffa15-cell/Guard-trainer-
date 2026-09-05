@@ -10340,71 +10340,43 @@ function persistBillingDeleteOrder(){
   }catch(e){}
 }
 function deleteMyBillingRecord(recordKey, btn){
-  if(isAdmin()) return false;
   const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
   const idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
   if(idx<0) return false;
   const r=monthlyBillingRecords[idx];
-  if(String(r.trainer||'').trim().toUpperCase()!==me){ toast('Môžeš vymazať iba svoje vyúčtovanie.'); return false; }
-  if(!confirm('Naozaj vymazať toto vyúčtovanie? Dochádzka zostane zachovaná.')) return false;
-  if(btn){ btn.classList.add('billing-delete-confirmed'); btn.style.background='#c62828'; btn.style.borderColor='#ff5252'; btn.style.color='#fff'; btn.textContent='🗑'; }
+  const owner=String(r.trainer||'').trim().toUpperCase();
+  // Tréner môže mazať iba vlastné vyúčtovanie. Admin môže mazať ľubovoľné.
+  if(!isAdmin() && owner!==me){
+    toast('Môžeš vymazať iba svoje vyúčtovanie.');
+    return false;
+  }
+  if(!confirm(`Naozaj vymazať toto vyúčtovanie?\n\n${r.date||''} – ${r.group||''} – ${r.trainer||''}\n\nDochádzka zostane zachovaná.`)) return false;
+
   const canonical=billingRecordCanonicalKey(r);
   const deletedAt=Date.now();
-  billingDeleteOrder[canonical]=deletedAt;
+  billingDeleteOrder[canonical]=Math.max(Number(billingDeleteOrder[canonical]||0),deletedAt);
   persistBillingDeleteOrder();
-  // Záznam odstráň okamžite z obrazovky aj z lokálnych dát.
+
+  // Okamžite odstráň zo zobrazenia aj z lokálnych dát.
   monthlyBillingRecords=monthlyBillingRecords.filter(x=>billingRecordCanonicalKey(x)!==canonical);
   persistMonthlyBillingRecords();
-  // A teraz pošli mazanie priamo na server. Serverová verzia sa prepíše
-  // bez tohto záznamu, aby ho hlavný tréner už nedostal späť.
-  try{ syncDeletedBillingRecordToCloud(canonical, deletedAt); }catch(e){ console.warn('billing delete cloud sync fail',e); }
+
+  // Červený kôš ostane krátko viditeľný ako potvrdenie akcie.
+  if(btn){
+    btn.classList.add('billing-delete-confirmed');
+    btn.style.background='#c62828';
+    btn.style.borderColor='#ff5252';
+    btn.style.color='#fff';
+    btn.textContent='🗑';
+  }
+
+  // Trvalá mazacia značka + odstránenie zo serverových kópií.
+  try{ syncDeletedBillingRecordToCloud(canonical,deletedAt); }
+  catch(e){ console.warn('billing delete cloud sync fail',e); }
+
   toast('Vyúčtovanie bolo vymazané');
   setTimeout(()=>renderMonthlyBilling(),50);
   return false;
-}
-function syncDeletedBillingRecordToCloud(canonical, deletedAt){
-  if(typeof db==='undefined' || !db) return;
-  const writeMain=(records)=>{
-    const json=JSON.stringify(records);
-    const writes=[];
-    const deletedPatch={}; deletedPatch[canonical]=Number(deletedAt)||Date.now();
-    try{
-      writes.push(db.collection('guard-trainer-billing').doc('all').set({
-        records:records,
-        billingDeleteOrder: deletedPatch,
-        updatedAt:Date.now()
-      }, {merge:true}));
-    }catch(e){}
-    try{
-      if(typeof CLOUD_COLLECTION!=='undefined'){
-        const patch={};
-        patch['gt-monthly-billing-v221']=json;
-        patch['gt-billing']=json;
-        patch['gt-billing-delete-order-v1']=JSON.stringify(billingDeleteOrder);
-        writes.push(db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(patch,{merge:true}));
-      }
-    }catch(e){}
-    return Promise.all(writes);
-  };
-  db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
-    let records=[];
-    let serverDeletes={};
-    try{
-      const data=doc.exists ? (doc.data()||{}) : {};
-      records=Array.isArray(data.records) ? data.records : [];
-      if(data.billingDeleteOrder && typeof data.billingDeleteOrder==='object') serverDeletes=data.billingDeleteOrder;
-    }catch(e){}
-    Object.keys(serverDeletes).forEach(k=>{
-      billingDeleteOrder[k]=Math.max(Number(billingDeleteOrder[k]||0),Number(serverDeletes[k]||0));
-    });
-    billingDeleteOrder[canonical]=Math.max(Number(billingDeleteOrder[canonical]||0),Number(deletedAt)||Date.now());
-    persistBillingDeleteOrder();
-    records=records.filter(r=>{
-      const k=billingRecordCanonicalKey(r);
-      return Number(billingDeleteOrder[k]||0) < Number(r.savedAt||r.updatedAt||0);
-    });
-    return writeMain(records);
-  }).catch(()=>writeMain(monthlyBillingRecords.filter(r=>billingRecordCanonicalKey(r)!==canonical)));
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;
 
@@ -10556,8 +10528,16 @@ function initBillingDirectSync(){
             }
           }catch(e){}
         });
-        if(added>0 || updated>0 || remote.length>local.length){
-          const merged=Array.from(seen.values());
+        const merged=Array.from(seen.values());
+        // Synchronizácia musí vedieť aj ZMAZAŤ starý lokálny záznam.
+        // Predtým sa záznam odstránený trénerom na serveri neobjavil v remote,
+        // ale stará kópia na zariadení admina/hlavného trénera zostala navždy,
+        // pretože merge riešil iba nové/aktualizované záznamy.
+        const localKeys=new Set(local.map(r=>billingRecordCanonicalKey(r)));
+        const mergedKeys=new Set(merged.map(r=>billingRecordCanonicalKey(r)));
+        const localCountBefore=local.length;
+        const staleLocalRemoved=local.some(r=>!mergedKeys.has(billingRecordCanonicalKey(r)));
+        if(added>0 || updated>0 || remote.length!==local.length || staleLocalRemoved){
           console.log(`📥 [${source}] Vyúčtovanie mergujem - nové: ${added}, aktualizované: ${updated}, celkom: ${merged.length} (bolo ${local.length}, remote ${remote.length})`);
           try{
             originalSetItem('gt-monthly-billing-v221', JSON.stringify(merged));
@@ -11357,21 +11337,32 @@ function deleteBillingTrainingAsAdmin(recordKey,trainerName,date,groupCode,month
   if(!key){ toast('Záznam tréningu nemá platný kľúč.'); return false; }
   if(!confirm(`Naozaj vymazať tento tréning z vyúčtovania?\n\n${label}\n\nZáznam sa odstráni aj z vyúčtovania tohto trénera.`)) return false;
   try{
-    const before=monthlyBillingRecords.length;
-    monthlyBillingRecords=monthlyBillingRecords.filter(r=>String(r?.key||'')!==key);
-    if(monthlyBillingRecords.length===before){
-      const tn=String(trainerName||'').trim().toUpperCase();
-      const gc=String(groupCode||'').trim().toUpperCase();
-      const dd=parsePaymentDate(date);
-      monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
-        const rd=parsePaymentDate(r?.date);
-        return !(String(r?.trainer||r?.name||'').trim().toUpperCase()===tn && String(r?.group||'').trim().toUpperCase()===gc && rd&&dd && rd.year===dd.year&&rd.month===dd.month&&rd.day===dd.day);
+    const found=monthlyBillingRecords.find(r=>String(r?.key||'')===key) ||
+      monthlyBillingRecords.find(r=>{
+        const rd=parsePaymentDate(r?.date), dd=parsePaymentDate(date);
+        return String(r?.trainer||r?.name||'').trim().toUpperCase()===tgt &&
+          String(r?.group||'').trim().toUpperCase()===String(groupCode||'').trim().toUpperCase() &&
+          rd&&dd&&rd.year===dd.year&&rd.month===dd.month&&rd.day===dd.day;
       });
-    }
+    if(!found){ toast('Záznam tréningu sa nenašiel.'); return false; }
+
+    const canonical=billingRecordCanonicalKey(found);
+    const deletedAt=Date.now();
+    billingDeleteOrder[canonical]=Math.max(Number(billingDeleteOrder[canonical]||0),deletedAt);
+    persistBillingDeleteOrder();
+
+    monthlyBillingRecords=monthlyBillingRecords.filter(r=>billingRecordCanonicalKey(r)!==canonical);
     persistMonthlyBillingRecords();
+
+    // Pošli trvalú mazaciu značku a odstráň starú serverovú kópiu.
+    try{ syncDeletedBillingRecordToCloud(canonical,deletedAt); }catch(e){ console.warn('admin billing delete cloud sync fail',e); }
+
     toast('Tréning bol vymazaný z vyúčtovania.');
     renderHeadTrainerDetail(trainerName,Number(month),Number(year));
-  }catch(e){ console.error('ADMIN DELETE BILLING TRAINING:',e); toast('Tréning sa nepodarilo vymazať.'); }
+  }catch(e){
+    console.error('ADMIN DELETE BILLING TRAINING:',e);
+    toast('Tréning sa nepodarilo vymazať.');
+  }
   return false;
 }
 window.deleteBillingTrainingAsAdmin=deleteBillingTrainingAsAdmin;

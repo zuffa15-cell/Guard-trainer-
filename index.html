@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1023-FIXED</div>
+   <div class="gt-login-title">GUARD TRAINER v1024-ATT-SAVE-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8561,6 +8561,15 @@ function saveCurrentTrainingAttendance(){
     }catch(e){ adminSavedAt=Date.now(); }
   }
   persistTrainingAttendanceHistory();
+  try{
+    const json=JSON.stringify(trainingAttendanceByGroup);
+    originalSetItem('gt-training-attendance-history', json);
+    localStorage.setItem('gt-training-attendance-history', json);
+    if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true), 300);
+    if(typeof db!=='undefined' && db && typeof CLOUD_COLLECTION!=='undefined'){
+      db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set({ 'gt-training-attendance-history': json }, {merge:true});
+    }
+  }catch(e){}
   if(adminSavedAt){
     // Samostatný dokument je zdroj pravdy pre trénerovo zariadenie.
     // Zápis je asynchrónny, ale shared-db sync pokračuje nezávisle.
@@ -8972,7 +8981,10 @@ function attendance(){
   try{ _adminEditAt=Number(JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')[_attKey]||0); }catch(e){}
   let _billingAt=0;
   try{ _billingAt=Number(attendanceState.billingRecordSnapshot?.savedAt||0); }catch(e){}
-  if(attendanceState.billingRecordSnapshot && _adminEditAt<=_billingAt){
+  // Ak sme otvorili z vyúčtovania (fromBilling), vždy použij billing snapshot ako pravdu
+  const openedFromBilling=attendanceState.billingRecordSnapshot && (history.state?.fromBilling || window.__attendanceOpenedFromBilling);
+  if(attendanceState.billingRecordSnapshot && (openedFromBilling || _adminEditAt<=_billingAt)){
+    console.log('✅ [TRUTH] Používam dochádzku z vyúčtovania', attendanceState.date, attendanceState.group, 'členov:', attendanceState.billingRecordSnapshot.attendanceStateSnapshot?.length);
     applyBillingSnapshotToAttendance();
   } else {
     try{
@@ -12900,6 +12912,7 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
     }catch(e){ console.warn('Billing payment snapshot load failed',e); }
 
     window.__attendanceOpenedFromCalendar=false;
+    window.__attendanceOpenedFromBilling=true;
     history.pushState({gtRoute:'attendance',fromBilling:true},'',location.pathname+location.search+'#attendance');
     attendance();
   }catch(err){

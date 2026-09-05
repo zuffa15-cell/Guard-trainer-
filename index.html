@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1029-LOCAL-100PCT</div>
+   <div class="gt-login-title">GUARD TRAINER v1030-SAVE-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8374,19 +8374,14 @@ function findAttendanceHistory(date,group){
 function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKey()){
   return `${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
 }
-function backupAttendanceLocally(){
-  try{
-    const data=JSON.stringify(trainingAttendanceByGroup||{});
-    const backups=JSON.parse(originalGetItem('gt-attendance-backup-v1')||'[]');
-    backups.push({ts:Date.now(), data:data});
-    if(backups.length>20) backups.shift();
-    originalSetItem('gt-attendance-backup-v1', JSON.stringify(backups));
-    localStorage.setItem('gt-attendance-backup-v1', JSON.stringify(backups));
-    console.log('💾 Záloha dochádzky:', backups.length);
-  }catch(e){}
-}
 function persistTrainingAttendanceHistory(){
-  try{ backupAttendanceLocally(); }catch(e){}
+  try{
+    const json=JSON.stringify(trainingAttendanceByGroup);
+    // Ulož do oboch storage naraz - 100% lokálne
+    localStorage.setItem('gt-training-attendance-history', json);
+    originalSetItem('gt-training-attendance-history', json);
+    console.log('💾 Dochádzka uložená lokálne:', Object.keys(trainingAttendanceByGroup).length, 'tréningov');
+  }catch(e){}
 
   try{
     localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup));
@@ -8908,7 +8903,6 @@ function applyBillingSnapshotToAttendance(){
   attendanceState.otherMinusReason=String(r.otherMinusReason||'');
 }
 
-let __attGuardKey=''; let __attGuardTime=0;
 function attendance(){
   if(!isAdmin() && !isHeadTrainer()){
     const accountId=currentTrainerAccountId();

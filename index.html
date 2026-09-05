@@ -13309,6 +13309,31 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
   const me=String(getCurrentTrainerDisplayName()||'').trim();
   const myId=currentTrainerAccountId();
   const norm=s=>String(s||'').trim().toUpperCase();
+
+  // Pri bežnom trénerovi sú pre vyúčtovanie rozhodujúce jeho PRIDELENÉ
+  // SKUPINY. Samotné trainerId na starých záznamoch nestačí, pretože staré
+  // vyúčtovania mohli mať uloženého nesprávneho vlastníka. Viktor Žuffa má
+  // podľa profilu iba B, C a B+C – A ani D sa mu nesmú zobraziť.
+  const allowedBillingGroups=new Set();
+  try{
+    let profile=null;
+    if(myId!=null) profile=(trainersData||[]).find(t=>Number(t.id)===Number(myId))||null;
+    if(!profile) profile=getCurrentTestTrainerProfile();
+    (profile?.groups||[]).forEach(g=>{
+      const code=normalizeGroupCode(g);
+      if(code) allowedBillingGroups.add(code);
+    });
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    (account?.groups||[]).forEach(g=>{
+      const code=normalizeGroupCode(g);
+      if(code) allowedBillingGroups.add(code);
+    });
+    const snap=JSON.parse(localStorage.getItem('gt-current-trainer-snapshot')||'null');
+    (snap?.groups||[]).forEach(g=>{
+      const code=normalizeGroupCode(g);
+      if(code) allowedBillingGroups.add(code);
+    });
+  }catch(e){}
   // Pevné vlastníctvo vyúčtovania: bežný tréner smie vidieť iba záznamy
   // svojho trainer_id. Pri starších záznamoch bez ID sa ID dopočíta z mena
   // cez aktuálny zoznam trénerov; samotné zobrazované meno už nie je zdrojom
@@ -13392,10 +13417,21 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
     if(ownsRecord(r)) result.push(r);
   });
 
+  // Absolútny posledný filter pre bežného trénera: vo vyúčtovaní sa môžu
+  // objaviť iba skupiny pridelené jeho profilom. Týmto sa odstránia aj staré
+  // záznamy, ktoré majú nesprávne trainerId/trainer meno (napr. A alebo D pri
+  // Viktorovi Žuffovi). B+C zostáva samostatná skupina.
+  if(allowedBillingGroups.size){
+    result=result.filter(r=>allowedBillingGroups.has(normalizeGroupCode(r?.group||'')));
+  }else{
+    result=[];
+  }
+
   // If the original trainer's informational row is missing, create exactly
   // one. This is only a display fallback; it does not create financial data.
   offeredByMe.forEach(o=>{
     if(result.some(r=>r.substituteReference && sameDateGroup(r,o))) return;
+    if(allowedBillingGroups.size && !allowedBillingGroups.has(normalizeGroupCode(o.code||''))) return;
     result.push({
       key:`${o.date}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from}`,
       trainer:me,

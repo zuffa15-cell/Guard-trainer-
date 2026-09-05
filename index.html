@@ -13740,19 +13740,45 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const daysInMonth=new Date(y,m,0).getDate();
   const monthPrefix=`${y}-${String(m).padStart(2,'0')}-`;
 
-  // Štatistiky používajú iba ULOŽENÉ vyúčtovania.
-  // Rozpracovaná dochádzka sa do štatistík nedostane, kým sa vyúčtovanie neuloží.
+  // ŠTATISTIKY = VÝHRADNE SKUTOČNE ULOŽENÁ DOCHÁDZKA.
+  // Vyúčtovanie už nie je zdrojom počtu tréningov ani účastí.
+  // Každý kľúč v trainingAttendanceByGroup predstavuje jeden uložený
+  // tréning (dátum + skupina). Z neho sa berie presný stav training/newMember.
+  // Tým sa starý alebo chybný billing (napr. 2.9. C) nemôže premietnuť
+  // do štatistík, ak taký tréning v dochádzke nie je uložený.
   const entries=[];
-  getBillingRecords().forEach(r=>{
-    // A record is a valid statistics source only if it was saved together
-    // with the attendance snapshot. Older/demo billing rows are ignored.
-    if(!Array.isArray(r.attendanceSnapshot)) return;
-    const d=parsePaymentDate(r.date);
-    if(!d || d.month!==m || d.year!==y) return;
-    const people=r.attendanceSnapshot.slice();
-    entries.push({date:`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`,
-      group:r.group||'', people, paymentSnapshot:Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[], newCount:Number(r.newCount||0)});
-  });
+  try{
+    if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
+      Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
+        const parts=String(histKey).split('|');
+        const dateValue=parts.shift()||'';
+        const groupValue=parts.join('|')||'';
+        const d=parsePaymentDate(dateValue);
+        if(!d || d.month!==m || d.year!==y) return;
+        const iso=`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+        const hist=trainingAttendanceByGroup[histKey];
+        if(!hist || typeof hist!=='object') return;
+        const people=[];
+        const paymentSnapshot=[];
+        let newCount=0;
+        Object.keys(hist).forEach(k=>{
+          const v=hist[k]||{};
+          if(v.training){
+            people.push(k);
+            paymentSnapshot.push({surname:String(k).split('|')[0]||'',name:String(k).split('|').slice(1).join('|')||'',training:true,newMember:!!v.newMember});
+          }
+          if(v.newMember){
+            newCount++;
+            if(!v.training){
+              const partsName=String(k).split('|');
+              paymentSnapshot.push({surname:partsName[0]||'',name:partsName.slice(1).join('|')||'',training:false,newMember:true});
+            }
+          }
+        });
+        entries.push({date:iso,group:groupValue,people,paymentSnapshot,newCount,attendanceHistory:hist});
+      });
+    }
+  }catch(e){ console.warn('Štatistiky – načítanie dochádzky zlyhalo',e); }
   entries.sort((a,b)=>a.date.localeCompare(b.date));
 
   const memberCounts={};
@@ -13762,34 +13788,26 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   entries.forEach(e=>{
     const group=quickGroupCode(e.group);
     let presentCount=0, newCount=0;
-    let usedHistory=false;
-    // Presný stav berieme priamo z uloženej dochádzky pre konkrétny deň/skupinu.
-    // TRÉNING/ÚČET = PRÍTOMNÝ, NOVÝ = NOVÝ; NOVÝ sa nikdy nesmie rátať medzi prítomných.
-    try{
-      const histKey=`${e.date}|${group}`;
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey])||null;
-      if(hist && typeof hist==='object' && Object.keys(hist).length){
-        usedHistory=true;
-        Object.values(hist).forEach(v=>{
-          if(!v) return;
-          if(v.newMember) newCount++;
-          else if(v.training) presentCount++;
-        });
-      }
-    }catch(err){}
-    // Staršie uložené záznamy bez histórie použijú svoje historické počty.
-    if(!usedHistory){
-      presentCount=Number(e.people.length||0);
-      newCount=Number(e.newCount||0);
-    }
+    Object.values(e.attendanceHistory||{}).forEach(v=>{
+      if(!v) return;
+      if(v.newMember) newCount++;
+      else if(v.training) presentCount++;
+    });
     groupCounts[group]=(groupCounts[group]||0)+presentCount+newCount;
-    e.people.forEach(n=>memberCounts[n]=(memberCounts[n]||0)+1);
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) memberCounts[n]=(memberCounts[n]||0)+1;
+    });
   });
   const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);
   const groupMembers={A:{},B:{},C:{},D:{},'D+':{}};
   entries.forEach(e=>{
-    if(!groupMembers[e.group]) groupMembers[e.group]={};
-    e.people.forEach(n=>groupMembers[e.group][n]=(groupMembers[e.group][n]||0)+1);
+    const group=quickGroupCode(e.group);
+    if(!groupMembers[group]) groupMembers[group]={};
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) groupMembers[group][n]=(groupMembers[group][n]||0)+1;
+    });
   });
   const topByGroup={};
   Object.keys(groupMembers).forEach(g=>{
@@ -13802,15 +13820,8 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   // Training day with the highest and lowest attendance FOR EACH GROUP.
   const attendanceDays=entries.map(e=>{
     const group=quickGroupCode(e.group);
-    let present=0,newCount=0,usedHistory=false;
-    try{
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[`${e.date}|${group}`])||null;
-      if(hist && typeof hist==='object' && Object.keys(hist).length){
-        usedHistory=true;
-        Object.values(hist).forEach(v=>{ if(v?.newMember) newCount++; else if(v?.training) present++; });
-      }
-    }catch(err){}
-    if(!usedHistory){ present=e.people.length; newCount=Number(e.newCount||0); }
+    let present=0,newCount=0;
+    Object.values(e.attendanceHistory||{}).forEach(v=>{ if(v?.newMember) newCount++; else if(v?.training) present++; });
     return {date:e.date, group, count:present+newCount};
   });
   const formatStatDate=iso=>{
@@ -13878,18 +13889,14 @@ function renderStatistics(month=appToday().month,year=appToday().year){
         });
       }
     }catch(err){}
-    // 2) Vyúčtovanie si uchováva historický príznak NOVÝ.
-    if(Array.isArray(e.paymentSnapshot)){
-      e.paymentSnapshot.forEach(x=>{
-        if(x && x.newMember){
-          const key=String(x.surname||'').trim()+'|'+String(x.name||'').trim();
-          if(key && key!=='|'){
-            newMemberSet.add(key);
-            if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(key);
-          }
-        }
-      });
-    }
+    // Žiadny billing fallback – NOVÝ sa berie iba z dochádzky.
+    Object.keys(e.attendanceHistory||{}).forEach(k=>{
+      const v=e.attendanceHistory[k]||{};
+      if(v.newMember){
+        newMemberSet.add(k);
+        if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(k);
+      }
+    });
   });
   const newMembers=newMemberSet.size;
   const dailyNewByGroupCounts=Object.fromEntries(Object.keys(groupNames).map(g=>[g,dailyNewByGroup[g].map(set=>set.size)]));
@@ -13901,15 +13908,8 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     const group=quickGroupCode(e.group);
     const day=Number(String(e.date).slice(8,10));
     if(day<1 || day>daysInMonth || !stackedAttendanceByGroup[group]) return;
-    let count=0,usedHistory=false;
-    try{
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[`${e.date}|${group}`])||null;
-      if(hist && typeof hist==='object' && Object.keys(hist).length){
-        usedHistory=true;
-        Object.values(hist).forEach(v=>{ if(v?.newMember || v?.training) count++; });
-      }
-    }catch(err){}
-    if(!usedHistory) count=e.people.length+Number(e.newCount||0);
+    let count=0;
+    Object.values(e.attendanceHistory||{}).forEach(v=>{ if(v?.newMember || v?.training) count++; });
     stackedAttendanceByGroup[group][day-1]+=count;
     daily[day-1]+=count;
   });

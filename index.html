@@ -358,41 +358,8 @@ function initCloudSync(){
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
         if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
-          // ŠPECIÁLNE pre trénerov - nikdy neprepisuj novších lokálnych starším cloudom
-          if(k==='gt-trainers' || k==='gt-trainers-v395' || k==='gt-trainer-login-passwords'){
-            try{
-              const remoteRaw=data[k]||'[]';
-              let remoteArr=[]; try{remoteArr=JSON.parse(remoteRaw);}catch(e){ remoteArr=[]; }
-              const localRaw=originalGetItem(k)||originalGetItem('gt-trainers-v395')||localStorage.getItem('gt-trainers-v395')||'[]';
-              let localArr=[]; try{localArr=JSON.parse(localRaw);}catch(e){}
-              // Ak má cloud menej trénerov ako lokál, ignoruj - lokál je novší (admin práve uložil)
-              if(Array.isArray(remoteArr) && Array.isArray(localArr) && remoteArr.length < localArr.length){
-                console.warn('Cloud má menej trénerov ('+remoteArr.length+') ako lokál ('+localArr.length+'), neprepisujem. Lokál je novší.');
-              } else if(!data[k] || data[k]==='[]' || data[k]==='{}'){
-                console.warn('Cloud má prázdnych '+k+', neprepisujem');
-              } else {
-                originalSetItem(k, data[k]);
-                if(k==='gt-trainers' || k==='gt-trainers-v395'){
-                  try{
-                    const arr=JSON.parse(data[k]||'[]');
-                    if(Array.isArray(arr) && arr.length>0){
-                      localStorage.setItem(TRAINERS_STORAGE_KEY, data[k]);
-                      if(typeof trainersData!=='undefined' && arr.length>=trainersData.length){
-                        trainersData.splice(0,trainersData.length, ...arr);
-                      }
-                    }
-                  }catch(e){}
-                }
-                changed = true;
-              }
-            }catch(e){
-              originalSetItem(k, data[k]);
-              changed = true;
-            }
-          } else {
-            originalSetItem(k, data[k]);
-            changed = true;
-          }
+          originalSetItem(k, data[k]);
+          changed = true;
         }
       });
       if(data._updatedAt) lastCloudUpdate = data._updatedAt;
@@ -3812,7 +3779,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1003-FIX-PERSIST</div>
+   <div class="gt-login-title">GUARD TRAINER</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -5576,61 +5543,9 @@ try{
   }
 }catch(e){ console.warn('Načítanie trénerov z pamäte sa nepodarilo',e); }
 function persistTrainersData(){
-  try{
-    const json=JSON.stringify(trainersData);
-    // Ulož do všetkých možných kľúčov
-    try{ localStorage.setItem(TRAINERS_STORAGE_KEY,json); }catch(e){}
-    try{ originalSetItem(TRAINERS_STORAGE_KEY,json); }catch(e){}
-    try{ originalSetItem('gt-trainers',json); }catch(e){}
-    try{ originalSetItem('gt-trainers-v395',json); }catch(e){}
-    try{ localStorage.setItem('gt-trainers',json); }catch(e){}
-    try{ localStorage.setItem('gt-trainers-v395',json); }catch(e){}
-    // Okamžite pošli do cloudu - 3x pre istotu
-    try{ 
-      if(typeof pushToCloud==='function'){ 
-        pushToCloud(true); 
-        setTimeout(()=>pushToCloud(true), 300);
-        setTimeout(()=>pushToCloud(true), 1500);
-      }
-      if(typeof saveTrainersDirectCloud==='function') saveTrainersDirectCloud();
-    }catch(e){}
-    console.log('💾 Tréneri uložení, počet:', trainersData.length);
-  }catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
+  try{ localStorage.setItem(TRAINERS_STORAGE_KEY,JSON.stringify(trainersData)); }
+  catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
 }
-const TRAINERS_DIRECT_COLLECTION='guard-trainer-trainers';
-function saveTrainersDirectCloud(){
-  try{
-    if(typeof db==='undefined' || !db) return;
-    db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').set({trainers: trainersData, updatedAt: Date.now(), count: trainersData.length}, {merge:true}).then(()=>console.log('✅ Tréneri v direct cloude')).catch(e=>console.warn('direct save fail',e));
-  }catch(e){}
-}
-function initTrainersDirectSync(){
-  if(typeof db==='undefined' || !db) return;
-  db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').onSnapshot(doc=>{
-    if(!doc.exists) return;
-    const data=doc.data()||{};
-    if(!data.trainers || !Array.isArray(data.trainers) || data.trainers.length===0) return;
-    try{
-      const remote=data.trainers;
-      const localRaw=originalGetItem(TRAINERS_STORAGE_KEY)||'[]';
-      let local=[]; try{local=JSON.parse(localRaw)||[];}catch(e){}
-      // Iba ak má cloud viac alebo rovnako a je iný
-      if(remote.length>=local.length && JSON.stringify(remote)!==JSON.stringify(local)){
-        console.log('📥 Tréneri z direct cloudu', remote.length);
-        try{
-          originalSetItem(TRAINERS_STORAGE_KEY, JSON.stringify(remote));
-          originalSetItem('gt-trainers', JSON.stringify(remote));
-          originalSetItem('gt-trainers-v395', JSON.stringify(remote));
-          localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(remote));
-        }catch(e){}
-        if(typeof trainersData!=='undefined'){
-          trainersData.splice(0,trainersData.length, ...remote);
-        }
-      }
-    }catch(e){}
-  });
-}
-
 
 /* v531 – synchronizácia priradenia tréner ↔ skupina.
    Zdrojom sú uložené rozvrhy (trainerIds + groupCode). Profil trénera
@@ -5639,8 +5554,11 @@ function syncTrainerGroupsFromSchedules(){
   try{
     const schedules=JSON.parse(localStorage.getItem('gt-schedule')||'[]')||[];
     let changed=false;
-    // Tréner 1/Tréner 2 boli iba testovacie účty. Reálne tréningy nesmú
-    // zostať naviazané na ich staré ID/meno.
+    // Profil trénera je zdrojom pravdy pre pridelené skupiny.
+    // Rozvrh už pri uložení profilu dostane rovnaké priradenie cez
+    // syncTrainerGroupToSchedules(). Pri štarte preto NESMIEME prepisovať
+    // trainersData podľa starého rozvrhu – inak sa zmena po refreshe stratí.
+    // Zachovávame iba čistenie starých testovacích účtov z rozvrhu.
     schedules.forEach(s=>{
       const oldIds=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
       const oldName=String(s.trainer||'').trim().toLowerCase();
@@ -5664,26 +5582,10 @@ function syncTrainerGroupsFromSchedules(){
         }
       }
     });
-    (trainersData||[]).forEach(t=>{
-      const id=Number(t.id);
-      const derived=new Set();
-      schedules.forEach(s=>{
-        const assigned=Array.isArray(s.trainerIds)
-          ? s.trainerIds.map(Number).includes(id)
-          : String(s.trainerId||'')===String(id);
-        const code=String(s.groupCode||'').trim().toUpperCase();
-        if(assigned && code) derived.add(code);
-      });
-      // The schedule is the source of truth for trainer↔group assignment.
-      // Keep the profile exactly synchronized with the groups assigned in schedules
-      // (including removals), instead of only merging newly found groups.
-      const current=Array.isArray(t.groups)?t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean):[];
-      const next=[...derived];
-      if(next.join('|')!==current.join('|')){ t.groups=next; changed=true; }
-    });
-    if(changed) persistTrainersData();
+    if(changed) localStorage.setItem('gt-schedule',JSON.stringify(schedules));
   }catch(e){ console.warn('Synchronizácia tréner ↔ skupina sa nepodarila',e); }
 }
+
 function syncTrainerGroupToSchedules(trainer, selectedGroups){
   try{
     const schedules=getSavedSchedules();
@@ -8177,13 +8079,14 @@ function isAttendanceTodayForTrainer(){
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // v966: Bežný tréner môže spätne upravovať svoju dochádzku.
-  // Zamknutý zostáva iba pohľad hlavného trénera.
-  return false;
+  // Tréner môže upravovať iba aktuálny kalendárny deň.
+  // Každý starší deň je vždy iba na čítanie, bez ohľadu na to,
+  // či bol uložený cez Kalendár, Vyúčtovanie alebo inou cestou.
+  return !isAttendanceTodayForTrainer();
 }
 function attendanceEditGuard(){
   if(isAttendanceFullyLocked()){
-    toast('Dochádzku nie je možné upraviť v tomto režime.');
+    toast('Uloženú dochádzku môže meniť iba administrátor.');
     return false;
   }
   return true;
@@ -8201,12 +8104,13 @@ function attendancePaymentLockKey(){
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // v966: Tréner môže spätne opraviť aj platby patriace ku svojej dochádzke.
-  return false;
+  // Aj členské a registračné môže tréner upravovať iba v aktuálnom dni.
+  // Pri každom staršom dni sú automaticky zamknuté.
+  return !isAttendanceTodayForTrainer();
 }
 function attendancePaymentEditGuard(){
   if(isAttendancePaymentsLocked()){
-    toast('Platby nie je možné upraviť v tomto režime.');
+    toast('Členské a registračné po uložení dochádzky môže meniť iba administrátor.');
     return false;
   }
   return true;
@@ -10198,7 +10102,7 @@ function upsertBillingRecordFromAttendance(){
 }
 let billingReturnScreen='attendance';
 function openTrainingBillingFromAttendance(){
-  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Dochádzku nie je možné upraviť v tomto režime.'); return false; }
+  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
   try{
     // Potvrdenie dochádzky najprv uloží aktuálny stav. Od tohto momentu
     // tréner už nesmie meniť členské ani registračné pre toto tréningové kolo.
@@ -10331,7 +10235,7 @@ function forceMyBillingScreen(){
 window.forceMyBillingScreen=forceMyBillingScreen;
 
 function saveTrainingBilling(saveButton){
-  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Dochádzku nie je možné upraviť v tomto režime.'); return false; }
+  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
   // Vyúčtovanie sa pre rovnaký tréning vždy aktualizuje do jedného záznamu.
   // Tréner teda môže uložiť vyúčtovanie opakovane po zmene dochádzky.
   // Členské a registračné sa po potvrdení dochádzky nemenia – ich úpravu

@@ -14029,16 +14029,25 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const dailyNewByGroupCounts=Object.fromEntries(Object.keys(groupNames).map(g=>[g,dailyNewByGroup[g].map(set=>set.size)]));
   const dailyNewCounts=Array.from({length:daysInMonth},(_,i)=>Object.keys(groupNames).reduce((sum,g)=>sum+(dailyNewByGroupCounts[g][i]||0),0));
 
+  // Graf DOCHÁDZKY = výhradne z toho, čo je uložené vo VYÚČTOVANÍ.
+  // Nepoužívame attendanceHistory/aktuálnu dochádzku, pretože starší snapshot
+  // môže obsahovať už zmenený stav a potom by graf ukazoval iné čísla než
+  // mesačné vyúčtovanie. presentCount je počet ľudí uložený priamo vo
+  // vyúčtovaní (vrátane NOVÝCH). Pri starších záznamoch použijeme paying+newCount.
   const daily=Array.from({length:daysInMonth},()=>0);
   const stackedAttendanceByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>0)]));
-  entries.forEach(e=>{
-    const group=quickGroupCode(e.group);
-    const day=Number(String(e.date).slice(8,10));
-    if(day<1 || day>daysInMonth || !stackedAttendanceByGroup[group]) return;
-    let count=0;
-    Object.values(e.attendanceHistory||{}).forEach(v=>{ if(v?.newMember || v?.training) count++; });
-    stackedAttendanceByGroup[group][day-1]+=count;
-    daily[day-1]+=count;
+  (getBillingRecords()||[]).forEach(r=>{
+    const d=parsePaymentDate(r.date);
+    if(!d || d.month!==m || d.year!==y || d.day<1 || d.day>daysInMonth) return;
+    const group=quickGroupCode(r.group);
+    if(!stackedAttendanceByGroup[group]) return;
+    let count=Number(r.presentCount);
+    if(!Number.isFinite(count) || count<0){
+      count=Number(r.paying||0)+Number(r.newCount||0);
+    }
+    if(!Number.isFinite(count) || count<0) count=0;
+    stackedAttendanceByGroup[group][d.day-1]+=count;
+    daily[d.day-1]+=count;
   });
   const maxDaily=Math.max(1,...daily);
   const stackedDayMax=Math.max(1,...daily);
@@ -14082,7 +14091,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     <section class="stats-section">
       <h3>📈 DOCHÁDZKA V MESIACI – CELÝ KLUB</h3>
       ${renderStackedMonthChart(stackedAttendanceByGroup,stackedDayMax,`Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.`)}
-      <div class="stats-money-note">Každý stĺpec je jeden deň. Farby sú rozdelené podľa skupín a hodnoty sa sčítavajú nad seba.</div>
+      <div class="stats-money-note">Každý stĺpec je jeden deň. Každá farba zobrazuje počet ľudí zo samostatného uloženého vyúčtovania skupiny a číslo SPOLU je súčet všetkých vyúčtovaných tréningov v daný deň.</div>
     </section>
 
     <section class="stats-section stats-new-members">

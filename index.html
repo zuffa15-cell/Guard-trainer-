@@ -1097,7 +1097,7 @@ body{overflow-x:hidden}
 .head-profile b{display:block;font-size:17px}.head-profile span{display:block;color:#ffd12b;font-size:12px;margin-top:4px}.head-groups small{color:#aaa}.head-groups i{display:inline-flex;width:32px;height:32px;border-radius:4px;align-items:center;justify-content:center;font-style:normal;font-weight:800;margin:5px 5px 0 0;color:#fff}.ga{background:#d71920}.gb{background:#1e73d8}.gc{background:#43a52e}.gd{background:#df920c}.gdp{background:#7a35bd}.head-paid{border:1px solid #1360a8;background:#061b3a;color:#fff;padding:13px;text-align:center;border-radius:5px}
 .head-title-row{display:flex;justify-content:space-between;align-items:center;margin:10px 0}.head-title-row h2{font-size:20px;margin:0}.head-title-row h2 b{color:#ffd12b}.head-month-nav{display:flex;gap:5px}.head-month-nav button,.year-select{background:#050505;color:#ffd12b;border:1px solid #725600;border-radius:5px;padding:10px 16px;font-size:20px}
 .head-tabs{display:grid;grid-template-columns:1fr 1fr}.head-tabs button{padding:12px;background:#050505;color:#eee;border:1px solid #6f5200;font-size:14px}.head-tabs .active{color:#ffd12b}
-.head-table-wrap,.year-head-wrap{overflow:auto;border:1px solid #6f5200;border-radius:6px}.head-table,.year-head-table{width:100%;min-width:980px;border-collapse:collapse;font-size:11px}.head-table th,.head-table td,.year-head-table th,.year-head-table td{border:1px solid #574300;padding:8px 6px;text-align:center}.head-table th,.year-head-table th{background:#070707}.head-table td:first-child{text-align:left}.head-table td:first-child small{display:block;color:#ffd12b;margin-top:3px}.head-table .plus,.year-head-table .plus{color:#2fd347}.head-table .minus,.year-head-table .minus{color:#ef2626}.head-table .club-amount,.year-head-table .club-amount{color:#ffd12b;font-weight:800}.sum-row{color:#ffd12b;background:#080808}.sum-row th,.sum-row td{color:#ffd12b}.quick-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}.quick-actions button{padding:12px;background:#d99a10;border:1px solid #eab52e;border-radius:5px;color:#111;font-weight:800}.year-note{border:1px solid #403511;padding:10px;border-radius:5px;color:#aaa;margin-top:10px}
+.head-table-wrap,.year-head-wrap{overflow:auto;border:1px solid #6f5200;border-radius:6px;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y}.head-table,.year-head-table{width:100%;min-width:980px;border-collapse:collapse;font-size:11px}.head-table th,.head-table td,.year-head-table th,.year-head-table td{border:1px solid #574300;padding:8px 6px;text-align:center}.head-table th,.year-head-table th{background:#070707}.head-table td:first-child{text-align:left}.head-table td:first-child small{display:block;color:#ffd12b;margin-top:3px}.head-table .plus,.year-head-table .plus{color:#2fd347}.head-table .minus,.year-head-table .minus{color:#ef2626}.head-table .club-amount,.year-head-table .club-amount{color:#ffd12b;font-weight:800}.sum-row{color:#ffd12b;background:#080808}.sum-row th,.sum-row td{color:#ffd12b}.quick-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}.quick-actions button{padding:12px;background:#d99a10;border:1px solid #eab52e;border-radius:5px;color:#111;font-weight:800}.year-note{border:1px solid #403511;padding:10px;border-radius:5px;color:#aaa;margin-top:10px}
 
 /* Compact main-trainer billing header */
 .head-profile{
@@ -10734,6 +10734,17 @@ function initBillingDirectSync(){
         billingRealtimeRenderTimer=setTimeout(()=>{
           billingRealtimeRenderTimer=null;
           try{
+            // Pri automatickom realtime obnovení nesmie tabuľka skočiť späť
+            // na ľavý okraj. Zapamätaj aktuálny horizontálny posun a po
+            // prekreslení ho okamžite obnov. Toto je dôležité hlavne na mobile,
+            // kde sa vyúčtovanie pravidelne kontroluje zo servera.
+            const oldWrap=document.querySelector('.head-billing .head-table-wrap');
+            const oldScrollLeft=oldWrap ? oldWrap.scrollLeft : 0;
+            const oldScrollTop=oldWrap ? oldWrap.scrollTop : 0;
+            if(oldWrap){
+              window.__gtBillingTableScrollLeft=oldScrollLeft;
+              window.__gtBillingTableScrollTop=oldScrollTop;
+            }
             if(typeof isAdmin==='function' && isAdmin()){
               if(typeof renderHeadTrainerBilling==='function') renderHeadTrainerBilling();
             }else if(typeof isHeadTrainer==='function' && isHeadTrainer()){
@@ -10741,6 +10752,19 @@ function initBillingDirectSync(){
             }else{
               if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
             }
+            const restoreScroll=()=>{
+              try{
+                const w=document.querySelector('.head-billing .head-table-wrap');
+                if(w){
+                  w.scrollLeft=Number(window.__gtBillingTableScrollLeft||0);
+                  w.scrollTop=Number(window.__gtBillingTableScrollTop||0);
+                }
+              }catch(e){}
+            };
+            restoreScroll();
+            requestAnimationFrame(restoreScroll);
+            setTimeout(restoreScroll,0);
+            setTimeout(restoreScroll,80);
           }catch(e){ console.warn('⚡ Realtime prekreslenie vyúčtovania zlyhalo',e); }
         },30);
       }catch(e){}
@@ -12112,7 +12136,7 @@ function renderHeadTrainerBilling(){
   app.innerHTML=`
   <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
   <main class="content head-billing">
-    <section class="head-profile head-profile-main"><div class="head-avatar">${headName.charAt(0)}</div><div class="head-trainer-title"><b>HLAVNÝ TRÉNER</b><span>${headName}</span></div><button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button></section>
+    <section class="head-profile head-profile-main"><div class="head-avatar">${headName.charAt(0)}</div><div class="head-trainer-title"><b>HLAVNÝ TRÉNER</b></div><button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button></section>
     <div class="head-title-row"><h2>▣ &nbsp; VYÚČTOVANIE – <b>${mName} ${year}</b></h2><div class="head-month-nav"><button onclick="shiftHeadTrainerBillingMonth(-1)" aria-label="Predchádzajúci mesiac">‹</button><button onclick="resetHeadTrainerBillingMonth()" aria-label="Aktuálny mesiac">▣</button><button onclick="shiftHeadTrainerBillingMonth(1)" aria-label="Nasledujúci mesiac">›</button></div></div>
     <div class="head-tabs"><button class="active">MESAČNÉ VYÚČTOVANIE</button><button onclick="renderHeadTrainerYear()">PREHĽAD TRÉNEROV / ROK</button></div>
     <div class="head-table-wrap"><table class="head-table approved-monthly-table"><thead><tr><th>TRÉNER</th><th>TRÉNINGY<br>(spolu)</th><th>PRÍTOMNÍ<br>(platiaci)</th><th>TRÉNINGOVÉ<br>(5 € / 6 €)</th><th>ČLENSKÉ</th><th>REGISTRÁCIA</th><th>INÉ +/-</th><th>SPOLU<br>PRÍJMY</th><th>ODMENA<br>TRÉNERA</th><th>ODOVZDAŤ<br>KLUBU</th></tr></tr></thead><tbody>

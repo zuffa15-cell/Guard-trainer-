@@ -10922,7 +10922,24 @@ function getHeadTrainerRowsForMonth(month=appToday().month,year=appToday().year)
   // ZDROJ PRAVDY PRE HLAVNÉHO TRÉNERA:
   // Použi presne tie isté mesačné záznamy, ktoré vidí detail „Moje vyúčtovanie“
   // konkrétneho trénera. Tým sa čísla (vrátane REGISTRÁCIE) nemôžu rozísť.
-  const trainers=(trainersData||[]).filter(t=>String(t.role||'').trim().toUpperCase()!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t) && !t.isTemplate);
+  // HLAVNÝ TRÉNER je v aplikácii samostatná funkcia, nie reálny tréner.
+  // Preto sa jeho profil NESMIE objaviť medzi riadkami vyúčtovania trénerov.
+  const headProfile=(typeof getMainTrainerProfile==='function') ? getMainTrainerProfile() : null;
+  const headId=headProfile && headProfile.id!=null ? String(headProfile.id) : '';
+  const headNames=new Set([
+    String(headProfile?.full||'').trim().replace(/\s+/g,' ').toUpperCase(),
+    String(headProfile?.name||'').trim().replace(/\s+/g,' ').toUpperCase(),
+    'HLAVNÝ TRÉNER','HLAVNY TRENER'
+  ].filter(Boolean));
+  const trainers=(trainersData||[]).filter(t=>{
+    const role=String(t.role||'').trim().toUpperCase();
+    const id=t&&t.id!=null?String(t.id):'';
+    const names=[String(t?.full||'').trim().replace(/\s+/g,' ').toUpperCase(),String(t?.name||'').trim().replace(/\s+/g,' ').toUpperCase()];
+    if(role==='HLAVNÝ TRÉNER' || role==='HLAVNY TRENER') return false;
+    if(headId && id===headId) return false;
+    if(names.some(n=>n && headNames.has(n))) return false;
+    return !isTestTrainerAccount(t) && !t.isTemplate;
+  });
   const normName=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
   return trainers.map(t=>{
     const name=String(t.full||t.name||'').trim();

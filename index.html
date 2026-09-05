@@ -14041,25 +14041,37 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const dailyNewByGroupCounts=Object.fromEntries(Object.keys(groupNames).map(g=>[g,dailyNewByGroup[g].map(set=>set.size)]));
   const dailyNewCounts=Array.from({length:daysInMonth},(_,i)=>Object.keys(groupNames).reduce((sum,g)=>sum+(dailyNewByGroupCounts[g][i]||0),0));
 
-  // Graf DOCHÁDZKY = výhradne z toho, čo je uložené vo VYÚČTOVANÍ.
-  // Nepoužívame attendanceHistory/aktuálnu dochádzku, pretože starší snapshot
-  // môže obsahovať už zmenený stav a potom by graf ukazoval iné čísla než
-  // mesačné vyúčtovanie. presentCount je počet ľudí uložený priamo vo
-  // vyúčtovaní (vrátane NOVÝCH). Pri starších záznamoch použijeme paying+newCount.
+  // Graf DOCHÁDZKY = výhradne z ULOŽENÉHO VYÚČTOVANIA.
+  // Dôležité: nepoužívame attendanceStateSnapshot, pretože ten môže obsahovať
+  // viac členov než bolo vo finálnom vyúčtovaní. Pre graf je rozhodujúci počet
+  // PLATIEB uložený vo vyúčtovaní (paying). NOVÝ člen sa pridá iba vtedy, ak bol
+  // vo vyúčtovaní uložený ako newCount. Jeden dátum + skupina sa započíta iba raz.
   const daily=Array.from({length:daysInMonth},()=>0);
   const stackedAttendanceByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>0)]));
+  const billingChartMap=new Map();
   (getBillingRecords()||[]).forEach(r=>{
+    if(r.substituteReference) return;
     const d=parsePaymentDate(r.date);
     if(!d || d.month!==m || d.year!==y || d.day<1 || d.day>daysInMonth) return;
     const group=quickGroupCode(r.group);
     if(!stackedAttendanceByGroup[group]) return;
-    let count=Number(r.presentCount);
-    if(!Number.isFinite(count) || count<0){
-      count=Number(r.paying||0)+Number(r.newCount||0);
-    }
+    const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    const uniqueKey=`${iso}|${group}`;
+    const savedAt=Number(r.savedAt||r.updatedAt||0);
+    const prev=billingChartMap.get(uniqueKey);
+    if(prev && Number(prev.savedAt||0)>savedAt) return;
+    // Vyúčtovanie eviduje počet platených tréningov v "paying" a počet NOVÝCH
+    // samostatne. Tento súčet je presne údaj, ktorý má byť v štatistike.
+    let count=Number(r.paying);
+    if(!Number.isFinite(count) || count<0) count=Number(r.presentCount||0);
+    const newCount=Number(r.newCount||0);
+    count+=(Number.isFinite(newCount)&&newCount>0?newCount:0);
     if(!Number.isFinite(count) || count<0) count=0;
-    stackedAttendanceByGroup[group][d.day-1]+=count;
-    daily[d.day-1]+=count;
+    billingChartMap.set(uniqueKey,{day:d.day,group,count,savedAt});
+  });
+  billingChartMap.forEach(item=>{
+    stackedAttendanceByGroup[item.group][item.day-1]=item.count;
+    daily[item.day-1]+=item.count;
   });
   const maxDaily=Math.max(1,...daily);
   const stackedDayMax=Math.max(1,...daily);

@@ -548,6 +548,7 @@ function initCloudSync(){
     syncEnabled = true;
     initMemberDirectCloudSync();
     try{ initTrainersDirectSync(); }catch(e){}
+    try{ initBillingDirectSync(); }catch(e){}
 
 }
 
@@ -3835,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1014-RETRO-EDIT</div>
+   <div class="gt-login-title">GUARD TRAINER v1015-BILLING-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -10242,9 +10243,6 @@ normalizeMonthlyBillingRecords();
 function persistMonthlyBillingRecords(){
   try{
     normalizeMonthlyBillingRecords();
-    // Final hard deduplication: one trainer + one calendar date + one group
-    // can exist only once in the saved billing data. Re-saving or editing
-    // attendance must update that row, never append another one.
     const seen=new Map();
     const norm=s=>String(s||'').trim().toUpperCase();
     const rows=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
@@ -10254,15 +10252,96 @@ function persistMonthlyBillingRecords(){
       const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
       const prev=seen.get(key);
       if(!prev){ seen.set(key,r); return; }
-      // Keep the real financial row over an informational substitution row.
       if(prev.substituteReference && !r.substituteReference) seen.set(key,r);
       else if(!prev.substituteReference && r.substituteReference) return;
       else seen.set(key,r);
     });
     monthlyBillingRecords=Array.from(seen.values());
-    localStorage.setItem('gt-monthly-billing-v221', JSON.stringify(monthlyBillingRecords));
+    const json=JSON.stringify(monthlyBillingRecords);
+    console.log('💾 Ukladám vyúčtovanie, záznamov:', monthlyBillingRecords.length);
+    try{ localStorage.setItem('gt-monthly-billing-v221', json); }catch(e){}
+    try{ originalSetItem('gt-monthly-billing-v221', json); }catch(e){}
+    try{ localStorage.setItem('gt-billing', json); }catch(e){}
+    try{ originalSetItem('gt-billing', json); }catch(e){}
+    // Okamžite push do cloudu - aj tréner môže poslať svoje vyúčtovanie
+    try{
+      if(typeof pushToCloud==='function'){
+        pushToCloud(true);
+        setTimeout(()=>pushToCloud(true), 800);
+      }
+    }catch(e){}
+    try{
+      if(typeof db!=='undefined' && db){
+        db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:true}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(e=>console.warn('billing cloud fail', e));
+      }
+    }catch(e){}
   }catch(e){ console.warn('Uloženie vyúčtovania sa nepodarilo',e); }
 }
+function initBillingDirectSync(){
+  try{
+    if(typeof db==='undefined' || !db) return;
+    console.log('🔄 Sync vyúčtovania zapnutý');
+    db.collection('guard-trainer-billing').doc('all').onSnapshot(doc=>{
+      if(!doc.exists) return;
+      const data=doc.data()||{};
+      if(!data.records || !Array.isArray(data.records) || data.records.length===0) return;
+      try{
+        const remote=data.records;
+        const localRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
+        let local=[]; try{local=JSON.parse(localRaw)||[];}catch(e){}
+        // MERGE - nikdy neprepisuj menším, len pridaj chýbajúce
+        const norm=s=>String(s||'').trim().toUpperCase();
+        const seen=new Map();
+        local.forEach(r=>{
+          const d=parsePaymentDate(r.date);
+          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+          const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
+          seen.set(key,r);
+        });
+        let added=0;
+        remote.forEach(r=>{
+          const d=parsePaymentDate(r.date);
+          const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+          const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
+          if(!seen.has(key)){
+            seen.set(key,r);
+            added++;
+          } else {
+            // Ak existuje, ponechaj novší podľa savedAt
+            const existing=seen.get(key);
+            const existingTime=Number(existing.savedAt||0);
+            const remoteTime=Number(r.savedAt||0);
+            if(remoteTime>existingTime) seen.set(key,r);
+          }
+        });
+        if(added>0 || remote.length!==local.length){
+          const merged=Array.from(seen.values());
+          console.log('📥 Vyúčtovanie z cloudu - mergujem, pridané:', added, 'celkom:', merged.length);
+          try{
+            originalSetItem('gt-monthly-billing-v221', JSON.stringify(merged));
+            localStorage.setItem('gt-monthly-billing-v221', JSON.stringify(merged));
+            originalSetItem('gt-billing', JSON.stringify(merged));
+          }catch(e){}
+          if(typeof monthlyBillingRecords!=='undefined'){
+            monthlyBillingRecords.splice(0, monthlyBillingRecords.length, ...merged);
+          }
+          try{ if(location.hash.includes('billing') || location.hash==='#more'){ if(typeof renderHeadTrainerBilling==='function' && (isAdmin()||isHeadTrainer())) renderHeadTrainerBilling(); } }catch(e){}
+        }
+      }catch(e){ console.warn('billing sync fail', e); }
+    });
+  }catch(e){ console.warn('init billing sync fail', e); }
+}
+window.manualBillingSync=function(){
+  if(typeof db==='undefined' || !db){ alert('DB nie je pripojené'); return; }
+  db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+    if(!doc.exists){ alert('V cloude nie je vyúčtovanie'); return; }
+    const remote=doc.data().records||[];
+    alert('Cloud: '+remote.length+' záznamov, lokálne: '+monthlyBillingRecords.length);
+    console.log('Cloud billing:', remote);
+    console.log('Local billing:', monthlyBillingRecords);
+  });
+};
+
 function getBillingRecords(){
   return Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
 }

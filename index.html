@@ -13310,11 +13310,9 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
   const myId=currentTrainerAccountId();
   const norm=s=>String(s||'').trim().toUpperCase();
 
-  // Osobné vyúčtovanie sa filtruje podľa toho, KTO VYÚČTOVANIE VYTVORIL,
-  // nie podľa skupiny. Rovnakú skupinu môže robiť viac trénerov.
-  // Pri starších záznamoch je uložené meno trénera nadradené trainerId,
-  // pretože staré ID mohlo byť nesprávne. trainerId používame iba pri
-  // zázname, ktorý meno trénera vôbec nemá.
+  // Osobné vyúčtovanie sa filtruje podľa toho, KTO KONKRÉTNE VYÚČTOVANIE ULOŽIL.
+  // NIKDY nie podľa skupiny. Najspoľahlivejší identifikátor je trainerId,
+  // potom savedBy a až pri úplne starých záznamoch meno trainer.
   const myNames=new Set([norm(me)]);
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
@@ -13331,10 +13329,21 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
 
   const ownsRecord=r=>{
     if(!r) return false;
-    const rn=norm(r.trainer);
-    if(rn) return myNames.has(rn);
+
+    // 1. Nové záznamy: trainerId je autoritatívny. Ak existuje, nikdy ho
+    //    neprebíjame menom, pretože rovnakú skupinu môžu robiť viacerí tréneri.
     const rid=Number(r.trainerId);
-    return myId!=null && Number.isFinite(rid) && rid>0 && Number(rid)===Number(myId);
+    if(myId!=null && Number.isFinite(rid) && rid>0){
+      return Number(rid)===Number(myId);
+    }
+
+    // 2. Staršie záznamy vytvorené po zavedení savedBy.
+    const sb=norm(r.savedBy);
+    if(sb) return myNames.has(sb);
+
+    // 3. Najstaršie záznamy bez ID a savedBy – posledná možnosť je meno.
+    const rn=norm(r.trainer);
+    return !!rn && myNames.has(rn);
   };
 
   const accepted=substitutionOffers.filter(o=>{

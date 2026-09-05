@@ -13740,65 +13740,51 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const daysInMonth=new Date(y,m,0).getDate();
   const monthPrefix=`${y}-${String(m).padStart(2,'0')}-`;
 
-  // ŠTATISTIKY = VÝHRADNE SKUTOČNE ULOŽENÁ DOCHÁDZKA.
-  // Vyúčtovanie už nie je zdrojom počtu tréningov ani účastí.
-  // Každý kľúč v trainingAttendanceByGroup predstavuje jeden uložený
-  // tréning (dátum + skupina). Z neho sa berie presný stav training/newMember.
-  // Tým sa starý alebo chybný billing (napr. 2.9. C) nemôže premietnuť
-  // do štatistík, ak taký tréning v dochádzke nie je uložený.
+  // ŠTATISTIKY = VÝHRADNE Z ULOŽENÉHO VYÚČTOVANIA.
+  // Autoritatívnym zdrojom je attendanceStateSnapshot uložený spolu
+  // s konkrétnym vyúčtovaním. Neberieme údaje z aktuálnej dochádzky,
+  // kalendára ani zo starých lokálnych snapshotov. Tým pádom sa štatistika
+  // vždy zhoduje s tým, čo bolo pri vyúčtovaní skutočne uložené.
   const entries=[];
   try{
-    if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
-      Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
-        const parts=String(histKey).split('|');
-        const dateValue=parts.shift()||'';
-        const groupValue=parts.join('|')||'';
-        const d=parsePaymentDate(dateValue);
-        if(!d || d.month!==m || d.year!==y) return;
-        const iso=`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-        const hist=trainingAttendanceByGroup[histKey];
-        if(!hist || typeof hist!=='object') return;
+    (getBillingRecords()||[]).forEach(r=>{
+      const d=parsePaymentDate(r.date);
+      if(!d || d.month!==m || d.year!==y) return;
+      if(!Array.isArray(r.attendanceStateSnapshot)) return;
 
-        // Štatistika môže použiť iba tréning, ktorý v daný deň/skupine
-        // skutočne existoval. Staré/stale záznamy (napr. 2.9. C) sa preto
-        // vyradia podľa aktuálneho kalendára. Samotné počty potom berieme
-        // výhradne z uloženej dochádzky.
-        const groupKey=quickGroupCode(groupValue);
-        let scheduled=false;
-        try{
-          const scheduledItems=(typeof scheduleItemsForDate==='function' ? scheduleItemsForDate(iso) : [])||[];
-          scheduled=scheduledItems.some(x=>quickGroupCode(x.code)===groupKey);
-          if(!scheduled && typeof calendarDayGroups!=='undefined' && calendarDayGroups){
-            scheduled=(calendarDayGroups[iso]||[]).some(x=>quickGroupCode(x.code)===groupKey);
-          }
-        }catch(e){}
-        if(!scheduled) return;
-
-        const people=[];
-        const paymentSnapshot=[];
-        let newCount=0;
-        Object.keys(hist).forEach(k=>{
-          const v=hist[k]||{};
-          if(v.training){
-            people.push(k);
-            paymentSnapshot.push({surname:String(k).split('|')[0]||'',name:String(k).split('|').slice(1).join('|')||'',training:true,newMember:!!v.newMember});
-          }
-          if(v.newMember){
-            newCount++;
-            if(!v.training){
-              const partsName=String(k).split('|');
-              paymentSnapshot.push({surname:partsName[0]||'',name:partsName.slice(1).join('|')||'',training:false,newMember:true});
-            }
-          }
-        });
-
-        // Prázdny/starý snapshot nie je vykonaný tréning. Počítame iba
-        // skutočne uloženú účasť (TRÉNING alebo NOVÝ).
-        if(people.length===0 && newCount===0) return;
-        entries.push({date:iso,group:groupValue,people,paymentSnapshot,newCount,attendanceHistory:hist});
+      const attendanceHistory={};
+      r.attendanceStateSnapshot.forEach(x=>{
+        if(!x) return;
+        const surname=String(x.surname||'').trim();
+        const name=String(x.name||'').trim();
+        const key=surname+'|'+name;
+        if(!surname && !name) return;
+        attendanceHistory[key]={
+          training:!!x.training,
+          newMember:!!x.newMember,
+          trainingAccount:!!x.trainingAccount
+        };
       });
-    }
-  }catch(e){ console.warn('Štatistiky – načítanie dochádzky zlyhalo',e); }
+
+      const people=Object.keys(attendanceHistory).filter(k=>{
+        const v=attendanceHistory[k]||{};
+        return !!v.training || !!v.newMember;
+      });
+      const newCount=Object.values(attendanceHistory).filter(v=>v&&v.newMember).length;
+      if(people.length===0 && newCount===0) return;
+
+      const iso=`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      entries.push({
+        date:iso,
+        group:r.group||'',
+        people,
+        paymentSnapshot:Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[],
+        newCount,
+        attendanceHistory,
+        billingKey:r.key||''
+      });
+    });
+  }catch(e){ console.warn('Štatistiky – načítanie uložených vyúčtovaní zlyhalo',e); }
   entries.sort((a,b)=>a.date.localeCompare(b.date));
 
   const memberCounts={};
@@ -13885,7 +13871,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   // štatistiky začínajú od nuly – nepoužívajú testovacie ani profilové údaje.
   const hasSavedStats=entries.length>0;
   const active=hasSavedStats
-    ? new Set(entries.flatMap(e=>e.people)).size
+    ? new Set(entries.flatMap(e=>Object.keys(e.attendanceHistory||{}).filter(k=>{const v=e.attendanceHistory[k]||{}; return !!v.training || !!v.newMember;}))).size
     : 0;
   // NOVÍ: zdrojom je uložená dochádzka + uložené vyúčtovania.
   // Aktuálny stav profilu nepoužívame, preto sa NOVÝ nestratí po neskoršej zmene profilu.
@@ -13895,21 +13881,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     const day=Number(String(e.date).slice(8,10));
     if(day<1 || day>daysInMonth) return;
     const group=quickGroupCode(e.group);
-    // 1) Najpresnejší zdroj: attendance history pre konkrétny deň/skupinu.
-    try{
-      const histKey=`${e.date}|${group}`;
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey])||null;
-      if(hist && typeof hist==='object'){
-        Object.keys(hist).forEach(k=>{
-          const v=hist[k]||{};
-          if(v.newMember){
-            newMemberSet.add(k);
-            if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(k);
-          }
-        });
-      }
-    }catch(err){}
-    // Žiadny billing fallback – NOVÝ sa berie iba z dochádzky.
+    // NOVÝ sa berie výhradne zo snapshotu uloženého vo vyúčtovaní.
     Object.keys(e.attendanceHistory||{}).forEach(k=>{
       const v=e.attendanceHistory[k]||{};
       if(v.newMember){

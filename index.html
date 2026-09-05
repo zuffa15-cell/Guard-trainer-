@@ -473,7 +473,8 @@ function initCloudSync(){
         // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
         try{
           if(memberDataChanged && location.hash==='#attendance' && typeof attendance==='function'){
-            setTimeout(()=>{try{ attendance(); }catch(e){ console.warn('Member cloud refresh failed:',e); }},0);
+            // v1031: NEPRENAČÍTAVAJ dochádzku keď sa zmení membersData z cloudu - ostáva lokálna
+            console.log('🔒 BLOKUJEM auto-reload dochádzky po zmene membersData z cloudu');
           }
           if(memberDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
             setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member list cloud refresh failed:',e); }},0);
@@ -3836,7 +3837,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1030-SAVE-FIX</div>
+   <div class="gt-login-title">GUARD TRAINER v1031-STABLE-2-9</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8376,14 +8377,6 @@ function trainingAttendanceKey(group=attendanceState.group,date=attendanceDateKe
 }
 function persistTrainingAttendanceHistory(){
   try{
-    const json=JSON.stringify(trainingAttendanceByGroup);
-    // Ulož do oboch storage naraz - 100% lokálne
-    localStorage.setItem('gt-training-attendance-history', json);
-    originalSetItem('gt-training-attendance-history', json);
-    console.log('💾 Dochádzka uložená lokálne:', Object.keys(trainingAttendanceByGroup).length, 'tréningov');
-  }catch(e){}
-
-  try{
     localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup));
   }catch(e){ console.warn('Attendance history save failed',e); }
 }
@@ -8722,6 +8715,23 @@ function syncAttendanceRecord(member){
   return a;
 }
 function loadAttendanceFromMembers(){
+ // v1031: 100% lokálna stabilná dochádzka - neprepisuj z membersData ak už máme načítané
+ const _loadKey = `${attendanceState.date}|${attendanceState.group}`;
+ if(window.__lastAttendanceMembersKey===_loadKey && attendanceState.members && attendanceState.members.length>0){
+   // Už máme členov pre tento dátum/skupinu - len obnov training flags z histórie, nemeň zoznam
+   const hist = trainingAttendanceByGroup[_loadKey]||{};
+   attendanceState.members.forEach(a=>{
+     const saved = hist[a.surname+'|'+a.name];
+     if(saved){
+       a.training = !!saved.training;
+       a.trainingAccount = !!saved.trainingAccount;
+       a.newMember = !!saved.newMember;
+       a.newMemberDate = saved.newMemberDate||'';
+     }
+   });
+   console.log('🔒 Stabilná dochádzka - ponechávam', attendanceState.members.length, 'členov pre', _loadKey);
+   return;
+ }
  const current=attendanceState.members||[];
  const byName=new Map(current.map(a=>[a.surname+'|'+a.name,a]));
  const wantedGroups=new Set(groupMemberRosterCodes(attendanceState.group));
@@ -8729,6 +8739,7 @@ function loadAttendanceFromMembers(){
    const gs=Array.isArray(m.groups)?m.groups:[m.group];
    return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
  });
+ window.__lastAttendanceMembersKey=_loadKey;
  // Test mode: keep the original 10 test members visible, but NEVER
  // discard a real member who was added to this group.
  

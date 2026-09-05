@@ -473,7 +473,7 @@ function initCloudSync(){
         // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
         try{
           if(memberDataChanged && location.hash==='#attendance'){
-            console.log('🔒 v1032 blokujem auto-reload dochádzky');
+            console.log('🔒 Blokujem auto-reload dochádzky');
           }
           if(memberDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
             setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member list cloud refresh failed:',e); }},0);
@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1032-FINAL-2-9-FIX</div>
+   <div class="gt-login-title">GUARD TRAINER v1033-FIXED-2-9</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8379,13 +8379,16 @@ function persistTrainingAttendanceHistory(){
     const j=JSON.stringify(trainingAttendanceByGroup);
     localStorage.setItem('gt-training-attendance-history', j);
     originalSetItem('gt-training-attendance-history', j);
-    console.log('💾 Uložené', Object.keys(trainingAttendanceByGroup).length);
-  }catch(e){}
-  try{
-
-  try{
-    localStorage.setItem('gt-training-attendance-history',JSON.stringify(trainingAttendanceByGroup));
-  }catch(e){ console.warn('Attendance history save failed',e); }
+    // Záloha
+    try{
+      const b=JSON.parse(localStorage.getItem('gt-attendance-backup-v1')||'[]');
+      b.push({ts:Date.now(), data:j});
+      if(b.length>20) b.shift();
+      localStorage.setItem('gt-attendance-backup-v1', JSON.stringify(b));
+      originalSetItem('gt-attendance-backup-v1', JSON.stringify(b));
+    }catch(e){}
+    console.log('💾 Uložené', Object.keys(trainingAttendanceByGroup).length, 'tréningov');
+  }catch(e){ console.warn(e); }
 }
 // After the trainer confirms attendance, membership and registration payments
 // for that training are locked. Only the administrator can change them.
@@ -8722,7 +8725,7 @@ function syncAttendanceRecord(member){
   return a;
 }
 function loadAttendanceFromMembers(){
- // v1032: Ak už máme členov pre rovnaký dátum/skupinu, neprepisuj zoznam z membersData
+ // v1033: stabilná dochádzka - ak už máme členov pre rovnaký kľúč, len obnov flags
  const _key = `${attendanceState.date}|${attendanceState.group}`;
  if(window.__lastMembersKey===_key && attendanceState.members && attendanceState.members.length>0){
    const hist = trainingAttendanceByGroup[_key]||{};
@@ -8730,7 +8733,7 @@ function loadAttendanceFromMembers(){
      const s=hist[a.surname+'|'+a.name];
      if(s){ a.training=!!s.training; a.trainingAccount=!!s.trainingAccount; }
    });
-   console.log('🔒 Stabilní členovia pre', _key, attendanceState.members.length);
+   console.log('🔒 Stabilní členovia pre', _key);
    return;
  }
  window.__lastMembersKey=_key;

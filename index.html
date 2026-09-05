@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1026-BACKUP-UI</div>
+   <div class="gt-login-title">GUARD TRAINER v1027-NO-OVERWRITE-GUARD</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8865,6 +8865,15 @@ function syncAttendanceRecord(member){
   return a;
 }
 function loadAttendanceFromMembers(){
+  // v1027: Ak je guard aktívny a už máme načítanú dochádzku pre rovnaký dátum/skupinu, neprepisuj!
+  try{
+    const key=`${attendanceState.date}|${attendanceState.group}`;
+    if(_attendanceGuardActive && _lastAttendanceLoadKey===key && attendanceState.members && attendanceState.members.length>0){
+      console.log('🛡️ loadAttendanceFromMembers BLOCKED - už máme načítané', key);
+      return;
+    }
+  }catch(e){}
+
  const current=attendanceState.members||[];
  const byName=new Map(current.map(a=>[a.surname+'|'+a.name,a]));
  const wantedGroups=new Set(groupMemberRosterCodes(attendanceState.group));
@@ -9010,12 +9019,9 @@ function applyBillingSnapshotToAttendance(){
       a.registrationAccountAmount=Number(x.registrationAccountAmount||0);
       a.registrationAccountDate=x.registrationAccountDate||'';
     }else{
-      // Člen, ktorý v čase uloženia vyúčtovania nebol v zozname, musí zostať
-      // bez stavu; nesmieme mu privliecť dnešnú/stálu dochádzku.
-      a.training=false;
-      a.trainingAccount=false;
-      a.newMember=false;
-      a.newMemberDate='';
+      // FIX: Ak billing snapshot nemá člena, ponechaj aktuálny stav z lokálu, nevymaž!
+      // Predtým sa mazalo na false, čo spôsobovalo prepis na inú (prázdnu) dochádzku
+      // a.training zostáva ako bolo načítané z lokálnej histórie
     }
     // Platby obnovíme zo snapshotu iba ak ich uložené vyúčtovanie obsahuje.
     // Tým zostanú sumy pri návrate z vyúčtovania presne rovnaké.
@@ -9046,7 +9052,22 @@ function applyBillingSnapshotToAttendance(){
   attendanceState.otherMinusReason=String(r.otherMinusReason||'');
 }
 
+let _lastAttendanceLoadKey='';
+let _lastAttendanceLoadTime=0;
+let _attendanceGuardActive=false;
 function attendance(){
+  const currentKey=`${attendanceState.date}|${attendanceState.group}`;
+  const now=Date.now();
+  // Ak sme práve načítali tú istú dochádzku pred <2 sekundami, neprepisuj!
+  if(_attendanceGuardActive && _lastAttendanceLoadKey===currentKey && (now-_lastAttendanceLoadTime)<2000){
+    console.log('🛡️ Guard: Blokujem prepis dochádzky po sekunde pre', currentKey);
+    return;
+  }
+  _lastAttendanceLoadKey=currentKey;
+  _lastAttendanceLoadTime=now;
+  _attendanceGuardActive=true;
+  setTimeout(()=>{ _attendanceGuardActive=false; }, 3000);
+
   if(!isAdmin() && !isHeadTrainer()){
     const accountId=currentTrainerAccountId();
     if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }

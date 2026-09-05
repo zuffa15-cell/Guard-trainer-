@@ -362,20 +362,53 @@ function initCloudSync(){
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           if(k==='gt-trainers' || k==='gt-trainers-v395'){
             try{
+              const isAdminUser = (typeof isAdmin==='function' ? isAdmin() : false) || (localStorage.getItem('gt-user-role')==='admin');
               const remote=JSON.parse(data[k]||'[]');
               const localRaw=originalGetItem(TRAINERS_STORAGE_KEY)||'[]';
               let local=[]; try{local=JSON.parse(localRaw)||[];}catch(e){}
-              if(Array.isArray(remote) && Array.isArray(local) && remote.length < local.length){
-                console.warn('Cloud má menej trénerov ako lokál - ignorujem');
-              } else if(!data[k] || data[k]==='[]'){
-                console.warn('Cloud prázdny tréneri - ignorujem');
-              } else {
-                originalSetItem(k, data[k]);
-                try{ localStorage.setItem(TRAINERS_STORAGE_KEY, data[k]); }catch(e){}
-                try{ if(typeof trainersData!=='undefined' && remote.length>=local.length){ trainersData.splice(0,trainersData.length, ...remote); } }catch(e){}
+              
+              if(!data[k] || data[k]==='[]' || (Array.isArray(remote) && remote.length===0)){
+                console.warn('☁️ Cloud prázdny tréneri - ignorujem');
+              } else if(!isAdminUser){
+                // Tréner: vždy prijmi server verziu (admin je zdroj pravdy)
+                // Ale chráň skupiny - ak remote má prázdne skupiny, zachovaj lokálne skupiny
+                console.log('👤 Tréner prijíma trénerov zo servera, remote:', remote.length);
+                const merged = remote.map(rt=>{
+                  const localT = local.find(lt=> String(lt.id)===String(rt.id));
+                  if(localT && (!rt.groups || rt.groups.length===0) && localT.groups && localT.groups.length>0){
+                    // Remote má prázdne skupiny, ponechaj lokálne
+                    return {...rt, groups: localT.groups};
+                  }
+                  return rt;
+                });
+                originalSetItem(k, JSON.stringify(merged));
+                try{ localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged)); }catch(e){}
+                try{ if(typeof trainersData!=='undefined'){ trainersData.splice(0,trainersData.length, ...merged); } }catch(e){}
                 changed=true;
+              } else {
+                // Admin: prijmi len ak má cloud viac alebo rovnako, nikdy neprepisuj menším
+                if(Array.isArray(remote) && Array.isArray(local) && remote.length < local.length){
+                  console.warn('☁️ Admin: Cloud má menej trénerov ('+remote.length+') ako lokál ('+local.length+') - ignorujem, lokál je novší');
+                } else {
+                  // Admin merguje s ochranou skupín
+                  const merged = remote.map(rt=>{
+                    const localT = local.find(lt=> String(lt.id)===String(rt.id));
+                    if(localT && (!rt.groups || rt.groups.length===0) && localT.groups && localT.groups.length>0){
+                      return {...rt, groups: localT.groups};
+                    }
+                    return rt;
+                  });
+                  originalSetItem(k, JSON.stringify(merged));
+                  try{ localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged)); }catch(e){}
+                  try{ if(typeof trainersData!=='undefined' && merged.length>=local.length){ trainersData.splice(0,trainersData.length, ...merged); } }catch(e){}
+                  changed=true;
+                }
               }
-            }catch(e){ originalSetItem(k, data[k]); changed=true; }
+            }catch(e){ 
+              const isAdminUser = (typeof isAdmin==='function' ? isAdmin() : false);
+              if(!isAdminUser){ originalSetItem(k, data[k]); changed=true; }
+              else { console.warn('trainers parse fail', e); }
+            }
           } else {
             originalSetItem(k, data[k]);
             changed = true;
@@ -3802,7 +3835,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1006-FINAL</div>
+   <div class="gt-login-title">GUARD TRAINER v1007-ADMIN-ONLY</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -5568,54 +5601,100 @@ try{
 function persistTrainersData(){
   try{
     const json=JSON.stringify(trainersData);
-    console.log('💾 Ukladám trénerov:', trainersData.length);
+    console.log('💾 Ukladám trénerov:', trainersData.length, trainersData.map(t=>t.full+'['+(t.groups||[]).join(',')+']'));
     try{ localStorage.setItem(TRAINERS_STORAGE_KEY,json); }catch(e){}
     try{ localStorage.setItem('gt-trainers',json); }catch(e){}
     try{ localStorage.setItem('gt-trainers-v395',json); }catch(e){}
     try{ originalSetItem(TRAINERS_STORAGE_KEY,json); }catch(e){}
     try{ originalSetItem('gt-trainers',json); }catch(e){}
     try{ originalSetItem('gt-trainers-v395',json); }catch(e){}
-    // Cloud sync
+    // Cloud sync - LEN ADMIN môže poslať trénerov na server
     try{
-      if(typeof pushToCloud==='function'){
-        pushToCloud(true);
-        setTimeout(()=>pushToCloud(true), 500);
+      const isAdminUser = (typeof isAdmin==='function' ? isAdmin() : false) || (localStorage.getItem('gt-user-role')==='admin');
+      if(isAdminUser){
+        console.log('☁️ Admin posiela trénerov do cloudu');
+        if(typeof pushToCloud==='function'){
+          pushToCloud(true);
+          setTimeout(()=>pushToCloud(true), 500);
+        }
+        if(typeof saveTrainersDirectCloud==='function') saveTrainersDirectCloud();
+      } else {
+        console.log('👤 Tréner - neposielam trénerov do cloudu, len lokálne uložené');
       }
-    }catch(e){}
-    try{ if(typeof saveTrainersDirectCloud==='function') saveTrainersDirectCloud(); }catch(e){}
+    }catch(e){ console.warn('cloud push skip', e); }
   }catch(e){ console.warn('Uloženie trénerov sa nepodarilo',e); }
 }
 const TRAINERS_DIRECT_COLLECTION='guard-trainer-trainers';
 function saveTrainersDirectCloud(){
   try{
     if(typeof db==='undefined' || !db) return;
-    db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').set({trainers: trainersData, updatedAt: Date.now()}, {merge:true}).then(()=>console.log('✅ Tréneri v cloude')).catch(e=>console.warn('trainers cloud fail',e));
-  }catch(e){}
+    const isAdminUser = (typeof isAdmin==='function' ? isAdmin() : false) || (localStorage.getItem('gt-user-role')==='admin');
+    if(!isAdminUser){
+      console.log('⛔ Tréner nemôže poslať trénerov na server - len admin');
+      return;
+    }
+    // Pred odoslaním skontroluj že tréneri majú skupiny - ak nie, neposielaj prázdne
+    const trainersWithGroups = trainersData.filter(t=> !t.isTemplate && (t.groups||[]).length>0);
+    if(trainersWithGroups.length===0 && trainersData.filter(t=>!t.isTemplate).length>0){
+      console.warn('⚠️ Tréneri bez skupín - neposielam prázdne skupiny na server, ponechávam staré');
+      // Skús načítať staré z cloudu a mergni skupiny
+      return;
+    }
+    db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').set({trainers: trainersData, updatedAt: Date.now(), updatedBy: 'admin'}, {merge:true}).then(()=>console.log('✅ Tréneri v cloude - admin')).catch(e=>console.warn('trainers cloud fail',e));
+  }catch(e){ console.warn('save direct fail', e); }
 }
 function initTrainersDirectSync(){
   try{
     if(typeof db==='undefined' || !db) return;
-    console.log('🔄 Sync trénerov zapnutý');
+    console.log('🔄 Sync trénerov zapnutý - len admin môže zapisovať');
     db.collection(TRAINERS_DIRECT_COLLECTION).doc('all').onSnapshot(doc=>{
       if(!doc.exists) return;
       const data=doc.data()||{};
       if(!data.trainers || !Array.isArray(data.trainers) || data.trainers.length===0) return;
+      // Ak je to adminov zápis, všetci ho prijmú
       try{
+        const isAdminUser = (typeof isAdmin==='function' ? isAdmin() : false) || (localStorage.getItem('gt-user-role')==='admin');
         const remote=data.trainers;
         const localRaw=originalGetItem(TRAINERS_STORAGE_KEY)||'[]';
         let local=[]; try{local=JSON.parse(localRaw)||[];}catch(e){}
-        if(remote.length>=local.length && JSON.stringify(remote)!==JSON.stringify(local)){
-          console.log('📥 Tréneri z cloudu:', remote.length);
+        
+        // Ochrana skupín - nikdy neprepisuj trénera s prázdnymi skupinami
+        const merged = remote.map(rt=>{
+          const localT = local.find(lt=> String(lt.id)===String(rt.id));
+          if(rt.groups && rt.groups.length===0 && localT && localT.groups && localT.groups.length>0){
+            console.log('🛡️ Chránim skupiny pre', rt.full, ' - ponechávam', localT.groups);
+            return {...rt, groups: localT.groups};
+          }
+          return rt;
+        });
+        
+        if(!isAdminUser){
+          // Tréner: vždy prijmi adminovu verziu
+          console.log('👤 Tréner prijíma trénerov z cloudu:', merged.length);
           try{
-            originalSetItem(TRAINERS_STORAGE_KEY, JSON.stringify(remote));
-            originalSetItem('gt-trainers', JSON.stringify(remote));
-            originalSetItem('gt-trainers-v395', JSON.stringify(remote));
-            localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(remote));
+            originalSetItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged));
+            originalSetItem('gt-trainers', JSON.stringify(merged));
+            originalSetItem('gt-trainers-v395', JSON.stringify(merged));
+            localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged));
           }catch(e){}
           if(typeof trainersData!=='undefined'){
-            trainersData.splice(0,trainersData.length, ...remote);
+            trainersData.splice(0,trainersData.length, ...merged);
           }
           try{ if(location.hash.includes('trainer') || location.hash==='#more'){ renderTrainers(); } }catch(e){}
+        } else {
+          // Admin: prijmi len ak má cloud viac trénerov alebo rovnako
+          if(merged.length>=local.length && JSON.stringify(merged)!==JSON.stringify(local)){
+            console.log('👑 Admin prijíma trénerov z cloudu:', merged.length);
+            try{
+              originalSetItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged));
+              originalSetItem('gt-trainers', JSON.stringify(merged));
+              originalSetItem('gt-trainers-v395', JSON.stringify(merged));
+              localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged));
+            }catch(e){}
+            if(typeof trainersData!=='undefined'){
+              trainersData.splice(0,trainersData.length, ...merged);
+            }
+          }
         }
       }catch(e){ console.warn('trainers sync fail',e); }
     });

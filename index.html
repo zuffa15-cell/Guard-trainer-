@@ -10393,6 +10393,12 @@ function persistMonthlyBillingRecords(){
           let existing=[];
           if(doc.exists && doc.data().records && Array.isArray(doc.data().records)) existing=doc.data().records;
           const norm=s=>String(s||'').trim().toUpperCase();
+          // Nikdy nevracaj záznam, ktorý bol na niektorom zariadení
+          // výslovne vymazaný. Server môže mať ešte starú kópiu.
+          existing=existing.filter(r=>{
+            const dk=billingRecordCanonicalKey(r);
+            return Number(billingDeleteOrder[dk]||0) < Number(r.savedAt||r.updatedAt||0);
+          });
           const seen=new Map();
           existing.forEach(r=>{
             try{
@@ -10411,8 +10417,9 @@ function persistMonthlyBillingRecords(){
           const merged=Array.from(seen.values());
           db.collection('guard-trainer-billing').doc('all').set({records: merged, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', merged.length)).catch(e=>console.warn('billing cloud fail', e));
         }).catch(e=>{
-          // Ak get zlyhá, proste ulož
-          db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:true}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(err=>console.warn('billing cloud fail', err));
+          // Pri chybe čítania neposielaj naspäť staré záznamy. Lokálny zoznam
+          // už je po vymazaní čistý a obsahuje iba platné záznamy.
+          db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(err=>console.warn('billing cloud fail', err));
         });
       }
     }catch(e){ console.warn('billing direct push fail', e); }
@@ -10440,6 +10447,8 @@ function initBillingDirectSync(){
         const seen=new Map();
         local.forEach(r=>{
           try{
+            const localKey=billingRecordCanonicalKey(r);
+            if(Number(billingDeleteOrder[localKey]||0) >= Number(r.savedAt||r.updatedAt||0)) return;
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
             seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);

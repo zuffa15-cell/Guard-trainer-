@@ -473,7 +473,7 @@ function initCloudSync(){
         // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
         try{
           if(memberDataChanged && location.hash==='#attendance'){
-            console.log('🔒 Blokujem auto-reload dochádzky');
+            console.log('🔒 v1034 blok auto-reload');
           }
           if(memberDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
             setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member list cloud refresh failed:',e); }},0);
@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1033-FIXED-2-9</div>
+   <div class="gt-login-title">GUARD TRAINER v1034-HISTORY-FIRST</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -8379,15 +8379,7 @@ function persistTrainingAttendanceHistory(){
     const j=JSON.stringify(trainingAttendanceByGroup);
     localStorage.setItem('gt-training-attendance-history', j);
     originalSetItem('gt-training-attendance-history', j);
-    // Záloha
-    try{
-      const b=JSON.parse(localStorage.getItem('gt-attendance-backup-v1')||'[]');
-      b.push({ts:Date.now(), data:j});
-      if(b.length>20) b.shift();
-      localStorage.setItem('gt-attendance-backup-v1', JSON.stringify(b));
-      originalSetItem('gt-attendance-backup-v1', JSON.stringify(b));
-    }catch(e){}
-    console.log('💾 Uložené', Object.keys(trainingAttendanceByGroup).length, 'tréningov');
+    console.log('💾 v1034 Uložené', Object.keys(trainingAttendanceByGroup).length);
   }catch(e){ console.warn(e); }
 }
 // After the trainer confirms attendance, membership and registration payments
@@ -8725,18 +8717,47 @@ function syncAttendanceRecord(member){
   return a;
 }
 function loadAttendanceFromMembers(){
- // v1033: stabilná dochádzka - ak už máme členov pre rovnaký kľúč, len obnov flags
- const _key = `${attendanceState.date}|${attendanceState.group}`;
- if(window.__lastMembersKey===_key && attendanceState.members && attendanceState.members.length>0){
-   const hist = trainingAttendanceByGroup[_key]||{};
-   attendanceState.members.forEach(a=>{
-     const s=hist[a.surname+'|'+a.name];
-     if(s){ a.training=!!s.training; a.trainingAccount=!!s.trainingAccount; }
+ // v1034 FINAL: Dochádzka 100% lokálna - história je pravda
+ const key = `${attendanceState.date}|${attendanceState.group}`;
+ const hist = trainingAttendanceByGroup[key]||null;
+ 
+ // Ak existuje história pre tento dátum/skupinu, použi JU ako zdroj pravdy
+ if(hist && Object.keys(hist).length>0){
+   console.log('📱 v1034: Načítavam z LOKÁLNEJ histórie', key, Object.keys(hist).length, 'členov');
+   attendanceState.members = Object.keys(hist).map(k=>{
+     const [surname, name] = k.split('|');
+     const saved = hist[k]||{};
+     // Najdi člena v membersData pre doplnenie údajov
+     const mData = membersData.find(m=> (m.surname+'|'+m.name)===k) || {surname, name, membershipAmount:0, membershipDate:'', membershipPaidGroup:'', membershipAccountAmount:0, membershipAccountDate:'', registrationAccountAmount:0, registrationAccountDate:'', debt:0, debtReason:'', application:false};
+     return {
+       surname: mData.surname||surname,
+       name: mData.name||name,
+       training: !!saved.training,
+       trainingAccount: !!saved.trainingAccount,
+       membershipAccountAmount: Number(mData.membershipAccountAmount||0),
+       membershipAccountDate: mData.membershipAccountDate||'',
+       registrationAccountAmount: Number(mData.registrationAccountAmount||0),
+       registrationAccountDate: mData.registrationAccountDate||'',
+       newMember: !!saved.newMember,
+       newMemberDate: saved.newMemberDate||'',
+       membershipAmount: Number(mData.membershipAmount||0),
+       membershipDate: mData.membershipDate||'',
+       membershipPaidGroup: mData.membershipPaidGroup||'',
+       registration: !!mData.registration,
+       registrationDate: mData.registrationDate||'',
+       debt: Number(mData.debt||0),
+       debtReason: mData.debtReason||'',
+       application: !!mData.application,
+       applicationDate: mData.applicationDate||'',
+       applicationFile: mData.applicationFile||'',
+       applicationFileName: mData.applicationFileName||''
+     };
    });
-   console.log('🔒 Stabilní členovia pre', _key);
    return;
  }
- window.__lastMembersKey=_key;
+ 
+ // Ak nie je história, načítaj z membersData (prvýkrát)
+ console.log('📱 v1034: Prvé otvorenie, načítavam z membersData pre', key);
  const current=attendanceState.members||[];
  const byName=new Map(current.map(a=>[a.surname+'|'+a.name,a]));
  const wantedGroups=new Set(groupMemberRosterCodes(attendanceState.group));
@@ -8744,30 +8765,19 @@ function loadAttendanceFromMembers(){
    const gs=Array.isArray(m.groups)?m.groups:[m.group];
    return gs.some(g=>wantedGroups.has(String(g||'').trim().toUpperCase()));
  });
- // Test mode: keep the original 10 test members visible, but NEVER
- // discard a real member who was added to this group.
- 
  attendanceState.members=selected.map(m=>{
    const old=byName.get(m.surname+'|'+m.name);
    return {
-     surname:m.surname,name:m.name,training:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).training
-      || ((old && old.group===attendanceState.group)?!!old.training:false)),
-     trainingAccount:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).trainingAccount
-      || ((old && old.group===attendanceState.group)?!!old.trainingAccount:false)),
+     surname:m.surname,name:m.name,
+     training:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).training || ((old && old.group===attendanceState.group)?!!old.training:false)),
+     trainingAccount:(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).trainingAccount || ((old && old.group===attendanceState.group)?!!old.trainingAccount:false)),
      membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
      registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||'',
-     newMember:(Object.prototype.hasOwnProperty.call(
-        getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name),'newMember')
-        ? !!getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).newMember
-        : (!!m.newMemberDate && m.newMemberDate===attendanceState.date)),
+     newMember:(Object.prototype.hasOwnProperty.call(getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name),'newMember') ? !!getSavedTrainingAttendance(attendanceState.group,m.surname+'|'+m.name).newMember : (!!m.newMemberDate && m.newMemberDate===attendanceState.date)),
      newMemberDate:m.newMemberDate||'',
-     // Membership is member-level, not group-level: once paid, it remains paid
-     // when the member appears in any other assigned group.
-     membershipAmount:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='add'
-       ? Number(getMembershipDraft(m.id,attendanceState.date,attendanceState.group).amount||0)
-       : (getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action==='remove' ? 0 : Number(m.membershipAmount||0))),
-     membershipDate:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.date : (m.membershipDate||'')),
-     membershipPaidGroup:(getMembershipDraft(m.id,attendanceState.date,attendanceState.group)?.action ? attendanceState.group : (m.membershipPaidGroup||'')),
+     membershipAmount:Number(m.membershipAmount||0),
+     membershipDate:m.membershipDate||'',
+     membershipPaidGroup:m.membershipPaidGroup||'',
      membershipAccountAmount:Number(m.membershipAccountAmount||0),
      membershipAccountDate:m.membershipAccountDate||'',
      registration:!!m.registration,
@@ -8775,13 +8785,16 @@ function loadAttendanceFromMembers(){
      registrationAccountAmount:Number(m.registrationAccountAmount||0),
      registrationAccountDate:m.registrationAccountDate||'',
      debt:Number(m.debt||0),
-     debtReason:m.debtReason||'',application:!!m.application,
+     debtReason:m.debtReason||'',
+     application:!!m.application,
      applicationDate:m.applicationDate||'',
      applicationFile:m.applicationFile||'',
      applicationFileName:m.applicationFileName||''
    };
  });
 }
+
+
 
 /* v209 – current date is always the phone's local date */
 function refreshCurrentDateDefaults(){
@@ -8959,7 +8972,8 @@ function attendance(){
     isTrainingCancelled(attendanceState.date,attendanceState.group,'',attendanceState.name);
   if(attendanceCancelled){ renderCancelledAttendance(); return; }
   loadAttendanceFromMembers();
-  // FIX 3.9.: ak existuje vyúčtovanie pre tento dátum, použij ho ako pravdu
+  // v1034: Billing snapshot NIKDY neprepisuje dochádzku z kalendára
+  // if(false){ // FIX 3.9. disabled
   try{
     if(!attendanceState.billingRecordSnapshot){
       const iso=attendanceState.date;

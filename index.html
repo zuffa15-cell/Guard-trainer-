@@ -11458,6 +11458,7 @@ function saveTrainingBilling(saveButton){
   const record = {
     key:trainingKey,
     trainer:activeTrainer,
+    trainerId:currentTrainerAccountId(),
     date, group:attendanceState.group, name:attendanceState.name,
     paying, trainingPaid, trainingSum, membershipSum, registrationSum, otherPlus, otherMinus,
     trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,
@@ -11533,6 +11534,10 @@ function saveTrainingBilling(saveButton){
       ...record,
       key:originalKey,
       trainer:substitution.from,
+      trainerId:(()=>{
+        const ot=(trainersData||[]).find(t=>normSubName(t?.full||t?.name)===normSubName(substitution.from));
+        return ot?.id!=null?Number(ot.id):null;
+      })(),
       paying:0,
       trainingSum:0,
       membershipSum:0,
@@ -13302,7 +13307,24 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
   if(privileged) return rows;
 
   const me=String(getCurrentTrainerDisplayName()||'').trim();
+  const myId=currentTrainerAccountId();
   const norm=s=>String(s||'').trim().toUpperCase();
+  // Pevné vlastníctvo vyúčtovania: bežný tréner smie vidieť iba záznamy
+  // svojho trainer_id. Pri starších záznamoch bez ID sa ID dopočíta z mena
+  // cez aktuálny zoznam trénerov; samotné zobrazované meno už nie je zdrojom
+  // oprávnenia.
+  const recordOwnerId=r=>{
+    const rid=Number(r?.trainerId);
+    if(Number.isFinite(rid) && rid>0) return rid;
+    const rn=norm(r?.trainer);
+    const t=(trainersData||[]).find(x=>norm(x?.full||x?.name)===rn);
+    return t && t.id!=null ? Number(t.id) : null;
+  };
+  const ownsRecord=r=>{
+    if(myId==null) return false;
+    const oid=recordOwnerId(r);
+    return oid!=null && Number(oid)===Number(myId);
+  };
 
   const accepted=substitutionOffers.filter(o=>{
     if(!o.acceptedBy) return false;
@@ -13367,7 +13389,7 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
     }
 
     // Normal training unrelated to substitution.
-    if(norm(r.trainer)===norm(me)) result.push(r);
+    if(ownsRecord(r)) result.push(r);
   });
 
   // If the original trainer's informational row is missing, create exactly

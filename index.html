@@ -4312,10 +4312,24 @@ function getCurrentTrainerGroups(){
   }
 
   const groups=new Set();
-  (trainer?.groups||[]).forEach(g=>{ /* FIX: profil je autoritatívny */
+  (trainer?.groups||[]).forEach(g=>{
     const v=String(g).trim().toUpperCase();
     if(v) groups.add(v);
   });
+  // Ak lokálny profil ešte nemá aktuálne skupiny, použi snapshot uložený pri
+  // prihlásení trénera. Toto zachováva oprávnenia aj pri staršej lokálnej kópii.
+  try{
+    const snap=JSON.parse(localStorage.getItem('gt-current-trainer-snapshot')||'null');
+    if(Array.isArray(snap?.groups)) snap.groups.forEach(g=>{
+      const v=String(g||'').trim().toUpperCase();
+      if(v) groups.add(v);
+    });
+    const acc=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    if(Array.isArray(acc?.groups)) acc.groups.forEach(g=>{
+      const v=String(g||'').trim().toUpperCase();
+      if(v) groups.add(v);
+    });
+  }catch(e){}
 
   // Active schedule assignments are authoritative as a second source.
   schedules.forEach(x=>{
@@ -5696,7 +5710,6 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
  {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
  {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
 ];
@@ -5725,7 +5738,11 @@ try{
       status: t.active===false || String(t.status||'').toUpperCase()==='NEAKTÍVNA' ? 'NEAKTÍVNA' : 'AKTÍVNA'
     })).filter(t=>t.full||t.name);
     const legacyDemo=new Set(['Martin Lukáč','Tomáš Varga','Ivana Kováčová','Róbert Horváth','Martin L.','Tomáš V.','Ivana K.','Róbert H.']);
-    const cleaned=normalized.filter(t=>!legacyDemo.has(String(t.full||t.name||'').trim()));
+    const removedTrainers=new Set(['peter kováč','peter k.','peter kovac','peter k.','vzorový tréner','vzorovy trener']);
+    const cleaned=normalized.filter(t=>{
+      const n=String(t.full||t.name||'').trim().toLowerCase();
+      return !legacyDemo.has(String(t.full||t.name||'').trim()) && !removedTrainers.has(n) && !t.isTemplate;
+    });
     // Tréner 1/2 sa nepridávajú automaticky, aby neprepisovali zmeny
 
     trainersData.splice(0,trainersData.length,...cleaned);
@@ -5734,6 +5751,12 @@ try{
 }catch(e){ console.warn('Načítanie trénerov z pamäte sa nepodarilo',e); }
 function persistTrainersData(){
   try{
+    // Trvale odstráň staré demo účty Peter Kováč a VZOROVÝ TRÉNER.
+    const blocked=new Set(['peter kováč','peter k.','peter kovac','vzorový tréner','vzorovy trener']);
+    for(let i=trainersData.length-1;i>=0;i--){
+      const n=String(trainersData[i]?.full||trainersData[i]?.name||'').trim().toLowerCase();
+      if(trainersData[i]?.isTemplate || blocked.has(n)) trainersData.splice(i,1);
+    }
     const json=JSON.stringify(trainersData);
     console.log('💾 Ukladám trénerov:', trainersData.length, trainersData.map(t=>t.full+'['+(t.groups||[]).join(',')+']'));
     try{ localStorage.setItem(TRAINERS_STORAGE_KEY,json); }catch(e){}
@@ -5988,26 +6011,10 @@ function visibleTrainerProfiles(){
   // a login account and never included in trainer accounting.
   return (trainersData||[]).filter(t=>!isTestTrainerAccount(t));
 }
-function ensureTemplateTrainer(){
-  try{
-    if(!Array.isArray(trainersData)) return null;
-    let t=trainersData.find(x=>x.isTemplate===true || String(x.full||x.name||'').trim().toUpperCase()==='VZOROVÝ TRÉNER');
-    if(!t){
-      const id=Math.max(0,...trainersData.map(x=>Number(x.id)||0))+1;
-      t={id,full:'VZOROVÝ TRÉNER',name:'VZOROVÝ TRÉNER',email:'',phone:'',
-        role:'TRÉNER',license:'',valid:'',status:'VZOR',active:false,
-        groups:[],loginPassword:'',loginPasswordSet:false,isTemplate:true};
-      trainersData.push(t);
-      persistTrainersData();
-    }
-    return t;
-  }catch(e){return null;}
-}
+function ensureTemplateTrainer(){ return null; }
 function renderTrainers(){
- ensureTemplateTrainer();
  // Profile assignments are authoritative. Do not overwrite them from the
  // schedule when the trainer list is opened.
- ensureTemplateTrainer();
  const app=document.querySelector('.app');
  const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
@@ -8417,37 +8424,47 @@ function isAttendanceTodayForTrainer(){
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
   if(isHeadTrainer()) return true;
-  // FIX: Tréner môže spätne opraviť svoju vlastnú dochádzku
-  // Ak je to jeho skupina, môže upravovať aj staršie dni
+  // Každý bežný tréner môže spätne meniť dochádzku vo svojej pridelenej skupine.
+  // Použi profil trénera, účet AJ jeho uložený snapshot. Snapshot je dôležitý
+  // najmä pre Anatoliiho a ďalších trénerov, ktorých lokálna kópia profilu môže
+  // byť staršia než účet prihlásený zo servera.
   try{
     const myId=currentTrainerAccountId();
+    const account=(()=>{try{return JSON.parse(localStorage.getItem('gt-simple-login-account')||'null')}catch(e){return null}})();
+    const snapshot=(()=>{try{return JSON.parse(localStorage.getItem('gt-current-trainer-snapshot')||'null')}catch(e){return null}})();
+    const currentGroup=String(attendanceState.group||'').trim().toUpperCase();
+    const myGroups=new Set();
+    [snapshot?.groups, account?.groups].forEach(arr=>{
+      if(Array.isArray(arr)) arr.forEach(g=>{const v=String(g||'').trim().toUpperCase(); if(v) myGroups.add(v);});
+    });
     if(myId!=null){
       const trainer=(trainersData||[]).find(t=>Number(t.id)===myId && !t.isTemplate);
-      if(trainer){
-        const myGroups=new Set((trainer.groups||[]).map(g=>String(g).trim().toUpperCase()).filter(Boolean));
-        const currentGroup=String(attendanceState.group||'').trim().toUpperCase();
-        if(myGroups.has(currentGroup)){
-          console.log('✅ Tréner môže spätne opraviť svoju skupinu', currentGroup);
-          return false; // Nie je zamknuté - môže upravovať svoju skupinu aj spätne
-        }
-      }
-      // Aj cez schedule check
-      try{
-        const schedules=getSavedSchedules();
-        const wantedDate=attendanceState.date||'';
-        const wantedGroup=String(attendanceState.group||'').trim().toUpperCase();
-        const isOwn=schedules.some(s=>{
-          const code=String(s.groupCode||'').trim().toUpperCase();
-          if(code!==wantedGroup) return false;
-          const ids=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
-          if(s.trainerId!=null) ids.push(Number(s.trainerId));
-          return ids.includes(Number(myId));
-        });
-        if(isOwn) return false;
-      }catch(e){}
+      if(trainer && Array.isArray(trainer.groups)) trainer.groups.forEach(g=>{const v=String(g||'').trim().toUpperCase(); if(v) myGroups.add(v);});
     }
+    if(myGroups.has(currentGroup)){
+      console.log('✅ Tréner môže spätne opraviť svoju skupinu', currentGroup, [...myGroups]);
+      return false;
+    }
+    // Fallback cez aktuálny rozvrh – podľa ID alebo mena trénera.
+    try{
+      const schedules=getSavedSchedules();
+      const wantedGroup=currentGroup;
+      const wantedName=String(snapshot?.display_name||account?.display_name||getCurrentTrainerDisplayName()||'').trim().toLowerCase();
+      const isOwn=schedules.some(s=>{
+        const code=String(s.groupCode||'').trim().toUpperCase();
+        if(code!==wantedGroup) return false;
+        const ids=Array.isArray(s.trainerIds)?s.trainerIds.map(Number):[];
+        if(s.trainerId!=null) ids.push(Number(s.trainerId));
+        if(myId!=null && ids.includes(Number(myId))) return true;
+        const names=[];
+        if(Array.isArray(s.trainers)) names.push(...s.trainers);
+        if(s.trainer) names.push(s.trainer);
+        return !!wantedName && names.some(n=>String(n||'').trim().toLowerCase()===wantedName);
+      });
+      if(isOwn) return false;
+    }catch(e){}
   }catch(e){ console.warn('isAttendanceFullyLocked check fail', e); }
-  // Ak nie je jeho skupina, zamkni pre staršie dni
+  // Ak nie je jeho skupina, zamkni pre staršie dni.
   return !isAttendanceTodayForTrainer();
 }
 function attendanceEditGuard(){

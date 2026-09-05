@@ -3851,7 +3851,13 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        }
      }catch(e){}
    }
-   return trainers.find(x=>x && x.active!==false && String(x.loginPassword||'')===pass) || null;
+   const matches=trainers.filter(x=>x && x.active!==false && String(x.loginPassword||'')===pass);
+   if(!matches.length) return null;
+   // Ak majú dva účty rovnaké heslo, hlavný tréner musí mať prednosť.
+   // Inak by sa mohol omylom otvoriť pohľad bežného trénera (napr. Anatoliiho).
+   const normRole=v=>String(v?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+   const head=matches.find(x=>normRole(x)==='HLAVNY TRENER');
+   return head || matches[0] || null;
  }
  function openTrainer(t){
    // Anatolii Kuhal is explicitly an ordinary trainer, never the main trainer.
@@ -3903,7 +3909,9 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
          try{
            if(data['gt-trainer-login-passwords']){
              const pw=JSON.parse(data['gt-trainer-login-passwords']);
-             const found=Object.values(pw||{}).find(x=>x && x.active!==false && !x.isTemplate && String(x.password||'').trim()===pass);
+             const pwMatches=Object.values(pw||{}).filter(x=>x && x.active!==false && !x.isTemplate && String(x.password||'').trim()===pass);
+             const normRole=v=>String(v?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+             const found=pwMatches.find(x=>normRole(x)==='HLAVNY TRENER') || pwMatches[0] || null;
              if(found){
                const live=(trainersData||[]).find(t=>Number(t.id)===Number(found.id));
                finish({
@@ -3930,7 +3938,9 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
          if(!arr.length && data.trainersData){
            try{const x=JSON.parse(data.trainersData||'[]');if(Array.isArray(x))arr=x;}catch(e){}
          }
-         const found=arr.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
+         const matches=arr.filter(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
+         const normRole=v=>String(v?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+         const found=matches.find(x=>normRole(x)==='HLAVNY TRENER') || matches[0] || null;
          if(found) finish(found);
        }).catch(()=>{});
      }
@@ -13588,12 +13598,25 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     const role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
     const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
-     if(finalRole==='trainer' && account && account.trainer_id!=null){
+     if(account && account.trainer_id!=null){
        try{
-         const rt=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
+         let rt=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
+         if(finalRole==='head'){
+           const normRole=v=>String(v?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+           // Pre účtu hlavného trénera vždy uprednostni profil s rolou HLAVNÝ TRÉNER.
+           // Nikdy nepouži Anatoliiho profil ako náhradu.
+           if(!rt || normRole(rt)!=='HLAVNY TRENER' || /^(ANATOLII KUHAL|KUHAL ANATOLII)$/i.test(String(rt.full||rt.name||'').trim())){
+             rt=(trainersData||[]).find(t=>normRole(t)==='HLAVNY TRENER' && !/^(ANATOLII KUHAL|KUHAL ANATOLII)$/i.test(String(t.full||t.name||'').trim())) || null;
+           }
+         }
          if(rt){
            CURRENT_TRAINER_NAME=String(rt.full||rt.name||account.display_name||'').trim();
            MY_TRAINER_GROUPS=Array.isArray(rt.groups)?[...rt.groups]:[];
+           if(finalRole==='head'){
+             account={...account,trainer_id:rt.id,display_name:CURRENT_TRAINER_NAME,groups:[...(rt.groups||[])]};
+             localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
+             localStorage.setItem('gt-current-trainer-id',String(rt.id));
+           }
          }
        }catch(e){}
      }

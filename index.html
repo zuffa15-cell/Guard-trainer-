@@ -7423,9 +7423,9 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
-  // Štatistika člena sa musí opierať o skutočne uloženú dochádzku.
-  // Vyúčtovanie používame iba ako spätnú kompatibilnú zálohu pre staré
-  // záznamy, ktoré ešte nemajú trainingAttendanceByGroup.
+  // Štatistika člena musí vychádzať VÝHRADNE zo skutočne uloženej dochádzky.
+  // Vyúčtovanie nie je zdrojom dochádzky: starý billing záznam nesmie vytvoriť
+  // tréning, na ktorom člen podľa dochádzky nebol (napr. 2.9. C).
   const key=`${member.surname}|${member.name}`;
   const rows=[];
   const seen=new Set();
@@ -7451,7 +7451,8 @@ function getSavedMemberTrainingData(member){
     });
   };
 
-  // 1. Primárny zdroj: uložená dochádzka podľa dátumu + skupiny.
+  // Jediný zdroj pravdy: uložená dochádzka podľa dátumu + skupiny.
+  // Počíta sa iba skutočný stav training/newMember z dochádzky.
   try{
     if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
       Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
@@ -7467,35 +7468,6 @@ function getSavedMemberTrainingData(member){
     }
   }catch(e){ console.warn('member training history read failed',e); }
 
-  // 2. Záloha: staršie vyúčtovania bez dochádzkového záznamu.
-  getBillingRecords().forEach(r=>{
-    if(!Array.isArray(r.attendanceSnapshot) || !r.attendanceSnapshot.includes(key))return;
-    const d=parsePaymentDate(r.date);
-    if(!d)return;
-    const group=String(r.group||r.groupCode||'').trim();
-    const groupKey=normGroup(group)||group;
-    const unique=`${d.year}-${d.month}-${d.day}|${groupKey}`;
-    if(seen.has(unique))return;
-    // Ak pre tento dátum/skupinu existuje uložená dochádzka, ale člen v nej
-    // nemá účasť, nesmie ho staré vyúčtovanie znovu pripočítať.
-    let histExists=false;
-    try{
-      const histKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}|${group}`;
-      const hist=(typeof trainingAttendanceByGroup!=='undefined'&&trainingAttendanceByGroup[histKey])||null;
-      histExists=!!(hist && typeof hist==='object' && Object.prototype.hasOwnProperty.call(hist,key));
-      if(!histExists && typeof trainingAttendanceByGroup!=='undefined'){
-        histExists=Object.keys(trainingAttendanceByGroup).some(k=>{
-          const pp=String(k).split('|');
-          if(pp[0]!==`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`)return false;
-          if(normGroup(pp.slice(1).join('|'))!==groupKey)return false;
-          const h=trainingAttendanceByGroup[k];
-          return !!(h && typeof h==='object' && Object.prototype.hasOwnProperty.call(h,key));
-        });
-      }
-    }catch(e){}
-    if(histExists)return;
-    addRow(r.date,group,r.name||'');
-  });
   rows.sort((a,b)=>b.dateObj-a.dateObj);
   return rows;
 }

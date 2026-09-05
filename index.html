@@ -13880,7 +13880,13 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   // s konkrétnym vyúčtovaním. Neberieme údaje z aktuálnej dochádzky,
   // kalendára ani zo starých lokálnych snapshotov. Tým pádom sa štatistika
   // vždy zhoduje s tým, čo bolo pri vyúčtovaní skutočne uložené.
-  const entries=[];
+  // Jeden kalendárny tréning = jeden záznam podľa DÁTUM + SKUPINA.
+  // Staršie verzie mohli mať ten istý tréning uložený viackrát (napr. po
+  // synchronizácii medzi trénerom a adminom). Štatistika preto nesmie tieto
+  // kópie sčítať. Vyberieme iba najnovšie uložené vyúčtovanie pre daný
+  // dátum/skupinu. Toto je zároveň presne to, čo sa zobrazuje ako jeden
+  // tréning vo vyúčtovaní klubu.
+  const entryMap=new Map();
   try{
     (getBillingRecords()||[]).forEach(r=>{
       const d=parsePaymentDate(r.date);
@@ -13909,18 +13915,24 @@ function renderStatistics(month=appToday().month,year=appToday().year){
       if(people.length===0 && newCount===0) return;
 
       const iso=`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-      entries.push({
+      const group=quickGroupCode(r.group||'');
+      if(!group) return;
+      const entry={
         date:iso,
         group:r.group||'',
         people,
         paymentSnapshot:Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[],
         newCount,
         attendanceHistory,
-        billingKey:r.key||''
-      });
+        billingKey:r.key||'',
+        savedAt:Number(r.savedAt||r.updatedAt||0)
+      };
+      const uniqueKey=`${iso}|${group}`;
+      const prev=entryMap.get(uniqueKey);
+      if(!prev || entry.savedAt>=prev.savedAt) entryMap.set(uniqueKey,entry);
     });
   }catch(e){ console.warn('Štatistiky – načítanie uložených vyúčtovaní zlyhalo',e); }
-  entries.sort((a,b)=>a.date.localeCompare(b.date));
+  const entries=Array.from(entryMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||quickGroupCode(a.group).localeCompare(quickGroupCode(b.group)));
 
   const memberCounts={};
   // ÚČASŤ PODĽA SKUPÍN = PRÍTOMNÍ + NOVÍ.

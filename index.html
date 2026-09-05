@@ -10797,6 +10797,27 @@ window.forceDelete5_9_Now=function(){
   toast('5.9. vymazaný');
   setTimeout(()=>openMyBilling(), 600);
 };
+/* vAUTO-BILLING-REFRESH: spoľahlivé obnovenie vyúčtovania aj keď Android WebView
+   nespustí Firestore onSnapshot. Kontrola sa spúšťa až po prihlásení a rolu
+   zisťuje pri každom behu, takže nezáleží na tom, kedy bol sync inicializovaný. */
+(function(){
+  if(window.__gtBillingHeartbeat) return;
+  window.__gtBillingHeartbeat=setInterval(function(){
+    try{
+      const account=(()=>{try{return JSON.parse(localStorage.getItem('gt-simple-login-account')||'null')}catch(e){return null}})();
+      const role=String((account&&account.role)||localStorage.getItem('gt-user-role')||'').toLowerCase();
+      const admin=role==='admin' || (typeof isAdmin==='function' && isAdmin());
+      const head=role==='head' || role==='main_trainer' || (typeof isHeadTrainer==='function' && isHeadTrainer());
+      if(!admin && !head) return;
+      const app=document.querySelector('.app');
+      if(!app) return;
+      const open=location.hash==='#billing' || location.hash==='#trainer-month' || !!document.querySelector('.head-billing');
+      if(!open) return;
+      if(typeof window.fetchBillingNow==='function') window.fetchBillingNow();
+    }catch(e){console.warn('Billing auto-refresh:',e)}
+  },1000);
+})();
+
 window.manualBillingSync=function(){
   if(typeof db==='undefined' || !db){ alert('DB nie je pripojené'); return; }
   db.collection('guard-trainer-billing').doc('all').get().then(doc=>{

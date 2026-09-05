@@ -8645,9 +8645,13 @@ function saveCurrentTrainingAttendance(){
           savedByRole:(typeof isAdmin==='function'&&isAdmin())?'ADMIN':((typeof isHeadTrainer==='function'&&isHeadTrainer())?'HEAD_TRAINER':'TRAINER')
         };
         monthlyBillingRecords[bi]=updated;
-        // Toto je zámerne okamžité – persist pošle nový stav do
-        // guard-trainer-billing/all a realtime listener ho rozošle ostatným.
+        // Toto je zámerne okamžité. Okrem lokálneho uloženia pošleme
+        // práve zmenený tréning priamo do autoritatívneho billing dokumentu.
+        // Transakcia nahradí iba tento jeden záznam, takže stará kópia admina
+        // ho už nemôže prepísať späť. Firestore onSnapshot ho okamžite rozošle
+        // adminovi aj hlavnému trénerovi.
         persistMonthlyBillingRecords();
+        try{ pushSingleBillingRecordToCloud(updated); }catch(e){ console.warn('Priamy update billing po dochádzke zlyhal',e); }
       }
     }
   }catch(e){ console.warn('Live update vyúčtovania z dochádzky zlyhal',e); }
@@ -10455,6 +10459,48 @@ function deleteMyBillingRecord(recordKey, btn){
   return false;
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;
+
+function pushSingleBillingRecordToCloud(record){
+  try{
+    if(typeof db==='undefined' || !db || !record) return Promise.resolve(false);
+    const canonical=billingRecordCanonicalKey(record);
+    if(!canonical) return Promise.resolve(false);
+    const docRef=db.collection('guard-trainer-billing').doc('all');
+    const run=typeof db.runTransaction==='function' ? db.runTransaction.bind(db) : null;
+    if(run){
+      return run(async transaction=>{
+        const snap=await transaction.get(docRef);
+        const data=snap.exists?(snap.data()||{}):{};
+        let rows=Array.isArray(data.records)?data.records.slice():[];
+        let del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+        // Ak bol tento záznam vymazaný, nové automatické prepočítanie ho nesmie obnoviť.
+        if(Number(del[canonical]||0)>=Number(record.savedAt||record.updatedAt||0)) return false;
+        // Nahradíme iba konkrétny tréning. Ostatné záznamy zostávajú nedotknuté.
+        const out=[];
+        let replaced=false;
+        rows.forEach(r=>{
+          if(billingRecordCanonicalKey(r)===canonical){
+            if(!replaced){ out.push(record); replaced=true; }
+          }else out.push(r);
+        });
+        if(!replaced) out.push(record);
+        transaction.set(docRef,{records:out,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
+        return true;
+      }).then(ok=>{ if(ok) console.log('⚡ Billing tréningu odoslaný okamžite:',canonical); return ok; });
+    }
+    // Fallback pre staršiu Firebase implementáciu bez transakcie.
+    return docRef.get().then(snap=>{
+      const data=snap.exists?(snap.data()||{}):{};
+      let rows=Array.isArray(data.records)?data.records.slice():[];
+      let del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+      if(Number(del[canonical]||0)>=Number(record.savedAt||record.updatedAt||0)) return false;
+      rows=rows.filter(r=>billingRecordCanonicalKey(r)!==canonical);
+      rows.push(record);
+      return docRef.set({records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false}).then(()=>true);
+    });
+  }catch(e){ console.warn('Priamy billing sync zlyhal',e); return Promise.resolve(false); }
+}
+window.pushSingleBillingRecordToCloud=pushSingleBillingRecordToCloud;
 
 function persistMonthlyBillingRecords(){
   try{

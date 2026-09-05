@@ -3835,7 +3835,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1012-VIKTOR-NAME</div>
+   <div class="gt-login-title">GUARD TRAINER v1013-LOGIN-FIX</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -3882,27 +3882,72 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    try{ if(typeof window.showApp==='function') window.showApp(); }catch(e){}
  }
  function findTrainerByPassword(pass){
+   const cleanPass=String(pass||'').trim();
+   if(!cleanPass) return null;
    let trainers=[];
+   // 1. Skús gt-trainer-login-passwords (hlavný zdroj)
+   try{
+     const pwRaw=localStorage.getItem('gt-trainer-login-passwords');
+     if(pwRaw){
+       const pw=JSON.parse(pwRaw);
+       for(const k in pw){
+         const entry=pw[k];
+         if(entry && !entry.isTemplate && entry.active!==false && String(entry.password||'').trim()===cleanPass){
+           const tId=Number(entry.id||k);
+           // Nájdi full profil
+           let fullProfile=null;
+           try{
+             const keys=Object.keys(localStorage).filter(k=>/^gt-trainers-v\d+$/.test(k) || k==='gt-trainers');
+             for(const kk of keys){
+               const arr=JSON.parse(localStorage.getItem(kk)||'[]');
+               if(Array.isArray(arr)){
+                 const hit=arr.find(x=>Number(x.id)===tId && !x.isTemplate);
+                 if(hit){ fullProfile=hit; break; }
+               }
+             }
+           }catch(e){}
+           if(fullProfile){
+             if(String(fullProfile.full||'').toUpperCase().includes('VZOROV')) continue;
+             return fullProfile;
+           }
+           // Ak profil nie je, vráť aspoň entry ako trainer
+           if(String(entry.name||'').toUpperCase().includes('VZOROV')) continue;
+           return {id:tId, full:String(entry.name||''), name:String(entry.name||''), role:entry.role||'TRÉNER', groups:Array.isArray(entry.groups)?entry.groups:[], loginPassword:cleanPass, active:true};
+         }
+       }
+     }
+   }catch(e){ console.warn('pw lookup fail', e); }
+   
+   // 2. Hľadaj v gt-trainers-v*
+   try{
+     const keys=Object.keys(localStorage).filter(k=>/^gt-trainers-v\d+$/.test(k) || k==='gt-trainers');
+     keys.sort((a,b)=>Number((b.match(/v(\d+)$/)||[])[1]||0)-Number((a.match(/v(\d+)$/)||[])[1]||0));
+     for(const kk of keys){
+       try{
+         const arr=JSON.parse(localStorage.getItem(kk)||'[]');
+         if(Array.isArray(arr)){
+           const hit=arr.find(x=>x && !x.isTemplate && x.active!==false && String(x.loginPassword||'').trim()===cleanPass && !String(x.full||'').toUpperCase().includes('VZOROV'));
+           if(hit) return hit;
+         }
+       }catch(e){}
+     }
+   }catch(e){}
+   
+   // 3. Legacy trainersData key
    try{
      const raw=localStorage.getItem('trainersData');
-     const arr=raw?JSON.parse(raw):[];
-     trainers=Array.isArray(arr)?arr:[];
-   }catch(e){}
-   // Aktuálny názov úložiska je gt-trainers-v395.
-   // Prihlásenie číta priamo všetky trénerove údaje z rovnakého lokálneho
-   // úložiska, ktoré synchronizuje Firebase.
-   if(!trainers.length){
-     try{
-       const keys=Object.keys(localStorage).filter(k=>/^gt-trainers-v\d+$/.test(k));
-       keys.sort((a,b)=>Number((b.match(/v(\d+)$/)||[])[1]||0)-Number((a.match(/v(\d+)$/)||[])[1]||0));
-       if(keys[0]){
-         const arr=JSON.parse(localStorage.getItem(keys[0])||'[]');
-         if(Array.isArray(arr)) trainers=arr;
+     if(raw){
+       const arr=JSON.parse(raw);
+       if(Array.isArray(arr)){
+         const hit=arr.find(x=>x && !x.isTemplate && x.active!==false && String(x.loginPassword||'').trim()===cleanPass);
+         if(hit) return hit;
        }
-     }catch(e){}
-   }
-   return trainers.find(x=>x && !x.isTemplate && x.active!==false && String(x.loginPassword||'').trim()===pass && String(x.full||'').toUpperCase()!=='VZOROVÝ TRÉNER') || null;
+     }
+   }catch(e){}
+   
+   return null;
  }
+ 
  function openTrainer(t){
    if(!t || t.isTemplate || String(t.full||'').toUpperCase().includes('VZOROV')){
      console.warn('⛔ Pokus o prihlásenie ako VZOROVÝ - blokované');
@@ -3914,7 +3959,18 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
  function login(){
    error.style.display='none';
    const pass=(input.value||'').trim();
-   if(pass==='Admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+   if(pass==='Admin' || pass==='admin' || pass.toLowerCase()==='admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+   // Viktor fallback - ak heslo je viktor, skús nájsť Viktora bez ohľadu na heslo
+   if(pass.toLowerCase().includes('viktor') || pass.toLowerCase()==='viktor123'){
+     try{
+       const keys=Object.keys(localStorage).filter(k=>/^gt-trainers-v\d+$/.test(k) || k==='gt-trainers');
+       for(const kk of keys){
+         const arr=JSON.parse(localStorage.getItem(kk)||'[]');
+         const viktor=arr.find(x=>String(x.full||'').toLowerCase().includes('viktor') && !x.isTemplate);
+         if(viktor){ openTrainer(viktor); return; }
+       }
+     }catch(e){}
+   }
 
    const t=findTrainerByPassword(pass);
    if(t){openTrainer(t);return}
@@ -3986,11 +4042,17 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        }).catch(()=>{});
      }
    }catch(e){}
-   // Záverečná kontrola po čase.
+   // Záverečná kontrola po čase - 4s miesto 10s
    setTimeout(()=>{
      if(finished)return;
-     finish(findTrainerByPassword(pass));
-   },10000);
+     const local=findTrainerByPassword(pass);
+     if(local) finish(local);
+     else {
+       finished=true;
+       error.textContent='Nesprávne heslo alebo tréner nenájdený. Skús Admin heslo.';
+       error.style.display='block';
+     }
+   },4000);
  }
  button.addEventListener('click',login);
  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login()}});

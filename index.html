@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-billing-delete-order-v1','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -215,6 +215,18 @@ function initCloudSync(){
           });
           const mergedRaw=JSON.stringify(merged);
           if(mergedRaw!==localRaw){ originalSetItem(k,mergedRaw); changed=true; }
+          return;
+        }
+        if(k===BILLING_DELETE_ORDER_KEY){
+          let localObj={},remoteObj={};
+          try{const x=originalGetItem(k);const p=x?JSON.parse(x):{};if(p&&typeof p==='object')localObj=p;}catch(e){}
+          try{const x=data[k]?JSON.parse(data[k]):{};if(x&&typeof x==='object')remoteObj=x;}catch(e){}
+          const merged={...localObj};
+          Object.keys(remoteObj).forEach(key=>merged[key]=Math.max(Number(merged[key]||0),Number(remoteObj[key]||0)));
+          const raw=JSON.stringify(merged);
+          if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
+          Object.keys(billingDeleteOrder).forEach(key=>delete billingDeleteOrder[key]);
+          Object.assign(billingDeleteOrder,merged);
           return;
         }
         if(k==='gt-monthly-billing-v221'){
@@ -10279,6 +10291,43 @@ normalizeMonthlyBillingRecords();
     if(monthlyBillingRecords.length!==before) persistMonthlyBillingRecords();
   }catch(e){ console.warn('Migrácia Viktor/A vyúčtovania sa nepodarila',e); }
 })();
+const BILLING_DELETE_ORDER_KEY='gt-billing-delete-order-v1';
+const billingDeleteOrder=Object.create(null);
+try{
+  const x=JSON.parse(originalGetItem(BILLING_DELETE_ORDER_KEY)||'{}');
+  if(x&&typeof x==='object') Object.assign(billingDeleteOrder,x);
+}catch(e){}
+function billingRecordCanonicalKey(r){
+  const d=parsePaymentDate(r&&r.date);
+  const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
+  return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
+}
+function persistBillingDeleteOrder(){
+  try{
+    const raw=JSON.stringify(billingDeleteOrder);
+    originalSetItem(BILLING_DELETE_ORDER_KEY,raw);
+    localStorage.setItem(BILLING_DELETE_ORDER_KEY,raw);
+  }catch(e){}
+}
+function deleteMyBillingRecord(recordKey){
+  if(isAdmin()) return false;
+  const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
+  const idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
+  if(idx<0) return false;
+  const r=monthlyBillingRecords[idx];
+  if(String(r.trainer||'').trim().toUpperCase()!==me){ toast('Môžeš vymazať iba svoje vyúčtovanie.'); return false; }
+  if(!confirm('Naozaj vymazať toto vyúčtovanie? Dochádzka zostane zachovaná.')) return false;
+  const canonical=billingRecordCanonicalKey(r);
+  billingDeleteOrder[canonical]=Date.now();
+  persistBillingDeleteOrder();
+  monthlyBillingRecords=monthlyBillingRecords.filter(x=>billingRecordCanonicalKey(x)!==canonical);
+  persistMonthlyBillingRecords();
+  toast('Vyúčtovanie bolo vymazané');
+  setTimeout(()=>renderMonthlyBilling(),50);
+  return false;
+}
+window.deleteMyBillingRecord=deleteMyBillingRecord;
+
 function persistMonthlyBillingRecords(){
   try{
     normalizeMonthlyBillingRecords();
@@ -11227,7 +11276,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
     </div>
     <div class="monthly-table-wrap">
       <table class="monthly-table">
-       <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>${isAdmin()?'<th>ZMAZAŤ</th>':''}</tr></thead>
+       <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th><th></th>${isAdmin()?'<th>ZMAZAŤ</th>':''}</tr></thead>
        <tbody>
        ${rows.map(r=>`<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(getAdminGroupName(r.group)||r.group||''))})' title="Otvoriť dochádzku tohto dňa"><td>${r.date}</td><td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>${r.substituteLabel?`<small class="sub-label">⇄ ZASTUPOVANÝ TRÉNING<br><b>${r.substituteLabel}</b></small>`:''}</td><td>${r.trainingSum} €<small>${r.paying} platieb</small></td><td>${r.membershipSum} €</td><td>${r.registrationSum} €</td><td class="plus">${r.otherPlus} €</td><td class="minus">−${r.otherMinus} €</td><td>${r.gross} €</td><td class="minus">−${r.trainerReward} €</td><td class="club-amount">${r.clubAmount} €</td>${isAdmin()?`<td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.stopPropagation(); return window.deleteBillingTrainingAsAdmin(${JSON.stringify(String(r.key||''))},${JSON.stringify(String(trainerName||''))},${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${Number(month)},${Number(year)});'>🗑 ZMAZAŤ</button></td>`:''}</tr>`).join('')}
        ${!rows.length?`<tr><td colspan="${isAdmin()?11:10}" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
@@ -13077,8 +13126,9 @@ function renderMonthlyBilling(year=null,targetMonth=null){
               <td>${(r.substituteReference||r.cancelled) ? '' : `${r.gross} €`}</td>
               <td class="minus">${(r.substituteReference||r.cancelled) ? '' : `−${r.trainerReward} €`}</td>
               <td class="club-amount">${(r.substituteReference||r.cancelled) ? '' : `${r.clubReference?'0':r.clubAmount} € ›`}</td>
+              <td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.preventDefault();event.stopPropagation();return deleteMyBillingRecord(${JSON.stringify(String(r.key||''))})'>🗑</button></td>
             </tr>`).join('')}
-            ${!rows.length?`<tr><td colspan="10" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
+            ${!rows.length?`<tr><td colspan="11" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
           </tbody>
           <tfoot><tr>
             <th>SPOLU<br><small>${month}</small></th>

@@ -10599,6 +10599,7 @@ function initBillingDirectSync(){
         loadBillingDeleteOrderFromCloud(data);
         if(!data.records || !Array.isArray(data.records)) return;
         mergeBillingRecords(data.records, 'fetch');
+        if(typeof refreshBillingScreenNow==='function') refreshBillingScreenNow();
       }).catch(e=>console.warn('billing fetch fail', e));
     };
     
@@ -10679,13 +10680,39 @@ function initBillingDirectSync(){
       }
     }catch(e){}
     
-    // Live sync
+    // Live sync – po prijatí nových údajov okamžite prekresli otvorené
+    // vyúčtovanie. Predtým sa dáta síce načítali do localStorage, ale obrazovka
+    // zostala na starej hodnote až do veľkého refreshu.
+    let billingRealtimeRenderTimer=null;
+    const refreshBillingScreenNow=()=>{
+      try{
+        const hash=String(location.hash||'').toLowerCase();
+        if(hash!=='#billing' && hash!=='#trainer-month') return;
+        if(billingRealtimeRenderTimer) clearTimeout(billingRealtimeRenderTimer);
+        billingRealtimeRenderTimer=setTimeout(()=>{
+          billingRealtimeRenderTimer=null;
+          try{
+            if(typeof isAdmin==='function' && isAdmin()){
+              if(typeof renderHeadTrainerBilling==='function') renderHeadTrainerBilling();
+            }else if(typeof isHeadTrainer==='function' && isHeadTrainer()){
+              if(typeof renderHeadTrainerBilling==='function') renderHeadTrainerBilling();
+            }else{
+              if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
+            }
+          }catch(e){ console.warn('⚡ Realtime prekreslenie vyúčtovania zlyhalo',e); }
+        },30);
+      }catch(e){}
+    };
+    window.refreshBillingScreenNow=refreshBillingScreenNow;
+
     db.collection('guard-trainer-billing').doc('all').onSnapshot(doc=>{
       if(!doc.exists) return;
       const data=doc.data()||{};
       loadBillingDeleteOrderFromCloud(data);
       if(!data.records || !Array.isArray(data.records)) return;
       mergeBillingRecords(data.records, 'snapshot');
+      // Dôležité: render až po zlúčení do monthlyBillingRecords.
+      refreshBillingScreenNow();
     });
     
     // Aj hlavný cloud doc (gt-monthly-billing-v221 v guard-trainer-app)

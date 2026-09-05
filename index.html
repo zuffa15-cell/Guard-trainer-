@@ -10337,10 +10337,20 @@ function syncDeletedBillingRecordToCloud(canonical, deletedAt){
   const writeMain=(records)=>{
     const json=JSON.stringify(records);
     const writes=[];
-    try{ writes.push(db.collection('guard-trainer-billing').doc('all').set({records:records, updatedAt:Date.now()}, {merge:false})); }catch(e){}
+    const deletedPatch={}; deletedPatch[canonical]=Number(deletedAt)||Date.now();
+    try{
+      writes.push(db.collection('guard-trainer-billing').doc('all').set({
+        records:records,
+        billingDeleteOrder: deletedPatch,
+        updatedAt:Date.now()
+      }, {merge:true}));
+    }catch(e){}
     try{
       if(typeof CLOUD_COLLECTION!=='undefined'){
-        const patch={}; patch['gt-monthly-billing-v221']=json; patch['gt-billing']=json;
+        const patch={};
+        patch['gt-monthly-billing-v221']=json;
+        patch['gt-billing']=json;
+        patch['gt-billing-delete-order-v1']=JSON.stringify(billingDeleteOrder);
         writes.push(db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(patch,{merge:true}));
       }
     }catch(e){}
@@ -10348,10 +10358,23 @@ function syncDeletedBillingRecordToCloud(canonical, deletedAt){
   };
   db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
     let records=[];
-    try{ records=doc.exists && Array.isArray(doc.data()?.records) ? doc.data().records : []; }catch(e){}
-    records=records.filter(r=>billingRecordCanonicalKey(r)!==canonical);
+    let serverDeletes={};
+    try{
+      const data=doc.exists ? (doc.data()||{}) : {};
+      records=Array.isArray(data.records) ? data.records : [];
+      if(data.billingDeleteOrder && typeof data.billingDeleteOrder==='object') serverDeletes=data.billingDeleteOrder;
+    }catch(e){}
+    Object.keys(serverDeletes).forEach(k=>{
+      billingDeleteOrder[k]=Math.max(Number(billingDeleteOrder[k]||0),Number(serverDeletes[k]||0));
+    });
+    billingDeleteOrder[canonical]=Math.max(Number(billingDeleteOrder[canonical]||0),Number(deletedAt)||Date.now());
+    persistBillingDeleteOrder();
+    records=records.filter(r=>{
+      const k=billingRecordCanonicalKey(r);
+      return Number(billingDeleteOrder[k]||0) < Number(r.savedAt||r.updatedAt||0);
+    });
     return writeMain(records);
-  }).catch(()=>writeMain(monthlyBillingRecords));
+  }).catch(()=>writeMain(monthlyBillingRecords.filter(r=>billingRecordCanonicalKey(r)!==canonical)));
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;
 
@@ -10434,11 +10457,30 @@ function initBillingDirectSync(){
       db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
         if(!doc.exists) return;
         const data=doc.data()||{};
+        loadBillingDeleteOrderFromCloud(data);
         if(!data.records || !Array.isArray(data.records)) return;
         mergeBillingRecords(data.records, 'fetch');
       }).catch(e=>console.warn('billing fetch fail', e));
     };
     
+    function loadBillingDeleteOrderFromCloud(data){
+      try{
+        const x=data&&data.billingDeleteOrder;
+        if(x&&typeof x==='object'){
+          Object.keys(x).forEach(k=>{ billingDeleteOrder[k]=Math.max(Number(billingDeleteOrder[k]||0),Number(x[k]||0)); });
+          persistBillingDeleteOrder();
+        }
+      }catch(e){}
+      try{
+        const raw=data&&data['gt-billing-delete-order-v1'];
+        const x=typeof raw==='string'?JSON.parse(raw):raw;
+        if(x&&typeof x==='object'){
+          Object.keys(x).forEach(k=>{ billingDeleteOrder[k]=Math.max(Number(billingDeleteOrder[k]||0),Number(x[k]||0)); });
+          persistBillingDeleteOrder();
+        }
+      }catch(e){}
+    }
+
     const mergeBillingRecords = (remote, source)=>{
       try{
         const localRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
@@ -10511,6 +10553,7 @@ function initBillingDirectSync(){
     db.collection('guard-trainer-billing').doc('all').onSnapshot(doc=>{
       if(!doc.exists) return;
       const data=doc.data()||{};
+      loadBillingDeleteOrderFromCloud(data);
       if(!data.records || !Array.isArray(data.records)) return;
       mergeBillingRecords(data.records, 'snapshot');
     });
@@ -10521,6 +10564,7 @@ function initBillingDirectSync(){
         db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).onSnapshot(doc=>{
           if(!doc.exists) return;
           const data=doc.data()||{};
+          loadBillingDeleteOrderFromCloud(data);
           const raw=data['gt-monthly-billing-v221'];
           if(!raw) return;
           try{

@@ -3835,7 +3835,14 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    // Prihlásenie musí nastaviť skutočnú rolu používateľa.
    // Predtým zostávala na zariadení stará rola ADMIN.
    try{
-     const role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
+     let role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
+     // Hlavný tréner je samostatný profil. Staršie uložené prihlásenie môže mať
+     // ešte rolu 'trainer', hoci účet/profil sa volá Hlavný tréner. V takom prípade
+     // nesmie aplikácia otvoriť obrazovku bežného trénera (napr. Anatoliiho).
+     try{
+       const dn=String(account?.display_name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+       if(dn==='HLAVNY TRENER') role='head';
+     }catch(e){}
      if(typeof activeUserRole!=='undefined'){
        activeUserRole=(role==='admin')?'admin':(role==='head'?'head':'trainer');
        localStorage.setItem('gt-user-role',activeUserRole);
@@ -3876,7 +3883,8 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    // Rola sa berie výhradne z konkrétneho profilu, ktorý bol nájdený podľa hesla.
    // Hlavný tréner je samostatný účet; Anatoliiho profil sa tu nikdy nepoužíva ako fallback.
    const roleRaw=String(t?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
-   const role=roleRaw==='HLAVNY TRENER'?'head':'trainer';
+   const nameRaw=String(t?.full||t?.name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+   const role=(roleRaw==='HLAVNY TRENER' || nameRaw==='HLAVNY TRENER')?'head':'trainer';
    openApp({role,display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
  }
  function login(){
@@ -13630,8 +13638,14 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 
     let account=null;
     try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
-    const role=account && account.role ? String(account.role).toLowerCase() :
+    let role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
+    // Oprava starších session: účet Hlavný tréner musí vždy dostať vlastný dashboard,
+    // aj keď v localStorage zostala historická rola 'trainer'.
+    try{
+      const dn=String(account?.display_name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+      if(dn==='HLAVNY TRENER') role='head';
+    }catch(e){}
     const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
      if(finalRole==='head' && account && account.trainer_id!=null){
        try{

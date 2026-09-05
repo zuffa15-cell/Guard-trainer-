@@ -13190,17 +13190,22 @@ window.openAttendanceFromBillingRow=openAttendanceFromBillingRow;
 
 
 function repairLegacyTrainer1BillingOwnership(){
+  // NEVER assign legacy "TRÉNER 1" records to whichever trainer happens to
+  // open the app.  That made one trainer steal another trainer's old records.
+  // Legacy TRÉNER 1 belongs only to the real Peter Onuščák profile.
   try{
     if(isAdmin() || isHeadTrainer()) return;
-    const me=String(getCurrentTrainerDisplayName()||'').trim();
-    if(!me || /^TRÉNER\s*1$/i.test(me)) return;
+    const peter=(trainersData||[]).find(t=>{
+      const n=String(t.full||t.name||'').trim().replace(/\s+/g,' ').toUpperCase();
+      return n==='PETER ONUŠČÁK' || n==='PETER ONUSCAK';
+    });
+    if(!peter || peter.id==null) return;
     let changed=false;
     monthlyBillingRecords=(monthlyBillingRecords||[]).map(r=>{
-      const d=parsePaymentDate(r?.date);
-      const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:'';
-      if(iso>=TRAINING_DATA_START_DATE && String(r?.trainer||'').trim().toUpperCase()==='TRÉNER 1'){
+      const rn=String(r?.trainer||'').trim().replace(/\s+/g,' ').toUpperCase();
+      if((rn==='TRÉNER 1'||rn==='TRENER 1') && r?.trainerId==null){
         changed=true;
-        return {...r,trainer:me};
+        return {...r,trainer:String(peter.full||peter.name||'Peter Onuščák'),trainerId:Number(peter.id),savedBy:String(peter.full||peter.name||'Peter Onuščák')};
       }
       return r;
     });

@@ -3873,8 +3873,11 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    return trainers.find(x=>x && x.active!==false && String(x.loginPassword||'')===pass) || null;
  }
  function openTrainer(t){
-   openApp({role:String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer',
-     display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
+   // Rola sa berie výhradne z konkrétneho profilu, ktorý bol nájdený podľa hesla.
+   // Hlavný tréner je samostatný účet; Anatoliiho profil sa tu nikdy nepoužíva ako fallback.
+   const roleRaw=String(t?.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+   const role=roleRaw==='HLAVNY TRENER'?'head':'trainer';
+   openApp({role,display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
  }
  function login(){
    error.style.display='none';
@@ -7580,7 +7583,14 @@ function setUserRole(role){
   toast(activeUserRole==='admin'?'Režim administrátora':activeUserRole==='head'?'Režim hlavného trénera':'Režim trénera');
   setTimeout(()=>renderMore(),250);
 }
-function isHeadTrainer(){ return activeUserRole==='head'; }
+function isHeadTrainer(){
+  if(activeUserRole==='head') return true;
+  try{
+    const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    if(String(a?.role||'').trim().toLowerCase()==='head') return true;
+  }catch(e){}
+  return false;
+}
 
 function logoutGuardTrainer(btn){
   try{
@@ -10853,10 +10863,7 @@ window.renderTrainerMonthlyFor = function(trainerName, month=null, year=null){
   renderHeadTrainerDetail(String(trainerName||'').trim(),targetMonth,targetYear);
 };
 
-function isExplicitAnatoliiTrainer(t){
-  const n=String(t?.full||t?.name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
-  return n==='ANATOLII KUHAL' || n==='KUHAL ANATOLII';
-}
+function isExplicitAnatoliiTrainer(t){ return false; }
 function isMainTrainerProfile(t){
   if(!t) return false;
   const role=String(t.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
@@ -10864,19 +10871,19 @@ function isMainTrainerProfile(t){
 }
 function getMainTrainerProfile(){
   const list=Array.isArray(trainersData)?trainersData:[];
-  // Hlavný tréner je konkrétny prihlásený účet. Nikdy ho neurčuj podľa
-  // poradia v zozname trénerov – tým sa predtým mohol zobraziť Anatolii.
+  // Hlavný tréner je samostatný profil s rolou HLAVNÝ TRÉNER.
+  // Najprv vždy hľadaj profil podľa aktuálne prihláseného trainer_id.
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
     const id=Number(account?.trainer_id);
-    if(String(account?.role||'').trim().toLowerCase()==='head' && Number.isFinite(id)){
+    if(Number.isFinite(id)){
       const own=list.find(t=>Number(t.id)===id);
-      if(own && isMainTrainerProfile(own) && !isExplicitAnatoliiTrainer(own)) return own;
+      if(own && isMainTrainerProfile(own)) return own;
     }
   }catch(e){}
-  // Fallback: nájdi skutočný profil s rolou HLAVNÝ TRÉNER, nie prvého
-  // trénera v poli. Anatolii je vždy obyčajný tréner.
-  return list.find(t=>isMainTrainerProfile(t) && !isExplicitAnatoliiTrainer(t)) || null;
+  // Ak účet ešte nemá ID, použi výhradne profil s rolou HLAVNÝ TRÉNER.
+  // Nikdy nepouži Anatoliiho ani prvého trénera ako náhradu.
+  return list.find(t=>isMainTrainerProfile(t)) || null;
 }
 function getMainTrainerDisplayName(){
   const t=getMainTrainerProfile();
@@ -13626,6 +13633,15 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     const role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
     const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
+     if(finalRole==='head' && account && account.trainer_id!=null){
+       try{
+         const rt=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));
+         if(rt && String(rt.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ')==='HLAVNY TRENER'){
+           CURRENT_TRAINER_NAME=String(rt.full||rt.name||account.display_name||'').trim();
+           MY_TRAINER_GROUPS=Array.isArray(rt.groups)?[...rt.groups]:[];
+         }
+       }catch(e){}
+     }
      if(finalRole==='trainer' && account && account.trainer_id!=null){
        try{
          const rt=(trainersData||[]).find(t=>Number(t.id)===Number(account.trainer_id));

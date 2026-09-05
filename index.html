@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1020-ADMIN-DELETE</div>
+   <div class="gt-login-title">GUARD TRAINER v1021-STABLE-BILLING</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -10290,7 +10290,11 @@ normalizeMonthlyBillingRecords();
     if(monthlyBillingRecords.length!==before) persistMonthlyBillingRecords();
   }catch(e){ console.warn('Migrácia Viktor/A vyúčtovania sa nepodarila',e); }
 })();
-function persistMonthlyBillingRecords(){
+let _billingForceOverwriteUntil=0;
+function persistMonthlyBillingRecords(forceOverwrite=false){
+  if(forceOverwrite) _billingForceOverwriteUntil=Date.now()+10000;
+  const isForce=forceOverwrite || Date.now()<_billingForceOverwriteUntil;
+
   try{
     normalizeMonthlyBillingRecords();
     const seen=new Map();
@@ -10323,32 +10327,40 @@ function persistMonthlyBillingRecords(){
     }catch(e){}
     try{
       if(typeof db!=='undefined' && db){
-        // Merge s existujúcim cloudom - neprepisuj menším
-        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
-          let existing=[];
-          if(doc.exists && doc.data().records && Array.isArray(doc.data().records)) existing=doc.data().records;
-          const norm=s=>String(s||'').trim().toUpperCase();
-          const seen=new Map();
-          existing.forEach(r=>{
-            try{
-              const d=parsePaymentDate(r.date);
-              const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-              seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
-            }catch(e){}
+        if(isForce){
+          console.log('🔥 FORCE OVERWRITE billing cloud -', monthlyBillingRecords.length, 'záznamov');
+          db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Billing FORCE overwrite')).catch(e=>console.warn(e));
+          if(typeof CLOUD_COLLECTION!=='undefined'){
+            const p={}; p['gt-monthly-billing-v221']=JSON.stringify(monthlyBillingRecords); p['gt-billing']=JSON.stringify(monthlyBillingRecords);
+            db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(p, {merge:true}).then(()=>console.log('✅ Main cloud FORCE overwrite')).catch(e=>console.warn(e));
+          }
+        } else {
+          // Normálne mergovanie
+          db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+            let existing=[];
+            if(doc.exists && doc.data().records && Array.isArray(doc.data().records)) existing=doc.data().records;
+            const norm=s=>String(s||'').trim().toUpperCase();
+            const seen=new Map();
+            existing.forEach(r=>{
+              try{
+                const d=parsePaymentDate(r.date);
+                const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+                seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
+              }catch(e){}
+            });
+            monthlyBillingRecords.forEach(r=>{
+              try{
+                const d=parsePaymentDate(r.date);
+                const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+                seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
+              }catch(e){}
+            });
+            const merged=Array.from(seen.values());
+            db.collection('guard-trainer-billing').doc('all').set({records: merged, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', merged.length)).catch(e=>console.warn('billing cloud fail', e));
+          }).catch(e=>{
+            db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:true});
           });
-          monthlyBillingRecords.forEach(r=>{
-            try{
-              const d=parsePaymentDate(r.date);
-              const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-              seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
-            }catch(e){}
-          });
-          const merged=Array.from(seen.values());
-          db.collection('guard-trainer-billing').doc('all').set({records: merged, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', merged.length)).catch(e=>console.warn('billing cloud fail', e));
-        }).catch(e=>{
-          // Ak get zlyhá, proste ulož
-          db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:true}).then(()=>console.log('✅ Vyúčtovanie v cloude')).catch(err=>console.warn('billing cloud fail', err));
-        });
+        }
       }
     }catch(e){ console.warn('billing direct push fail', e); }
   }catch(e){ console.warn('Uloženie vyúčtovania sa nepodarilo',e); }
@@ -11188,28 +11200,15 @@ function deleteBillingTrainingAsAdmin(recordKey,trainerName,date,groupCode,month
       });
     }
     console.log('🗑️ Mazanie vyúčtovania', label, 'pred:', before, 'po:', monthlyBillingRecords.length);
-    persistMonthlyBillingRecords();
-    // Vynúť zmazanie aj z cloudu - prepíš cloud s lokálom po vymazaní
+    persistMonthlyBillingRecords(true); // FORCE OVERWRITE
     try{
       const json=JSON.stringify(monthlyBillingRecords);
       originalSetItem('gt-monthly-billing-v221', json);
       originalSetItem('gt-billing', json);
-      if(typeof db!=='undefined' && db){
-        // Hlavný cloud - prepíš
-        if(typeof CLOUD_COLLECTION!=='undefined' && CLOUD_DOC){
-          const payload={};
-          payload['gt-monthly-billing-v221']=json;
-          payload['gt-billing']=json;
-          db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload, {merge:true}).then(()=>console.log('✅ Cloud main vyúčtovanie zmazané')).catch(e=>console.warn(e));
-        }
-        // Billing collection - prepíš
-        db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Billing collection zmazané')).catch(e=>console.warn(e));
-        // Vymaž aj z attendance history ak treba
-        try{
-          const attKey=`${String(groupCode||'').trim().toUpperCase()}|${String(date||'')}`;
-        }catch(e){}
-      }
-    }catch(e){ console.warn('cloud delete fail', e); }
+      localStorage.setItem('gt-monthly-billing-v221', json);
+      localStorage.setItem('gt-billing', json);
+    }catch(e){}
+
     
     toast('Tréning bol vymazaný z vyúčtovania.');
     try{
@@ -11267,16 +11266,11 @@ window.forceDelete5_9_Now=function(){
     return true;
   });
   console.log('🗑️ Force delete 5.9. - pred:', before, 'po:', monthlyBillingRecords.length);
-  persistMonthlyBillingRecords();
+  persistMonthlyBillingRecords(true);
   try{
     const json=JSON.stringify(monthlyBillingRecords);
-    if(typeof db!=='undefined' && db){
-      db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false});
-      if(typeof CLOUD_COLLECTION!=='undefined'){
-        const p={}; p['gt-monthly-billing-v221']=json; p['gt-billing']=json;
-        db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(p, {merge:true});
-      }
-    }
+    originalSetItem('gt-monthly-billing-v221', json);
+    localStorage.setItem('gt-monthly-billing-v221', json);
   }catch(e){}
   toast('5.9. vymazaný');
   setTimeout(()=>openMyBilling(), 800);

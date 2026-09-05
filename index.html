@@ -140,7 +140,11 @@ function initCloudSync(){
             const clean=pack.trainers.map(t=>({
               ...t,
               groups:Array.isArray(t.groups)?[...new Set(t.groups.map(g=>String(g).trim().toUpperCase()).filter(Boolean))]:[]
-            }));
+            })).filter(t=>{
+              if(t && t.isTemplate===true) return false;
+              const n=String(t?.full||t?.name||'').trim().toUpperCase();
+              return n!=='VZOROVÝ TRÉNER' && n!=='VZOROVY TRENER';
+            });
             trainersData.splice(0,trainersData.length,...clean);
             originalSetItem('gt-trainers-authoritative-v2',JSON.stringify(clean));
             originalSetItem('gt-trainers-authoritative-v2-savedAt',String(remoteAt));
@@ -5761,40 +5765,46 @@ function isTestTrainerAccount(t){
  return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2';
 }
 function visibleTrainerProfiles(){
-  // The template is intentionally visible to the Admin, but never usable as
-  // a login account and never included in trainer accounting.
-  return (trainersData||[]).filter(t=>!isTestTrainerAccount(t));
+  // Vzorový tréner je odstránený zo zoznamu. Testovacie účty a stará
+  // šablóna sa nikdy nezobrazujú v karte TRÉNERI.
+  return (trainersData||[]).filter(t=>{
+    if(isTestTrainerAccount(t)) return false;
+    if(t && t.isTemplate===true) return false;
+    const n=String(t?.full||t?.name||'').trim().toUpperCase();
+    if(n==='VZOROVÝ TRÉNER' || n==='VZOROVY TRENER') return false;
+    return true;
+  });
 }
-function ensureTemplateTrainer(){
+function removeObsoleteTemplateTrainer(){
   try{
-    if(!Array.isArray(trainersData)) return null;
-    let t=trainersData.find(x=>x.isTemplate===true || String(x.full||x.name||'').trim().toUpperCase()==='VZOROVÝ TRÉNER');
-    if(!t){
-      const id=Math.max(0,...trainersData.map(x=>Number(x.id)||0))+1;
-      t={id,full:'VZOROVÝ TRÉNER',name:'VZOROVÝ TRÉNER',email:'',phone:'',
-        role:'TRÉNER',license:'',valid:'',status:'VZOR',active:false,
-        groups:[],loginPassword:'',loginPasswordSet:false,isTemplate:true};
-      trainersData.push(t);
+    if(!Array.isArray(trainersData)) return false;
+    const before=trainersData.length;
+    const cleaned=trainersData.filter(t=>{
+      if(t && t.isTemplate===true) return false;
+      const n=String(t?.full||t?.name||'').trim().toUpperCase();
+      return n!=='VZOROVÝ TRÉNER' && n!=='VZOROVY TRENER';
+    });
+    if(cleaned.length!==before){
+      trainersData.splice(0,trainersData.length,...cleaned);
       persistTrainersData();
+      try{ if(isAdmin() && typeof syncTrainerProfileToCloud==='function') syncTrainerProfileToCloud(); }catch(e){}
+      return true;
     }
-    return t;
-  }catch(e){return null;}
+  }catch(e){}
+  return false;
 }
 function renderTrainers(){
- ensureTemplateTrainer();
+ removeObsoleteTemplateTrainer();
  // Profile assignments are authoritative. Do not overwrite them from the
  // schedule when the trainer list is opened.
- ensureTemplateTrainer();
  const app=document.querySelector('.app');
- const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
+ const trainerList=visibleTrainerProfiles();
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content trainers-page">
   <div class="trainer-head"><div><span class="trainer-head-icon">♟</span><div><h2>TRÉNERI</h2><small>${isAdmin()?'Správa trénerov a ich oprávnení':'Prehľad všetkých trénerov – iba na čítanie'}</small></div></div>${isAdmin()?`<button onclick="newTrainer()">＋ PRIDAŤ TRÉNERA</button>`:''}</div>
-  <div class="trainer-stats"><div><b>${trainerList.length}</b><span>Tréneri spolu</span></div><div><b>${active}</b><span>Aktívni</span></div><div><b>0</b><span>Platnosť čoskoro vyprší</span></div><div><b>0</b><span>Platnosť vypršala</span></div></div>
   <div class="trainer-filters"><input placeholder="⌕  Hľadať trénera..." oninput="filterTrainers(this.value)"><button>VŠETCI TRÉNERI⌄</button><button id="trainerSortBtn" type="button" onclick="sortTrainers()">ZORADIŤ: MENO A–Z⌄</button></div>
   <div id="trainerList">${trainerRows(trainerList)}</div>
-  ${renderPendingTrainerInvitations()}
  </main>
  <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav active" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
 }

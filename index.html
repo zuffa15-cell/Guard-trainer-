@@ -217,7 +217,12 @@ function initCloudSync(){
           if(mergedRaw!==localRaw){ originalSetItem(k,mergedRaw); changed=true; }
           return;
         }
-        if(k===BILLING_DELETE_ORDER_KEY){
+        if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY){
+          // VYÚČTOVANIE je synchronizované výhradne cez guard-trainer-billing/all.
+          // Staré kópie v hlavnom shared-db dokumente sa nesmú dostať späť do aplikácie.
+          return;
+        }
+        if(false && k===BILLING_DELETE_ORDER_KEY){
           let localObj={},remoteObj={};
           try{const x=originalGetItem(k);const p=x?JSON.parse(x):{};if(p&&typeof p==='object')localObj=p;}catch(e){}
           try{const x=data[k]?JSON.parse(data[k]):{};if(x&&typeof x==='object')remoteObj=x;}catch(e){}
@@ -370,7 +375,7 @@ function initCloudSync(){
         if(k.startsWith('_') || isGTLocalAuthKey(k)) return;
         // Členovia a ich timestampy sa už zlúčili vyššie po jednotlivých ID.
         // Nesmie ich druhý všeobecný sync prepísať celým starším snapshotom.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1') return;
+        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-attendance-admin-edits-v1' || k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
         if(typeof data[k] === 'string' && originalGetItem(k) !== data[k]){
           if(k==='gt-trainers' || k==='gt-trainers-v395'){
             try{
@@ -577,6 +582,9 @@ function pushToCloud(force = false){
   const payload = {_lastUpdateBy: uid || 'unknown', _updatedAt: Date.now()};
   lastCloudUpdate = payload._updatedAt;
   SYNC_KEYS.forEach(k=>{
+    // Vyúčtovanie má vlastný realtime dokument guard-trainer-billing/all.
+    // Nikdy ho neposielaj do shared-db, kde by stará kópia mohla prepísať novú.
+    if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
     let v = originalGetItem(k);
     if(k==='gt-members-real-2026-v847' && v){
       try{ const arr=JSON.parse(v); if(Array.isArray(arr)) v=JSON.stringify(arr.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})); }catch(e){}
@@ -585,6 +593,7 @@ function pushToCloud(force = false){
   });
   Object.keys(localStorage).forEach(k=>{
     if(isGTLocalAuthKey(k)) return;
+    if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
     if(k.startsWith('gt-') && !payload[k]){
       const v=originalGetItem(k);
       if(v) payload[k]=v;
@@ -661,35 +670,7 @@ function pushToCloud(force = false){
       }
     }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
 
-    // VYÚČTOVANIE: pri každom všeobecnom pushnutí zachovaj mazacie značky.
-    // Inak by neskorší push jedného zariadenia mohol hlavného trénera znovu zásobiť starým záznamom.
-    try{
-      let localBill=[], remoteBill=[];
-      try{ localBill=JSON.parse(payload['gt-monthly-billing-v221']||'[]')||[]; }catch(e){}
-      try{ remoteBill=JSON.parse(remote['gt-monthly-billing-v221']||'[]')||[]; }catch(e){}
-      let localDel={}, remoteDel={};
-      try{ localDel=JSON.parse(payload['gt-billing-delete-order-v1']||'{}')||{}; }catch(e){}
-      try{ remoteDel=JSON.parse(remote['gt-billing-delete-order-v1']||'{}')||{}; }catch(e){}
-      const del={...remoteDel};
-      Object.keys(localDel).forEach(k=>del[k]=Math.max(Number(del[k]||0),Number(localDel[k]||0)));
-      Object.keys(billingDeleteOrder).forEach(k=>del[k]=Math.max(Number(del[k]||0),Number(billingDeleteOrder[k]||0)));
-      const map=new Map();
-      const put=r=>{
-        if(!r)return;
-        const k=billingRecordCanonicalKey(r);
-        if(Number(del[k]||0)>=Number(r.savedAt||r.updatedAt||0))return;
-        const prev=map.get(k);
-        if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) map.set(k,r);
-      };
-      remoteBill.forEach(put); localBill.forEach(put);
-      const billRows=Array.from(map.values());
-      payload['gt-monthly-billing-v221']=JSON.stringify(billRows);
-      payload['gt-billing']=JSON.stringify(billRows);
-      payload['gt-billing-delete-order-v1']=JSON.stringify(del);
-      Object.keys(billingDeleteOrder).forEach(k=>delete billingDeleteOrder[k]);
-      Object.assign(billingDeleteOrder,del);
-      persistBillingDeleteOrder();
-    }catch(e){ console.warn('Billing cloud merge before push failed',e); }
+    // VYÚČTOVANIE sa do shared-db NEZAPISUJE. Autoritatívny zdroj je guard-trainer-billing/all.
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
   }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
     .catch(e=>console.warn('Push fail',e));
@@ -10530,39 +10511,22 @@ function initBillingDirectSync(){
 
     const mergeBillingRecords = (remote, source)=>{
       try{
-        const localRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
-        let local=[]; try{local=JSON.parse(localRaw)||[];}catch(e){}
         const norm=s=>String(s||'').trim().toUpperCase();
+        // guard-trainer-billing/all je jediný autoritatívny zdroj vyúčtovania.
+        // Lokálne záznamy sa sem nesmú primiešať, pretože by starý záznam
+        // na adminovom/hlavnom zariadení mohol obnoviť už zmazané vyúčtovanie.
         const seen=new Map();
-        local.forEach(r=>{
-          try{
-            const localKey=billingRecordCanonicalKey(r);
-            if(Number(billingDeleteOrder[localKey]||0) >= Number(r.savedAt||r.updatedAt||0)) return;
-            const d=parsePaymentDate(r.date);
-            const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-            seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
-          }catch(e){}
-        });
         let added=0, updated=0;
         remote.forEach(r=>{
           try{
             const remoteKey=billingRecordCanonicalKey(r);
-            if(Number(billingDeleteOrder[remoteKey]||0) >= Number(r.savedAt||r.updatedAt||0)){ return; }
+            if(Number(billingDeleteOrder[remoteKey]||0) >= Number(r.savedAt||r.updatedAt||0)) return;
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
             const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
-            if(!seen.has(key)){
-              seen.set(key,r);
-              added++;
-            } else {
-              const existing=seen.get(key);
-              const existingTime=Number(existing.savedAt||existing.updatedAt||0);
-              const remoteTime=Number(r.savedAt||r.updatedAt||0);
-              if(remoteTime>existingTime){
-                seen.set(key,r);
-                updated++;
-              }
-            }
+            const prev=seen.get(key);
+            if(!prev){ seen.set(key,r); added++; }
+            else if(Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)){ seen.set(key,r); updated++; }
           }catch(e){}
         });
         const merged=Array.from(seen.values());
@@ -10570,12 +10534,12 @@ function initBillingDirectSync(){
         // Predtým sa záznam odstránený trénerom na serveri neobjavil v remote,
         // ale stará kópia na zariadení admina/hlavného trénera zostala navždy,
         // pretože merge riešil iba nové/aktualizované záznamy.
-        const localKeys=new Set(local.map(r=>billingRecordCanonicalKey(r)));
-        const mergedKeys=new Set(merged.map(r=>billingRecordCanonicalKey(r)));
-        const localCountBefore=local.length;
-        const staleLocalRemoved=local.some(r=>!mergedKeys.has(billingRecordCanonicalKey(r)));
-        if(added>0 || updated>0 || remote.length!==local.length || staleLocalRemoved){
-          console.log(`📥 [${source}] Vyúčtovanie mergujem - nové: ${added}, aktualizované: ${updated}, celkom: ${merged.length} (bolo ${local.length}, remote ${remote.length})`);
+        const currentRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
+        const currentCount=(()=>{try{const x=JSON.parse(currentRaw)||[];return Array.isArray(x)?x.length:0;}catch(e){return 0;}})();
+        let same=false;
+        try{ same=JSON.stringify(JSON.parse(currentRaw)||[])===JSON.stringify(merged); }catch(e){}
+        if(!same || added>0 || updated>0 || remote.length!==currentCount){
+          console.log(`📥 [${source}] Vyúčtovanie = SERVER: nové ${added}, aktualizované ${updated}, celkom ${merged.length} (server ${remote.length})`);
           try{
             originalSetItem('gt-monthly-billing-v221', JSON.stringify(merged));
             localStorage.setItem('gt-monthly-billing-v221', JSON.stringify(merged));
@@ -10620,14 +10584,10 @@ function initBillingDirectSync(){
           if(!doc.exists) return;
           const data=doc.data()||{};
           loadBillingDeleteOrderFromCloud(data);
-          const raw=data['gt-monthly-billing-v221'];
-          if(!raw) return;
-          try{
-            const remote=JSON.parse(raw);
-            if(Array.isArray(remote) && remote.length>0){
-              mergeBillingRecords(remote, 'main-cloud');
-            }
-          }catch(e){}
+          // shared-db môže obsahovať starú historickú kópiu vyúčtovania.
+          // Túto kópiu zámerne ignorujeme; autoritatívny je iba
+          // guard-trainer-billing/all (realtime listener vyššie).
+          return;
         });
       }
     }catch(e){}

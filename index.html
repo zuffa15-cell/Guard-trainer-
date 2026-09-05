@@ -3836,7 +3836,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
  <div class="gt-login-box">
-   <div class="gt-login-title">GUARD TRAINER v1018-ATTENDANCE-TRUTH</div>
+   <div class="gt-login-title">GUARD TRAINER v1020-ADMIN-DELETE</div>
    <input id="gtSimpleLoginPassword" type="password" placeholder="Zadaj heslo" autocomplete="current-password">
    <button id="gtSimpleLoginButton" type="button">PRIHLÁSIŤ SA</button>
    <div id="gtSimpleLoginError" class="gt-login-error">Nesprávne heslo.</div>
@@ -11162,30 +11162,127 @@ window.renderTrainerMonthlyFor=function(trainerName, month, year){
 };
 
 function deleteBillingTrainingAsAdmin(recordKey,trainerName,date,groupCode,month,year){
-  if(!isAdmin()){ toast('Tréning môže z vyúčtovania vymazať iba administrátor.'); return false; }
+  const currentName=String(getCurrentTrainerDisplayName()||'').trim().toUpperCase();
+  const targetName=String(trainerName||'').trim().toUpperCase();
+  const isOwn=currentName && targetName && currentName===targetName;
+  if(!isAdmin() && !isOwn){ toast('Tréning môže z vyúčtovania vymazať iba administrátor alebo vlastník tréningu.'); return false; }
   const key=String(recordKey||'');
   const label=`${date||''} – ${groupCode||''} – ${trainerName||''}`;
-  if(!key){ toast('Záznam tréningu nemá platný kľúč.'); return false; }
+  if(!key && !date){ toast('Záznam tréningu nemá platný kľúč.'); return false; }
   if(!confirm(`Naozaj vymazať tento tréning z vyúčtovania?\n\n${label}\n\nZáznam sa odstráni aj z vyúčtovania tohto trénera.`)) return false;
   try{
     const before=monthlyBillingRecords.length;
-    monthlyBillingRecords=monthlyBillingRecords.filter(r=>String(r?.key||'')!==key);
+    if(key){
+      monthlyBillingRecords=monthlyBillingRecords.filter(r=>String(r?.key||'')!==key);
+    }
     if(monthlyBillingRecords.length===before){
       const tn=String(trainerName||'').trim().toUpperCase();
       const gc=String(groupCode||'').trim().toUpperCase();
       const dd=parsePaymentDate(date);
       monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
         const rd=parsePaymentDate(r?.date);
-        return !(String(r?.trainer||r?.name||'').trim().toUpperCase()===tn && String(r?.group||'').trim().toUpperCase()===gc && rd&&dd && rd.year===dd.year&&rd.month===dd.month&&rd.day===dd.day);
+        const matchTrainer=String(r?.trainer||r?.name||'').trim().toUpperCase()===tn;
+        const matchGroup=String(r?.group||'').trim().toUpperCase()===gc;
+        const matchDate=rd&&dd && rd.year===dd.year&&rd.month===dd.month&&rd.day===dd.day;
+        return !(matchTrainer && matchGroup && matchDate);
       });
     }
+    console.log('🗑️ Mazanie vyúčtovania', label, 'pred:', before, 'po:', monthlyBillingRecords.length);
     persistMonthlyBillingRecords();
+    // Vynúť zmazanie aj z cloudu - prepíš cloud s lokálom po vymazaní
+    try{
+      const json=JSON.stringify(monthlyBillingRecords);
+      originalSetItem('gt-monthly-billing-v221', json);
+      originalSetItem('gt-billing', json);
+      if(typeof db!=='undefined' && db){
+        // Hlavný cloud - prepíš
+        if(typeof CLOUD_COLLECTION!=='undefined' && CLOUD_DOC){
+          const payload={};
+          payload['gt-monthly-billing-v221']=json;
+          payload['gt-billing']=json;
+          db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload, {merge:true}).then(()=>console.log('✅ Cloud main vyúčtovanie zmazané')).catch(e=>console.warn(e));
+        }
+        // Billing collection - prepíš
+        db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Billing collection zmazané')).catch(e=>console.warn(e));
+        // Vymaž aj z attendance history ak treba
+        try{
+          const attKey=`${String(groupCode||'').trim().toUpperCase()}|${String(date||'')}`;
+        }catch(e){}
+      }
+    }catch(e){ console.warn('cloud delete fail', e); }
+    
     toast('Tréning bol vymazaný z vyúčtovania.');
-    renderHeadTrainerDetail(trainerName,Number(month),Number(year));
+    try{
+      if(typeof renderHeadTrainerDetail==='function' && (isAdmin()||isHeadTrainer())){
+        renderHeadTrainerDetail(trainerName,Number(month),Number(year));
+      } else {
+        openMyBilling();
+      }
+    }catch(e){ setTimeout(()=>location.reload(), 500); }
   }catch(e){ console.error('ADMIN DELETE BILLING TRAINING:',e); toast('Tréning sa nepodarilo vymazať.'); }
   return false;
 }
+
+
 window.deleteBillingTrainingAsAdmin=deleteBillingTrainingAsAdmin;
+window.deleteMyBillingByDate=function(dateStr, groupCode){
+  const d=String(dateStr||'').trim();
+  const g=String(groupCode||'').trim().toUpperCase();
+  const me=String(getCurrentTrainerDisplayName()||'').trim().toUpperCase();
+  if(!confirm(`Vymazať tréning ${d} skupina ${g} z vyúčtovania?`)) return;
+  const before=monthlyBillingRecords.length;
+  monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
+    const rd=String(r.date||'').trim();
+    const rg=String(r.group||'').trim().toUpperCase();
+    const rt=String(r.trainer||'').trim().toUpperCase();
+    if(g && rg!==g) return true;
+    if(d && rd!==d) return true;
+    if(me && rt!==me) return true;
+    // Ak je zadany datum a skupina, zmaz presne ten
+    if(d && g) return !(rd===d && rg===g && rt===me);
+    if(d) return !(rd===d && rt===me);
+    return true;
+  });
+  if(monthlyBillingRecords.length===before){
+    alert('Nenašiel sa záznam na vymazanie: '+d+' '+g);
+    return;
+  }
+  persistMonthlyBillingRecords();
+  toast('Tréning vymazaný: '+d+' '+g);
+  setTimeout(()=>{ try{ openMyBilling(); }catch(e){ location.reload(); } }, 500);
+};
+window.quickDelete5_9=function(){
+  deleteMyBillingByDate('5. 9. 2026', 'C');
+};
+window.forceDelete5_9_Now=function(){
+  // Okamžité vymazanie 5.9. pre Viktora
+  const before=monthlyBillingRecords.length;
+  monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
+    const d=String(r.date||'').trim();
+    const g=String(r.group||'').trim().toUpperCase();
+    const t=String(r.trainer||'').trim().toUpperCase();
+    // Vymaž 5.9.2026 C pre Viktora
+    if(d==='5. 9. 2026' && g==='C' && t.includes('VIKTOR')) return false;
+    if(d==='5.9.2026' && g==='C') return false;
+    return true;
+  });
+  console.log('🗑️ Force delete 5.9. - pred:', before, 'po:', monthlyBillingRecords.length);
+  persistMonthlyBillingRecords();
+  try{
+    const json=JSON.stringify(monthlyBillingRecords);
+    if(typeof db!=='undefined' && db){
+      db.collection('guard-trainer-billing').doc('all').set({records: monthlyBillingRecords, updatedAt: Date.now()}, {merge:false});
+      if(typeof CLOUD_COLLECTION!=='undefined'){
+        const p={}; p['gt-monthly-billing-v221']=json; p['gt-billing']=json;
+        db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(p, {merge:true});
+      }
+    }
+  }catch(e){}
+  toast('5.9. vymazaný');
+  setTimeout(()=>openMyBilling(), 800);
+};
+
+
 
 function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToday().year){
   const app=document.querySelector('.app');
@@ -11212,7 +11309,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
     </div>
     <div class="monthly-table-wrap">
       <table class="monthly-table">
-       <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>${isAdmin()?'<th>ZMAZAŤ</th>':''}</tr></thead>
+       <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th><th>ZMAZAŤ</th></tr></thead>
        <tbody>
        ${rows.map(r=>`<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(getAdminGroupName(r.group)||r.group||''))})' title="Otvoriť dochádzku tohto dňa"><td>${r.date}</td><td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>${r.substituteLabel?`<small class="sub-label">⇄ ZASTUPOVANÝ TRÉNING<br><b>${r.substituteLabel}</b></small>`:''}</td><td>${r.trainingSum} €<small>${r.paying} platieb</small></td><td>${r.membershipSum} €</td><td>${r.registrationSum} €</td><td class="plus">${r.otherPlus} €</td><td class="minus">−${r.otherMinus} €</td><td>${r.gross} €</td><td class="minus">−${r.trainerReward} €</td><td class="club-amount">${r.clubAmount} €</td>${isAdmin()?`<td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.stopPropagation(); return window.deleteBillingTrainingAsAdmin(${JSON.stringify(String(r.key||''))},${JSON.stringify(String(trainerName||''))},${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${Number(month)},${Number(year)});'>🗑 ZMAZAŤ</button></td>`:''}</tr>`).join('')}
        ${!rows.length?`<tr><td colspan="${isAdmin()?11:10}" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}

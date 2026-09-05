@@ -3861,7 +3861,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .stats-stack-col{min-width:25px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px}
 .stats-stack-col>b{font-size:8px;color:#ddd;min-height:10px}
 .stats-stack-bar{height:125px;width:19px;display:flex;flex-direction:column;justify-content:flex-end;overflow:visible;border-radius:4px 4px 0 0}
-.stats-stack-segment{display:block;width:19px;min-height:2px;border-radius:0}
+.stats-stack-segment{display:flex;width:19px;min-height:2px;border-radius:0;align-items:center;justify-content:center;position:relative;overflow:visible}.stats-stack-segment>span{font-size:8px;line-height:1;color:#fff;font-weight:800;text-shadow:0 1px 2px #000;pointer-events:none;white-space:nowrap}
 .stats-stack-segment:first-child{border-radius:0 0 3px 3px}
 .stats-stack-segment:last-child{border-radius:3px 3px 0 0}
 .stats-stack-col small{font-size:8px;color:#aaa}
@@ -14053,9 +14053,9 @@ function renderStatistics(month=appToday().month,year=appToday().year){
         const v=Number((seriesByGroup[g]||[])[i]||0);
         if(!v) return '';
         const h=Math.max(2,Math.round(v/Math.max(1,maxValue)*120));
-        return `<i class=\"stats-stack-segment\" title=\"${g}: ${v}\" style=\"height:${h}px;background:${statGroupColors[g]}\"></i>`;
+        return `<i class=\"stats-stack-segment\" title=\"${g}: ${v}\" style=\"height:${h}px;background:${statGroupColors[g]}\"><span>${v}</span></i>`;
       }).join('');
-      return `<div class=\"stats-stack-col\"><b>${sum||''}</b><div class=\"stats-stack-bar\">${segments}</div><small>${i+1}</small></div>`;
+      return `<div class=\"stats-stack-col\"><b>${sum?`SPOLU ${sum}`:''}</b><div class=\"stats-stack-bar\">${segments}</div><small>${i+1}</small></div>`;
     }).join('')}</div><div class=\"stats-stack-legend\">${groups.map(g=>`<span><i style=\"background:${statGroupColors[g]}\"></i>${g}</span>`).join('')}</div>`;
   };
 

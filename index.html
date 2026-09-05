@@ -13310,45 +13310,31 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
   const myId=currentTrainerAccountId();
   const norm=s=>String(s||'').trim().toUpperCase();
 
-  // Pri bežnom trénerovi sú pre vyúčtovanie rozhodujúce jeho PRIDELENÉ
-  // SKUPINY. Samotné trainerId na starých záznamoch nestačí, pretože staré
-  // vyúčtovania mohli mať uloženého nesprávneho vlastníka. Viktor Žuffa má
-  // podľa profilu iba B, C a B+C – A ani D sa mu nesmú zobraziť.
-  const allowedBillingGroups=new Set();
+  // Osobné vyúčtovanie sa filtruje podľa toho, KTO VYÚČTOVANIE VYTVORIL,
+  // nie podľa skupiny. Rovnakú skupinu môže robiť viac trénerov.
+  // Pri starších záznamoch je uložené meno trénera nadradené trainerId,
+  // pretože staré ID mohlo byť nesprávne. trainerId používame iba pri
+  // zázname, ktorý meno trénera vôbec nemá.
+  const myNames=new Set([norm(me)]);
   try{
-    let profile=null;
-    if(myId!=null) profile=(trainersData||[]).find(t=>Number(t.id)===Number(myId))||null;
-    if(!profile) profile=getCurrentTestTrainerProfile();
-    (profile?.groups||[]).forEach(g=>{
-      const code=normalizeGroupCode(g);
-      if(code) allowedBillingGroups.add(code);
-    });
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
-    (account?.groups||[]).forEach(g=>{
-      const code=normalizeGroupCode(g);
-      if(code) allowedBillingGroups.add(code);
-    });
+    if(account?.display_name) myNames.add(norm(account.display_name));
+    if(myId!=null){
+      const profile=(trainersData||[]).find(t=>Number(t.id)===Number(myId));
+      if(profile?.full) myNames.add(norm(profile.full));
+      if(profile?.name) myNames.add(norm(profile.name));
+    }
     const snap=JSON.parse(localStorage.getItem('gt-current-trainer-snapshot')||'null');
-    (snap?.groups||[]).forEach(g=>{
-      const code=normalizeGroupCode(g);
-      if(code) allowedBillingGroups.add(code);
-    });
+    if(snap?.full) myNames.add(norm(snap.full));
+    if(snap?.name) myNames.add(norm(snap.name));
   }catch(e){}
-  // Pevné vlastníctvo vyúčtovania: bežný tréner smie vidieť iba záznamy
-  // svojho trainer_id. Pri starších záznamoch bez ID sa ID dopočíta z mena
-  // cez aktuálny zoznam trénerov; samotné zobrazované meno už nie je zdrojom
-  // oprávnenia.
-  const recordOwnerId=r=>{
-    const rid=Number(r?.trainerId);
-    if(Number.isFinite(rid) && rid>0) return rid;
-    const rn=norm(r?.trainer);
-    const t=(trainersData||[]).find(x=>norm(x?.full||x?.name)===rn);
-    return t && t.id!=null ? Number(t.id) : null;
-  };
+
   const ownsRecord=r=>{
-    if(myId==null) return false;
-    const oid=recordOwnerId(r);
-    return oid!=null && Number(oid)===Number(myId);
+    if(!r) return false;
+    const rn=norm(r.trainer);
+    if(rn) return myNames.has(rn);
+    const rid=Number(r.trainerId);
+    return myId!=null && Number.isFinite(rid) && rid>0 && Number(rid)===Number(myId);
   };
 
   const accepted=substitutionOffers.filter(o=>{
@@ -13417,21 +13403,10 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
     if(ownsRecord(r)) result.push(r);
   });
 
-  // Absolútny posledný filter pre bežného trénera: vo vyúčtovaní sa môžu
-  // objaviť iba skupiny pridelené jeho profilom. Týmto sa odstránia aj staré
-  // záznamy, ktoré majú nesprávne trainerId/trainer meno (napr. A alebo D pri
-  // Viktorovi Žuffovi). B+C zostáva samostatná skupina.
-  if(allowedBillingGroups.size){
-    result=result.filter(r=>allowedBillingGroups.has(normalizeGroupCode(r?.group||'')));
-  }else{
-    result=[];
-  }
-
   // If the original trainer's informational row is missing, create exactly
   // one. This is only a display fallback; it does not create financial data.
   offeredByMe.forEach(o=>{
     if(result.some(r=>r.substituteReference && sameDateGroup(r,o))) return;
-    if(allowedBillingGroups.size && !allowedBillingGroups.has(normalizeGroupCode(o.code||''))) return;
     result.push({
       key:`${o.date}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from}`,
       trainer:me,

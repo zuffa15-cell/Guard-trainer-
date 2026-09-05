@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-billing-delete-order-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-authoritative-v1','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-billing-delete-order-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -528,23 +528,38 @@ function pushToCloud(force = false){
         }catch(e){}
         try{ localOrder=JSON.parse(payload['gt-member-save-order-v1']||'{}')||{}; }catch(e){}
         try{ remoteOrder=JSON.parse(remote['gt-member-save-order-v1']||'{}')||{}; }catch(e){}
+        let localDelete={}, remoteDelete={};
+        try{ localDelete=JSON.parse(payload['gt-member-delete-order-v1']||'{}')||{}; }catch(e){}
+        try{ remoteDelete=JSON.parse(remote['gt-member-delete-order-v1']||'{}')||{}; }catch(e){}
+        const mergedDelete={};
+        new Set([...Object.keys(localDelete),...Object.keys(remoteDelete)]).forEach(id=>{
+          mergedDelete[id]=Math.max(Number(localDelete[id]||0),Number(remoteDelete[id]||0));
+        });
         const byId=new Map();
         localMembers.forEach(m=>{if(m&&m.id!=null) byId.set(String(m.id),m);});
         remoteMembers.forEach(m=>{
           if(!m||m.id==null)return;
           const id=String(m.id);
+          // A deletion tombstone newer than the member save always wins.
+          if(Number(mergedDelete[id]||0) >= Number(remoteOrder[id]||0) && Number(mergedDelete[id]||0) >= Number(localOrder[id]||0)){
+            byId.delete(id); return;
+          }
           const local=byId.get(id);
           const lt=Number(localOrder[id]||0);
           const rt=Number(remoteOrder[id]||0);
           if(!local || rt>lt) byId.set(id,m);
         });
-        // Zachovaj aj informáciu o odstránených členoch. Ak je člen v lokálnom
-        // zozname novší než cloud, lokálny stav má prednosť.
+        // Apply local deletion tombstones too, so an older local member can never
+        // resurrect a member that was deleted on another admin device.
+        for(const id of Object.keys(mergedDelete)){
+          if(Number(mergedDelete[id]||0) >= Number(localOrder[id]||0) && Number(mergedDelete[id]||0) >= Number(remoteOrder[id]||0)) byId.delete(id);
+        }
         const mergedMembers=Array.from(byId.values());
         const mergedOrder={};
-        new Set([...Object.keys(localOrder),...Object.keys(remoteOrder)]).forEach(id=>{
+        new Set([...Object.keys(localOrder),...Object.keys(remoteOrder),...Object.keys(mergedDelete)]).forEach(id=>{
           mergedOrder[id]=Math.max(Number(localOrder[id]||0),Number(remoteOrder[id]||0));
         });
+        payload['gt-member-delete-order-v1']=JSON.stringify(mergedDelete);
         payload['gt-members-real-2026-v847']=JSON.stringify(
           mergedMembers.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})
         );
@@ -5887,8 +5902,14 @@ function saveTrainerProfile(id){
      }catch(e){}
    }
    persistTrainersData();
-   // Heslo trénera musí ísť okamžite aj do existujúceho Firebase cloudu,
-   // aby ho vedelo použiť druhé zariadenie.
+   // Autoritatívny register trénerov zapisuj priamo do cloudu. Takto sa zmena
+   // skupín/role/hesla nestratí pri refreshe ani ju neprepíše starý shared-db snapshot.
+   try{
+     if(typeof syncTrainerProfileToCloud==='function'){
+       syncTrainerProfileToCloud(t);
+     }
+   }catch(e){ console.warn('Priamy cloud zápis profilu trénera zlyhal',e); }
+   // Heslo a kompatibilné dáta trénera pošli aj do spoločného dokumentu.
    try{
      if(typeof pushToCloud==='function'){
        setTimeout(()=>{try{pushToCloud()}catch(e){}},500);

@@ -3887,6 +3887,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .stats-stack-legend span{display:inline-flex;align-items:center;gap:4px}
 .stats-stack-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
 </style>
+
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -10803,7 +10804,13 @@ function initBillingDirectSync(){
         const currentRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
         const currentCount=(()=>{try{const x=JSON.parse(currentRaw)||[];return Array.isArray(x)?x.length:0;}catch(e){return 0;}})();
         let same=false;
-        try{ same=JSON.stringify(JSON.parse(currentRaw)||[])===JSON.stringify(merged); }catch(e){}
+        try{
+          const stableBillingList=(arr)=> (Array.isArray(arr)?arr:[]).map(r=>{
+            try{return {key:billingRecordCanonicalKey(r),data:JSON.stringify(r||{})};}
+            catch(e){return {key:'',data:JSON.stringify(r||{})};}
+          }).sort((a,b)=>(a.key+a.data).localeCompare(b.key+b.data));
+          same=JSON.stringify(stableBillingList(JSON.parse(currentRaw)||[]))===JSON.stringify(stableBillingList(merged));
+        }catch(e){}
         if(!same || added>0 || updated>0 || remote.length!==currentCount){
           console.log(`📥 [${source}] Vyúčtovanie = SERVER: nové ${added}, aktualizované ${updated}, celkom ${merged.length} (server ${remote.length})`);
           try{
@@ -10824,7 +10831,18 @@ function initBillingDirectSync(){
             const myBillingOpen=location.hash==='#trainer-month' || !!document.querySelector('.monthly-billing-page');
             if(myBillingOpen && typeof renderMonthlyBilling==='function' &&
                !(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer()))){
+              // Realtime snapshot nesmie používateľovi rozbiť práve otvorenú
+              // horizontálne posúvanú tabuľku. Zapamätaj polohu a po prekreslení
+              // ju obnov; zároveň sa sem dostaneme iba pri skutočnej zmene dát.
+              const _gtScrollWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+              const _gtScrollLeft=_gtScrollWrap ? _gtScrollWrap.scrollLeft : 0;
               renderMonthlyBilling();
+              if(_gtScrollLeft){
+                requestAnimationFrame(()=>{
+                  const w=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+                  if(w) w.scrollLeft=_gtScrollLeft;
+                });
+              }
             }
 
             // Realtime serverová zmena pre admina/hlavného trénera.
@@ -12570,6 +12588,7 @@ html,body{color-scheme:dark!important;}
 .head-other-detail-row strong{text-align:right}
 .head-other-empty{padding:12px 8px;color:#999}
 </style>
+
 </head><body>
       <h1>ZAPLATENÉ ČLENSKÉ</h1>
       <div class="meta">${summary?.innerText||''}</div>
@@ -12942,6 +12961,7 @@ html,body{color-scheme:dark!important;}
 }
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
+
 
 </body>
 <style id="v650-statistika-fit-final">
@@ -15098,6 +15118,94 @@ setTimeout(set,80);setTimeout(set,300)})();
   }
   document.addEventListener('DOMContentLoaded',fixStats);
   setTimeout(fixStats,300); setTimeout(fixStats,1000);
+})();
+</script>
+
+<style id="gt-my-billing-horizontal-scroll-final">
+/* Mobile: MOJE VYÚČTOVANIE must be horizontally scrollable. */
+.monthly-billing-page .monthly-table-wrap{
+  display:block !important;
+  width:100% !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  box-sizing:border-box !important;
+  overflow-x:auto !important;
+  overflow-y:hidden !important;
+  -webkit-overflow-scrolling:touch !important;
+  overscroll-behavior-x:contain !important;
+  touch-action:pan-x !important;
+  scrollbar-width:auto !important;
+}
+.monthly-billing-page .monthly-table-wrap > .monthly-table{
+  display:table !important;
+  width:max-content !important;
+  min-width:1100px !important;
+  max-width:none !important;
+  table-layout:auto !important;
+}
+</style>
+<script id="gt-my-billing-horizontal-scroll-final">
+(function(){
+  if(window.__gtMyBillingHorizontalFinal) return;
+  window.__gtMyBillingHorizontalFinal=true;
+  var drag=null, touch=null;
+  function wrapOf(e){
+    var t=e && e.target;
+    return t && t.closest ? t.closest('.monthly-billing-page .monthly-table-wrap') : null;
+  }
+  function begin(w,x,y,id){
+    drag={w:w,x:x,y:y,start:w.scrollLeft,id:id,active:false};
+  }
+  document.addEventListener('pointerdown',function(e){
+    var w=wrapOf(e); if(!w) return;
+    begin(w,e.clientX,e.clientY,e.pointerId);
+    try{w.setPointerCapture(e.pointerId);}catch(_){ }
+  },{passive:true});
+  document.addEventListener('pointermove',function(e){
+    if(!drag || drag.id!==e.pointerId) return;
+    var dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+    if(!drag.active){
+      if(Math.abs(dx)<5 && Math.abs(dy)<5) return;
+      if(Math.abs(dx)<=Math.abs(dy)){drag=null;return;}
+      drag.active=true;
+    }
+    if(drag.active){e.preventDefault();drag.w.scrollLeft=drag.start-dx;}
+  },{passive:false});
+  document.addEventListener('pointerup',function(e){
+    if(!drag || drag.id!==e.pointerId) return;
+    var w=drag.w;
+    if(drag.active){
+      w.__gtBillingMoved=true;
+      setTimeout(function(){if(w)w.__gtBillingMoved=false;},450);
+    }
+    try{w.releasePointerCapture(e.pointerId);}catch(_){ }
+    drag=null;
+  },{passive:true});
+  document.addEventListener('touchstart',function(e){
+    var w=wrapOf(e); if(!w || !e.touches.length) return;
+    var t=e.touches[0]; touch={w:w,x:t.clientX,y:t.clientY,start:w.scrollLeft,active:false};
+  },{passive:true});
+  document.addEventListener('touchmove',function(e){
+    if(!touch || !e.touches.length) return;
+    var t=e.touches[0],dx=t.clientX-touch.x,dy=t.clientY-touch.y;
+    if(!touch.active){
+      if(Math.abs(dx)<5 && Math.abs(dy)<5)return;
+      if(Math.abs(dx)<=Math.abs(dy)){touch=null;return;}
+      touch.active=true;
+    }
+    if(touch.active){e.preventDefault();touch.w.scrollLeft=touch.start-dx;}
+  },{passive:false});
+  document.addEventListener('touchend',function(){
+    if(touch && touch.active){
+      var w=touch.w; w.__gtBillingMoved=true;
+      setTimeout(function(){if(w)w.__gtBillingMoved=false;},450);
+    }
+    touch=null;
+  },{passive:true});
+  document.addEventListener('click',function(e){
+    var w=wrapOf(e);
+    if(w && w.__gtBillingMoved){e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();w.__gtBillingMoved=false;}
+  },true);
 })();
 </script>
 </body>

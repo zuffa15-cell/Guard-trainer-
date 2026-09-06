@@ -7991,6 +7991,7 @@ function saveMemberProfile(id,isNew=false){
 let activeUserRole=localStorage.getItem('gt-user-role')||'trainer';
 let isAdminUser=localStorage.getItem('gt-is-admin')!=='false';
 function isAdmin(){return activeUserRole==='admin';}
+function isTrainer(){return activeUserRole==='trainer';}
 function canEditTrainerProfile(){return isAdmin();}
 let headTrainerSelected='ALL';
 function isAdminTesting(){ return localStorage.getItem('gt-admin-testing')==='true'; }

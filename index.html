@@ -10495,6 +10495,9 @@ const billingDeleteOrder=Object.create(null);
 // Mazania, ktoré práve prebiehajú. Chránia serverový dokument pred tým,
 // aby ho paralelný lokálny persist znovu naplnil starým záznamom.
 const billingDeleteInFlight=new Set();
+// Vyúčtovania, ktoré práve ukladá tréner. Realtime snapshot nesmie dočasne
+// odstrániť lokálne uložený nový záznam, kým sa jeho transakcia nepotvrdí.
+const billingSaveInFlight=new Map();
 try{
   const x=JSON.parse(originalGetItem(BILLING_DELETE_ORDER_KEY)||'{}');
   if(x&&typeof x==='object') Object.assign(billingDeleteOrder,x);
@@ -10752,7 +10755,31 @@ function initBillingDirectSync(){
             else if(Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)){ seen.set(key,r); updated++; }
           }catch(e){}
         });
-        const merged=Array.from(seen.values());
+        let merged=Array.from(seen.values());
+        // Ak tréner práve uložil nový záznam, starší realtime snapshot ho môže
+        // na chvíľu ešte neobsahovať. Zachovaj preto lokálny pending záznam až
+        // do potvrdenia serverovej transakcie. Tým sa zobrazí v „Moje vyúčtovanie“
+        // okamžite a nezmizne pri medzičasovom snapshot-e.
+        if(billingSaveInFlight.size){
+          const pendingByKey=new Map();
+          billingSaveInFlight.forEach((pending, ck)=>{
+            if(pending && !Number(billingDeleteOrder[ck]||0)) pendingByKey.set(ck,pending);
+          });
+          merged=merged.filter(r=>!pendingByKey.has(billingRecordCanonicalKey(r)));
+          pendingByKey.forEach((pending, ck)=>{
+            if(!Number(billingDeleteOrder[ck]||0)) merged.push(pending);
+          });
+          // Zachovaj rovnakú deduplikáciu podľa dátum+skupina ako server.
+          const pendingSeen=new Map();
+          merged.forEach(r=>{
+            const d=parsePaymentDate(r.date);
+            const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+            const k=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+            const prev=pendingSeen.get(k);
+            if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) pendingSeen.set(k,r);
+          });
+          merged=Array.from(pendingSeen.values());
+        }
         // Synchronizácia musí vedieť aj ZMAZAŤ starý lokálny záznam.
         // Predtým sa záznam odstránený trénerom na serveri neobjavil v remote,
         // ale stará kópia na zariadení admina/hlavného trénera zostala navždy,
@@ -11377,15 +11404,27 @@ function saveTrainingBilling(saveButton){
     });
     monthlyBillingRecords.push(originalRecord);
   }
-  // Lokálny zoznam uložíme hneď, ale priamy cloud merge z persistMonthlyBillingRecords
-  // zámerne preskočíme. Server zapíše nasledujúca transakcia, aby starší async
-  // zápis z prvého tréningu nemohol prepísať druhý tréning.
+  // Lokálny záznam je autoritatívny pre práve otvorenú obrazovku trénera.
+  // Označ ho ako pending, aby ho starší realtime snapshot dočasne neodstránil.
+  billingSaveInFlight.set(recordCanonical, record);
   persistMonthlyBillingRecords(true);
-  // KRITICKÉ: neposielaj iba cez oneskorený všeobecný sync. Tento zápis ide
-  // okamžite na autoritatívny billing dokument, aby hlavný tréner aj ostatné
-  // zariadenia dostali zmenu cez realtime listener bez veľkého refresha.
+  // Okamžite prekresli „Moje vyúčtovanie“ – bez čakania na veľký refresh.
+  try{
+    if(typeof renderMonthlyBilling==='function'){
+      renderMonthlyBilling();
+      try{ history.replaceState(null,'','#trainer-month'); }catch(e){ location.hash='trainer-month'; }
+    }
+  }catch(e){ console.warn('Okamžité zobrazenie nového vyúčtovania:',e); }
+  // KRITICKÉ: zápis ide okamžite na autoritatívny billing dokument.
   saveBillingRecordToServerNow(record).then(ok=>{
+    billingSaveInFlight.delete(recordCanonical);
     if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
+    // Po potvrdení ešte raz prekresli aktuálny zoznam, ale bez zmeny obrazovky.
+    try{ if(typeof renderMonthlyBilling==='function' && location.hash==='#trainer-month') renderMonthlyBilling(); }catch(e){}
+  }).catch(err=>{
+    billingSaveInFlight.delete(recordCanonical);
+    console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
+    try{ if(typeof renderMonthlyBilling==='function' && location.hash==='#trainer-month') renderMonthlyBilling(); }catch(e){}
   });
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
@@ -11393,11 +11432,12 @@ function saveTrainingBilling(saveButton){
     saveButton.classList.add('billing-saved');
     saveButton.textContent='✓ ULOŽENÉ';
   }
-  setTimeout(function(){
+  // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
+  // ani na ďalší veľký refresh zariadenia.
+  try{
     location.hash='trainer-month';
-    try{ window.dispatchEvent(new HashChangeEvent('hashchange')); }
-    catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
-  },1500);
+    if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
+  }catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
   return false;
 }
 

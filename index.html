@@ -44,7 +44,6 @@ try {
     cloudEnabled = true;
     console.log("✅ Firebase pripojené - sync zapnutý");
     initCloudSync();
-    [250,1200,3000,7000].forEach(ms=>setTimeout(()=>{try{syncAllMembersToCloud();}catch(e){}},ms));
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 
@@ -52,92 +51,6 @@ const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
 const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-billing-delete-order-v1','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-delete-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
-
-// ===== ROBUSTNÁ SYNCHRONIZÁCIA ČLENOV =====
-// Členovia sú spoločný zoznam. Pri štarte ani pri ukladaní sa nesmie nikdy
-// zahodiť lokálny člen len preto, že druhé zariadenie má staršiu kópiu.
-async function syncAllMembersToCloud(){
-  try{
-    if(!db || !cloudEnabled) return false;
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
-
-    // ČLENOVIA: vždy zlúč lokálnu a cloudovú kópiu podľa ID.
-    // Lokálny člen, ktorý cloud ešte nepozná, sa NESMIE stratiť.
-    // Pri existujúcom ID rozhoduje individuálny čas uloženia.
-    const readJson=(raw,fallback)=>{try{const x=raw?JSON.parse(raw):fallback;return x;}catch(e){return fallback;}};
-    const localMembersRaw=originalGetItem(MEMBERS_STORAGE_KEY)||'[]';
-    const localMembers=Array.isArray(readJson(localMembersRaw,[]))?readJson(localMembersRaw,[]):[];
-    const localOrder=readJson(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}',{})||{};
-    const localDelete=readJson(originalGetItem('gt-member-delete-order-v1')||'{}',{})||{};
-
-    let resultMembers=[];
-    let resultOrder={};
-    let resultDelete={};
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      const remoteMembers=Array.isArray(readJson(data[MEMBERS_STORAGE_KEY],[]))?readJson(data[MEMBERS_STORAGE_KEY],[]):[];
-      const remoteOrder=readJson(data[MEMBER_SAVE_ORDER_KEY]||'{}',{})||{};
-      const remoteDelete=readJson(data['gt-member-delete-order-v1']||'{}',{})||{};
-
-      const byId=new Map();
-      const cleanMember=m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;};
-      localMembers.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),cleanMember(m));});
-      remoteMembers.forEach(m=>{
-        if(!m||m.id==null)return;
-        const id=String(m.id);
-        const lt=Number(localOrder[id]||0), rt=Number(remoteOrder[id]||0);
-        if(!byId.has(id) || rt>lt) byId.set(id,cleanMember(m));
-      });
-
-      resultOrder={...remoteOrder};
-      Object.keys(localOrder).forEach(id=>resultOrder[id]=Math.max(Number(resultOrder[id]||0),Number(localOrder[id]||0)));
-      resultDelete={...remoteDelete};
-      Object.keys(localDelete).forEach(id=>resultDelete[id]=Math.max(Number(resultDelete[id]||0),Number(localDelete[id]||0)));
-
-      resultMembers=[];
-      byId.forEach((m,id)=>{
-        const savedAt=Number(resultOrder[id]||0);
-        const deletedAt=Number(resultDelete[id]||0);
-        if(deletedAt>0 && deletedAt>=savedAt) return;
-        resultMembers.push(m);
-      });
-
-      tx.set(ref,{
-        [MEMBERS_STORAGE_KEY]:JSON.stringify(resultMembers),
-        [MEMBER_SAVE_ORDER_KEY]:JSON.stringify(resultOrder),
-        'gt-member-delete-order-v1':JSON.stringify(resultDelete),
-        _lastUpdateBy:firebase.auth().currentUser?.uid||'unknown',
-        _updatedAt:Date.now()
-      },{merge:true});
-    });
-
-    // Po úspešnej transakcii zapíš výsledný spoločný zoznam aj lokálne.
-    // Tým sa druhé zariadenie po ďalšom refreshe nevráti na svoju starú kópiu.
-    const raw=JSON.stringify(resultMembers);
-    isApplyingRemote=true;
-    try{
-      originalSetItem(MEMBERS_STORAGE_KEY,raw);
-      originalSetItem(MEMBER_SAVE_ORDER_KEY,JSON.stringify(resultOrder));
-      originalSetItem('gt-member-delete-order-v1',JSON.stringify(resultDelete));
-      const byId=new Map(resultMembers.map(m=>[String(m.id),m]));
-      membersData.splice(0,membersData.length,...resultMembers.map(m=>({...m})));
-      normalizeAllMembers();
-    }finally{ isApplyingRemote=false; }
-    try{
-      if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers();
-    }catch(e){}
-    console.log('☁️ Spoločný zoznam členov synchronizovaný:',resultMembers.length);
-    return true;
-  }catch(e){
-    console.warn('Guard Trainer: spoločná synchronizácia členov zlyhala',e);
-    return false;
-  }
-}
-function ensureMemberCloudInitialized(){
-  return syncAllMembersToCloud();
-}
-
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -172,12 +85,6 @@ function initCloudSync(){
     if(!doc.exists) return;
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
-    // Každý prijatý cloud snapshot členov ešte raz prežen cez transakčné
-    // zjednotenie. Tým sa 199 vs. 204 nemôže ustáliť na dvoch rôznych zoznamoch.
-    if(Object.prototype.hasOwnProperty.call(data,MEMBERS_STORAGE_KEY)){
-      clearTimeout(window._memberUnionSyncTimer);
-      window._memberUnionSyncTimer=setTimeout(()=>{try{syncAllMembersToCloud();}catch(e){}},50);
-    }
     if(!data) return;
     if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
       // moje vlastné zmeny - ignoruj
@@ -6819,26 +6726,25 @@ function persistMembersData(changedMemberId=null){
   try{
     const previousRaw=originalGetItem(MEMBERS_STORAGE_KEY);
     let previous=[];
-    try{const p=previousRaw?JSON.parse(previousRaw):[];if(Array.isArray(p))previous=p;}catch(e){}
+    try{ const p=previousRaw?JSON.parse(previousRaw):[]; if(Array.isArray(p)) previous=p; }catch(e){}
     const prevById=new Map(previous.map(m=>[String(m?.id),m]));
     const changedIds=new Set();
     if(changedMemberId!=null) changedIds.add(String(changedMemberId));
-    membersData.forEach(m=>{
-      if(!m||m.id==null)return;
-      const old=prevById.get(String(m.id));
-      if(JSON.stringify(old)!==JSON.stringify(m))changedIds.add(String(m.id));
-    });
-    previous.forEach(m=>{
-      if(m&&m.id!=null&&!membersData.some(x=>String(x?.id)===String(m.id)))changedIds.add(String(m.id));
-    });
-    originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
-    changedIds.forEach(id=>markMemberSaved(id));
-    // Dôležité: synchronizuj priamo celý zoznam transakciou. Nepoužívaj iba
-    // všeobecný cloud push, ktorý môže byť v momente uloženia ešte oneskorený.
-    if(db && cloudEnabled){
-      [0,500,2000,5000].forEach(ms=>setTimeout(()=>{try{syncAllMembersToCloud();}catch(e){}},ms));
+    if(previousRaw){
+      membersData.forEach(m=>{
+        if(!m||m.id==null)return;
+        const old=prevById.get(String(m.id));
+        if(JSON.stringify(old)!==JSON.stringify(m)) changedIds.add(String(m.id));
+      });
+      previous.forEach(m=>{
+        if(m&&m.id!=null && !membersData.some(x=>String(x?.id)===String(m.id))) changedIds.add(String(m.id));
+      });
     }
-  }catch(e){console.warn('Guard Trainer: members could not be persisted',e);}
+    // MUSÍ ísť cez obalený localStorage.setItem, aby sa spustil pôvodný cloud sync.
+    localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+    changedIds.forEach(id=>markMemberSaved(id));
+  }
+  catch(e){ console.warn('Guard Trainer: members could not be persisted',e); }
 }
 function loadPersistedMembers(){
   try{

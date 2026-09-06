@@ -3887,6 +3887,29 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .stats-stack-legend span{display:inline-flex;align-items:center;gap:4px}
 .stats-stack-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
 </style>
+
+<style id="v675-monthly-billing-horizontal-scroll">
+/* v675: Mobilné horizontálne posúvanie tabuľky „Moje vyúčtovanie“.
+   Wrapper ostáva jediným horizontálnym scroll kontajnerom. */
+.monthly-table-wrap{
+  width:100%!important;
+  max-width:100%!important;
+  overflow-x:auto!important;
+  overflow-y:hidden!important;
+  -webkit-overflow-scrolling:touch!important;
+  overscroll-behavior-x:contain!important;
+  touch-action:pan-x!important;
+  scrollbar-width:thin!important;
+  box-sizing:border-box!important;
+  position:relative!important;
+}
+.monthly-table-wrap .monthly-table{
+  width:max-content!important;
+  min-width:1100px!important;
+  max-width:none!important;
+  table-layout:auto!important;
+}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -12943,6 +12966,60 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+
+<script>
+/* v675: Fallback pre Android WebView/Chrome, kde klikateľné riadky tabuľky
+   niekedy pohltia dotyk a natívny horizontal scroll sa nespustí. */
+(function installMonthlyBillingTouchScroll(){
+  if(window.__gtMonthlyBillingTouchScrollV675) return;
+  window.__gtMonthlyBillingTouchScrollV675=true;
+  let active=null;
+  let suppressClickUntil=0;
+  function bind(root){
+    if(!root || root.__gtScrollBound) return;
+    root.__gtScrollBound=true;
+    let startX=0,startScroll=0,moved=false;
+    root.addEventListener('touchstart',function(e){
+      if(!e.touches || e.touches.length!==1) return;
+      const t=e.touches[0];
+      startX=t.clientX;
+      startScroll=root.scrollLeft;
+      moved=false;
+      active=root;
+    },{passive:true});
+    root.addEventListener('touchmove',function(e){
+      if(active!==root || !e.touches || e.touches.length!==1) return;
+      const x=e.touches[0].clientX;
+      const dx=x-startX;
+      if(Math.abs(dx)>5) moved=true;
+      if(moved){
+        root.scrollLeft=startScroll-dx;
+        suppressClickUntil=Date.now()+450;
+      }
+    },{passive:true});
+    root.addEventListener('touchend',function(){
+      if(active===root) active=null;
+      if(moved) suppressClickUntil=Date.now()+450;
+    },{passive:true});
+    root.addEventListener('touchcancel',function(){
+      if(active===root) active=null;
+      if(moved) suppressClickUntil=Date.now()+450;
+    },{passive:true});
+    root.addEventListener('click',function(e){
+      if(Date.now()<suppressClickUntil){
+        e.preventDefault();
+        e.stopPropagation();
+        if(e.stopImmediatePropagation) e.stopImmediatePropagation();
+      }
+    },true);
+  }
+  function scan(){
+    document.querySelectorAll('.monthly-table-wrap').forEach(bind);
+  }
+  scan();
+  new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});
+})();
+</script>
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
@@ -15769,78 +15846,3 @@ body.head-readonly .bottom.head-billing-nav .nav-attendance { display: none !imp
   .photo-btn{left:51px!important;right:auto!important;}
 }
 </style>
-<style id="v675-monthly-billing-horizontal-scroll">
-/* v675: Mobilné horizontálne posúvanie tabuľky „Moje vyúčtovanie“.
-   Wrapper ostáva jediným horizontálnym scroll kontajnerom. */
-.monthly-table-wrap{
-  width:100%!important;
-  max-width:100%!important;
-  overflow-x:auto!important;
-  overflow-y:hidden!important;
-  -webkit-overflow-scrolling:touch!important;
-  overscroll-behavior-x:contain!important;
-  touch-action:pan-x!important;
-  scrollbar-width:thin!important;
-  box-sizing:border-box!important;
-  position:relative!important;
-}
-.monthly-table-wrap .monthly-table{
-  width:max-content!important;
-  min-width:1100px!important;
-  max-width:none!important;
-  table-layout:auto!important;
-}
-</style>
-<script>
-/* v675: Fallback pre Android WebView/Chrome, kde klikateľné riadky tabuľky
-   niekedy pohltia dotyk a natívny horizontal scroll sa nespustí. */
-(function installMonthlyBillingTouchScroll(){
-  if(window.__gtMonthlyBillingTouchScrollV675) return;
-  window.__gtMonthlyBillingTouchScrollV675=true;
-  let active=null;
-  let suppressClickUntil=0;
-  function bind(root){
-    if(!root || root.__gtScrollBound) return;
-    root.__gtScrollBound=true;
-    let startX=0,startScroll=0,moved=false;
-    root.addEventListener('touchstart',function(e){
-      if(!e.touches || e.touches.length!==1) return;
-      const t=e.touches[0];
-      startX=t.clientX;
-      startScroll=root.scrollLeft;
-      moved=false;
-      active=root;
-    },{passive:true});
-    root.addEventListener('touchmove',function(e){
-      if(active!==root || !e.touches || e.touches.length!==1) return;
-      const x=e.touches[0].clientX;
-      const dx=x-startX;
-      if(Math.abs(dx)>5) moved=true;
-      if(moved){
-        root.scrollLeft=startScroll-dx;
-        suppressClickUntil=Date.now()+450;
-      }
-    },{passive:true});
-    root.addEventListener('touchend',function(){
-      if(active===root) active=null;
-      if(moved) suppressClickUntil=Date.now()+450;
-    },{passive:true});
-    root.addEventListener('touchcancel',function(){
-      if(active===root) active=null;
-      if(moved) suppressClickUntil=Date.now()+450;
-    },{passive:true});
-    root.addEventListener('click',function(e){
-      if(Date.now()<suppressClickUntil){
-        e.preventDefault();
-        e.stopPropagation();
-        if(e.stopImmediatePropagation) e.stopImmediatePropagation();
-      }
-    },true);
-  }
-  function scan(){
-    document.querySelectorAll('.monthly-table-wrap').forEach(bind);
-  }
-  scan();
-  new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});
-})();
-</script>

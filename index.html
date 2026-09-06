@@ -6782,10 +6782,10 @@ function persistMembersData(changedMemberId=null){
           }
         }catch(e){}
         markMemberSaved(id);
-        saveMemberDirectCloud(saved,false);
+        syncMemberChangeToSharedCloud(saved,false);
       }else if(deletedAt>0){
         const old=previous.find(m=>String(m?.id)===String(id));
-        if(old) saveMemberDirectCloud(old,true);
+        if(old) syncMemberChangeToSharedCloud(old,true);
       }
     });
   }
@@ -7002,7 +7002,7 @@ function deleteMemberFromList(id){
    originalSetItem('gt-member-delete-order-v1',JSON.stringify(dels));
  }catch(e){ console.warn('Guard Trainer: member delete tombstone failed',e); }
  persistMembersData(id);
- try{saveMemberDirectCloud(m,true);}catch(e){}
+ try{syncMemberChangeToSharedCloud(m,true);}catch(e){}
  try{pushToCloud(true);}catch(e){}
  renderMembers();
  toast('Člen bol presunutý do archívu');

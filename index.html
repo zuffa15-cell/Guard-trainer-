@@ -10553,6 +10553,10 @@ function saveTrainingBilling(saveButton){
     monthlyBillingRecords.push(originalRecord);
   }
   persistMonthlyBillingRecords();
+  // KRITICKÉ: samotné persistMonthlyBillingRecords() uloží vyúčtovanie iba lokálne.
+  // Po uložení trénerom ho okamžite odošli do spoločného cloudu, aby ho
+  // hlavný tréner na inom zariadení videl pod trénerom, ktorý dochádzku uložil.
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),100); }catch(e){ console.warn('Cloud zápis vyúčtovania zlyhal',e); }
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
   if(saveButton){

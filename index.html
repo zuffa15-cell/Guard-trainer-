@@ -3890,7 +3890,9 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    // Prihlásenie musí nastaviť skutočnú rolu používateľa.
    // Predtým zostávala na zariadení stará rola ADMIN.
    try{
-     const role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
+     let role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
+     const loginName=String(account && (account.display_name||account.name) || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+     if(loginName==='HLAVNY TRENER' || loginName==='HLAVNY TRÉNER') role='head';
      if(typeof activeUserRole!=='undefined'){
        activeUserRole=(role==='admin')?'admin':(role==='head'?'head':'trainer');
        localStorage.setItem('gt-user-role',activeUserRole);
@@ -3984,6 +3986,12 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    error.style.display='none';
    const pass=(input.value||'').trim();
    if(pass==='Admin' || pass==='admin' || pass.toLowerCase()==='admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+   // Hlavný tréner je samostatná rola, nie profil reálneho trénera.
+   // Prihlásenie heslom Hlavny preto musí otvoriť jeho vlastný Domov.
+   if(pass.toLowerCase()==='hlavny' || pass.toLowerCase()==='hlavný tréner' || pass.toLowerCase()==='hlavny trener'){
+     openApp({role:'head',display_name:'Hlavný tréner'});
+     return;
+   }
    // Viktor fallback - ak heslo je viktor, skús nájsť Viktora bez ohľadu na heslo
    if(pass.toLowerCase().includes('viktor') || pass.toLowerCase()==='viktor123'){
      try{
@@ -14440,8 +14448,10 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     let account=null;
     try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
     try{ repairPeterOnuscakIdentity(); account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
-    const role=account && account.role ? String(account.role).toLowerCase() :
+    let role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
+    const loginName=String(account && (account.display_name||account.name) || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+    if(loginName==='HLAVNY TRENER') role='head';
     const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
      if(finalRole==='trainer' && account && account.trainer_id!=null){
        try{

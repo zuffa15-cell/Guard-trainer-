@@ -151,7 +151,7 @@ function initCloudSync(){
             })).filter(t=>{
               if(t && t.isTemplate===true) return false;
               const n=String(t?.full||t?.name||'').trim().toUpperCase();
-              return n!=='VZOROVÝ TRÉNER' && n!=='VZOROVY TRENER';
+              return n!=='VZOROVÝ TRÉNER' && n!=='VZOROVY TRENER' && n!=='TRÉNER 1' && n!=='TRENER 1' && n!=='TRÉNER 2' && n!=='TRENER 2';
             });
             trainersData.splice(0,trainersData.length,...clean);
             originalSetItem('gt-trainers-authoritative-v2',JSON.stringify(clean));
@@ -4159,7 +4159,12 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
        }
      }catch(e){}
    }
-   return trainers.find(x=>x && x.active!==false && String(x.loginPassword||'')===pass) || null;
+   return trainers.find(x=>{
+     if(!x || x.active===false || Number(x.id)===101 || Number(x.id)===102) return false;
+     const nn=String(x.full||x.name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+     if(nn==='TRENER 1' || nn==='TRENER 2') return false;
+     return String(x.loginPassword||'')===pass;
+   }) || null;
  }
  function openTrainer(t){
    // Rola sa berie výhradne z konkrétneho profilu, ktorý bol nájdený podľa hesla.
@@ -4212,7 +4217,13 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
          try{
            if(data['gt-trainer-login-passwords']){
              const pw=JSON.parse(data['gt-trainer-login-passwords']);
-             const found=Object.values(pw||{}).find(x=>x && x.active!==false && !x.isTemplate && String(x.password||'').trim()===pass);
+             const found=Object.values(pw||{}).find(x=>{
+               if(!x || x.active===false || x.isTemplate) return false;
+               const nn=String(x.name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+               const iid=Number(x.id);
+               if(nn==='TRENER 1' || nn==='TRENER 2' || iid===101 || iid===102) return false;
+               return String(x.password||'').trim()===pass;
+             });
              if(found){
                const live=(trainersData||[]).find(t=>Number(t.id)===Number(found.id));
                finish({
@@ -5871,8 +5882,6 @@ async function syncTrainerProfileToCloud(trainer){
 
 const trainersData=[
  {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
- {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
- {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
 ];
 const TRAINERS_STORAGE_KEY='gt-trainers-v395';
 try{
@@ -5898,10 +5907,9 @@ try{
       active: t.active===false || String(t.status||'').toUpperCase()==='NEAKTÍVNA' ? false : true,
       status: t.active===false || String(t.status||'').toUpperCase()==='NEAKTÍVNA' ? 'NEAKTÍVNA' : 'AKTÍVNA'
     })).filter(t=>t.full||t.name);
-    const legacyDemo=new Set(['Martin Lukáč','Tomáš Varga','Ivana Kováčová','Róbert Horváth','Martin L.','Tomáš V.','Ivana K.','Róbert H.']);
+    const legacyDemo=new Set(['Martin Lukáč','Tomáš Varga','Ivana Kováčová','Róbert Horváth','Martin L.','Tomáš V.','Ivana K.','Róbert H.','Tréner 1','Trener 1','Tréner 2','Trener 2']);
     const cleaned=normalized.filter(t=>!legacyDemo.has(String(t.full||t.name||'').trim()));
-    if(!cleaned.some(t=>String(t.full||t.name||'').trim()==='Tréner 1')) cleaned.push({id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'});
-    if(!cleaned.some(t=>String(t.full||t.name||'').trim()==='Tréner 2')) cleaned.push({id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'});
+    // Testovacie účty Tréner 1/Tréner 2 sa už nikdy automaticky nevytvárajú.
     trainersData.splice(0,trainersData.length,...cleaned);
     persistTrainersData();
   }
@@ -14138,6 +14146,17 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     if(o){ o.style.display='none'; o.classList.remove('gt-show'); }
     var saved=null;
     try{ saved=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
+    // Nikdy neotváraj aplikáciu pod starým testovacím účtom. Ak sa na zariadení
+    // zachoval Tréner 1/2 z testovania, reláciu zahodíme a používateľ sa musí
+    // prihlásiť znova. Tým sa nemôže Peter Onuščák omylom zobraziť ako Tréner 1.
+    try{
+      const dn=String(saved?.display_name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+      const tid=Number(saved?.trainer_id);
+      if(dn==='TRENER 1' || dn==='TRENER 2' || tid===101 || tid===102){
+        ['gt-simple-login-account','gt-simple-login-step1','gt-current-trainer-id','gt-current-trainer-snapshot','gt-user-role','gt-is-admin','gt-admin-testing','gt-test-trainer','gt-head-trainer-access','gt-auth-initialized'].forEach(function(k){try{localStorage.removeItem(k)}catch(e){}});
+        saved=null;
+      }
+    }catch(e){}
     var hasSession=!!(saved && (saved.role || saved.trainer_id!=null));
 
     // Hard authentication gate: without a remembered account the application

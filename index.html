@@ -4812,15 +4812,22 @@ function getCurrentTestTrainerGroupCodes(){
   return p ? new Set((p.groups||[]).map(c=>String(c).trim().toUpperCase()).filter(Boolean)) : null;
 }
 function getCurrentTrainerDisplayName(){
-  // Pri reálnom prihlásení používame ID účtu uložené prihlasovaním.
-  // Starý CURRENT_TRAINER_NAME / testovací profil je iba fallback pre staré testovanie.
+  // IDENTITA PRIHLÁSENÉHO TRÉNERA: ak účet obsahuje meno, najprv ho
+  // spárujeme s profilom trénera. Je to dôležité pri starých účtoch, kde
+  // mohol zostať nesprávny trainer_id (napr. Peter -> Anatolii).
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const norm=s=>String(s||'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    const display=String(account?.display_name||'').trim();
+    if(display){
+      const byName=(trainersData||[]).find(t=>norm(t.full||t.name)===norm(display));
+      if(byName) return String(byName.full||byName.name||display).trim();
+    }
     if(account && account.trainer_id!=null){
       const id=Number(account.trainer_id);
       const t=(trainersData||[]).find(x=>Number(x.id)===id);
       if(t) return String(t.full||t.name||'').trim();
-      if(account.display_name) return String(account.display_name).trim();
+      if(display) return display;
     }
   }catch(e){}
   const p=getCurrentTestTrainerProfile();
@@ -4830,6 +4837,13 @@ function getCurrentTrainerDisplayName(){
 function currentTrainerAccountId(){
   try{
     const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const norm=s=>String(s||'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    const display=String(a?.display_name||'').trim();
+    // Meno prihláseného účtu má prednosť pred historickým trainer_id.
+    if(display){
+      const byName=(trainersData||[]).find(t=>norm(t.full||t.name)===norm(display));
+      if(byName && byName.id!=null) return Number(byName.id);
+    }
     const id=Number(a&&a.trainer_id);
     return Number.isFinite(id)?id:null;
   }catch(e){ return null; }
@@ -10681,15 +10695,18 @@ function cleanupMayJune2026TrainingData(){
 cleanupMayJune2026TrainingData();
 
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
-  const target=String(trainerName||'').trim().toUpperCase();
-  // FINANČNÝ ZÁZNAM VLASTNÍ IDENTITA TRÉNERA PODĽA trainerId.
-  // Meno používame iba ako spätnú kompatibilitu pre staré záznamy bez ID.
-  const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===target);
+  const target=String(trainerName||'').trim().replace(/\s+/g,' ').toUpperCase();
+  // VYÚČTOVANIE VLASTNÍ KONKRÉTNY TRÉNER, KTORÝ HO ULOŽIL.
+  // Meno je autoritatívne, pretože staršie/opravené účty môžu mať historicky
+  // nesprávny trainerId. trainerId používame ako záložnú identitu iba pri
+  // záznamoch, ktoré nemajú použiteľné meno trénera.
+  const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().replace(/\s+/g,' ').toUpperCase()===target);
   const targetId=profile&&profile.id!=null?Number(profile.id):null;
   let rows=monthlyBillingRecords.filter(r=>{
+    const rowName=String(r?.trainer||r?.name||'').trim().replace(/\s+/g,' ').toUpperCase();
+    if(rowName) return rowName===target;
     const rid=r&&r.trainerId!=null?Number(r.trainerId):null;
-    if(targetId!=null && Number.isFinite(targetId) && rid!=null && Number.isFinite(rid)) return rid===targetId;
-    return (rid==null || !Number.isFinite(rid)) && String(r?.trainer||r?.name||'').trim().toUpperCase()===target;
+    return targetId!=null && Number.isFinite(targetId) && rid===targetId;
   }).filter(r=>{
     const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
   });

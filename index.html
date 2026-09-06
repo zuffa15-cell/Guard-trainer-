@@ -10611,7 +10611,7 @@ async function deleteMyBillingRecord(recordKey, btn){
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;
 
-function persistMonthlyBillingRecords(){
+function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
   try{
     normalizeMonthlyBillingRecords();
     const seen=new Map();
@@ -10643,6 +10643,7 @@ function persistMonthlyBillingRecords(){
       }
     }catch(e){}
     try{
+      if(skipDirectBillingCloud) return;
       if(typeof db!=='undefined' && db){
         // Merge s existujúcim cloudom - neprepisuj menším
         db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
@@ -11376,7 +11377,10 @@ function saveTrainingBilling(saveButton){
     });
     monthlyBillingRecords.push(originalRecord);
   }
-  persistMonthlyBillingRecords();
+  // Lokálny zoznam uložíme hneď, ale priamy cloud merge z persistMonthlyBillingRecords
+  // zámerne preskočíme. Server zapíše nasledujúca transakcia, aby starší async
+  // zápis z prvého tréningu nemohol prepísať druhý tréning.
+  persistMonthlyBillingRecords(true);
   // KRITICKÉ: neposielaj iba cez oneskorený všeobecný sync. Tento zápis ide
   // okamžite na autoritatívny billing dokument, aby hlavný tréner aj ostatné
   // zariadenia dostali zmenu cez realtime listener bez veľkého refresha.
@@ -13201,13 +13205,15 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
     let owns=false;
     const rid=Number(r.trainerId);
     const myId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
-    if(myId!=null && Number.isFinite(rid) && rid>0){
-      owns=Number(rid)===Number(myId);
-    }else if(String(r.savedBy||'').trim()){
-      owns=norm(r.savedBy)===norm(me);
-    }else{
-      owns=norm(r.trainer)===norm(me);
-    }
+    const author=String(r.savedBy||'').trim();
+    const trainerField=String(r.trainer||'').trim();
+    // Vlastníkom vyúčtovania je tréner, ktorý ho skutočne uložil.
+    // trainerId používame ako identifikátor, ale uložený autor a meno trénera
+    // sú tiež platné identity. Toto platí pre všetkých trénerov.
+    const byAuthor=author ? norm(author)===norm(me) : false;
+    const byTrainerField=trainerField ? norm(trainerField)===norm(me) : false;
+    const byId=(myId!=null && Number.isFinite(rid) && rid>0) ? Number(rid)===Number(myId) : false;
+    owns=byAuthor || byTrainerField || byId;
     if(owns) result.push(r);
   });
 

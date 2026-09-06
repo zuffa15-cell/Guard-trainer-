@@ -44,6 +44,7 @@ try {
     cloudEnabled = true;
     console.log("✅ Firebase pripojené - sync zapnutý");
     initCloudSync();
+    setTimeout(()=>loadBillingDirectCloud(),800);
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 
@@ -539,6 +540,53 @@ function initCloudSync(){
 
   // v846: staré cloudové member kľúče sa NESMÚ migrovať.
     syncEnabled = true;
+}
+
+
+// AUTORITATÍVNE VYÚČTOVANIE: každý uložený tréning má aj vlastný cloudový dokument.
+// Tým sa záznam jedného trénera nestratí pri zlučovaní spoločného snapshotu.
+const BILLING_DIRECT_COLLECTION = 'guard-trainer-billing';
+function billingDirectDocId(record){
+  const d=parsePaymentDate(record?.date);
+  const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record?.date||'');
+  const trainer=String(record?.trainer||'').trim().toUpperCase();
+  const group=String(record?.group||'').trim().toUpperCase();
+  return encodeURIComponent(`${trainer}|${dk}|${group}`).replace(/%/g,'_');
+}
+function saveBillingDirectCloud(record){
+  try{
+    if(!db || !cloudEnabled || !record) return;
+    const id=billingDirectDocId(record);
+    if(!id) return;
+    return db.collection(BILLING_DIRECT_COLLECTION).doc(id).set({
+      ...record, _directUpdatedAt:Date.now()
+    },{merge:true});
+  }catch(e){ console.warn('Priamy cloud zápis vyúčtovania zlyhal',e); }
+}
+function loadBillingDirectCloud(){
+  try{
+    if(!db || !cloudEnabled) return;
+    db.collection(BILLING_DIRECT_COLLECTION).get().then(snap=>{
+      let changed=false;
+      snap.forEach(doc=>{
+        const r=doc.data();
+        if(!r || !r.trainer || !r.date || !r.group) return;
+        const ck=billingDirectDocId(r);
+        const idx=(monthlyBillingRecords||[]).findIndex(x=>billingDirectDocId(x)===ck);
+        if(idx<0){ monthlyBillingRecords.push(r); changed=true; }
+        else if(Number(r.savedAt||r._directUpdatedAt||0)>=Number(monthlyBillingRecords[idx].savedAt||0)){
+          if(JSON.stringify(monthlyBillingRecords[idx])!==JSON.stringify(r)){ monthlyBillingRecords[idx]=r; changed=true; }
+        }
+      });
+      if(changed){
+        normalizeMonthlyBillingRecords();
+        persistMonthlyBillingRecords();
+        if(isHeadTrainer() && location.hash==='#trainer-month'){
+          try{ renderHeadTrainerBilling(); }catch(e){}
+        }
+      }
+    }).catch(e=>console.warn('Načítanie priamych vyúčtovaní zlyhalo',e));
+  }catch(e){}
 }
 
 function pushToCloud(force = false){
@@ -10280,6 +10328,7 @@ function upsertBillingRecordFromAttendance(){
   if(idx>=0) monthlyBillingRecords[idx]=record; else monthlyBillingRecords.push(record);
   normalizeMonthlyBillingRecords();
   persistMonthlyBillingRecords();
+  try{ saveBillingDirectCloud(record); }catch(e){}
 }
 let billingReturnScreen='attendance';
 function openTrainingBillingFromAttendance(){
@@ -10557,6 +10606,7 @@ function saveTrainingBilling(saveButton){
   // Po uložení trénerom ho okamžite odošli do spoločného cloudu, aby ho
   // hlavný tréner na inom zariadení videl pod trénerom, ktorý dochádzku uložil.
   try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(isAdmin()),100); }catch(e){ console.warn('Cloud zápis vyúčtovania zlyhal',e); }
+  try{ saveBillingDirectCloud(record); }catch(e){}
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
   if(saveButton){

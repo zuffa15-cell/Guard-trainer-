@@ -605,7 +605,7 @@ async function saveBillingRecordToSharedCloud(record){
     };
     const map=new Map();
     rows.forEach(r=>{
-      if(!r || !r.trainer || !r.date || !r.group) return;
+      if(!r || !r.trainer || !r.date || !r.group || isMainTrainerBillingRow(r)) return;
       const k=canon(r), prev=map.get(k);
       if(!prev || Number(r.savedAt||0)>=Number(prev.savedAt||0)) map.set(k,r);
     });
@@ -697,7 +697,7 @@ async function refreshBillingFromSharedCloud(shouldRender=false){
     };
     const map=new Map();
     [...local,...remote].forEach(r=>{
-      if(!r || !r.trainer || !r.date || !r.group) return;
+      if(!r || !r.trainer || !r.date || !r.group || isMainTrainerBillingRow(r)) return;
       const k=canon(r), prev=map.get(k);
       if(!prev || Number(r.savedAt||0)>=Number(prev.savedAt||0)) map.set(k,r);
     });
@@ -732,7 +732,7 @@ function loadBillingDirectCloud(){
       let changed=false;
       snap.forEach(doc=>{
         const r=doc.data();
-        if(!r || !r.trainer || !r.date || !r.group) return;
+        if(!r || !r.trainer || !r.date || !r.group || isMainTrainerBillingRow(r)) return;
         const ck=billingDirectDocId(r);
         const idx=(monthlyBillingRecords||[]).findIndex(x=>billingDirectDocId(x)===ck);
         if(idx<0){ monthlyBillingRecords.push(r); changed=true; }
@@ -8628,14 +8628,15 @@ function getAttendanceOwner(date=attendanceState.date,group=attendanceState.grou
     const x=map[attendanceOwnerKey(date,group)];
     if(x && x.trainer) return x;
   }catch(e){}
+  if(isAdmin() || isHeadTrainer()) return null;
   return getCurrentTrainerIdentityForAttendance();
 }
 
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
-  // Vlastníkom vyúčtovania je vždy tréner, ktorý práve túto dochádzku zapísal
-  // a uložil. Neurčujeme ho podľa skupiny ani podľa trénera uvedeného v rozvrhu.
-  markAttendanceOwner(attendanceState.date,attendanceState.group);
+  // Vlastníkom vyúčtovania je iba skutočný tréner, ktorý dochádzku uložil.
+  // Administrátor ani hlavný tréner nesmú prepísať vlastníka tréningu na seba.
+  if(!isAdmin() && !isHeadTrainer()) markAttendanceOwner(attendanceState.date,attendanceState.group);
   const before=trainingAttendanceByGroup[key]||null;
   // Vždy vytvoríme nový kompletný snapshot a až potom ho priradíme ku kľúču.
   // Starý kód zapisoval do trainingAttendanceByGroup[key] a následne tento
@@ -10297,6 +10298,7 @@ try{
   const savedBilling=JSON.parse(localStorage.getItem('gt-monthly-billing-v221')||'null');
   if(Array.isArray(savedBilling)){
     monthlyBillingRecords=savedBilling.filter(r=>{
+      if(isMainTrainerBillingRow(r)) return false;
       const d=parsePaymentDate(r?.date);
       if(!d) return false;
       const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
@@ -11021,6 +11023,17 @@ function billingTrainingGroupKey(record){
   const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record&&record.date||'');
   return `${dk}|${String(record&&record.group||'').trim().toUpperCase()}`;
 }
+function isMainTrainerBillingRow(record){
+  try{
+    const head=(typeof getMainTrainerProfile==='function') ? getMainTrainerProfile() : null;
+    if(!head || !record) return false;
+    const rid=record.trainerId!=null?Number(record.trainerId):null;
+    if(head.id!=null && rid!=null && Number(head.id)===rid) return true;
+    const norm=v=>String(v||'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    const headNames=new Set([norm(head.full),norm(head.name),'HLAVNY TRENER']);
+    return headNames.has(norm(record.trainer||record.name));
+  }catch(e){ return false; }
+}
 function getStoredAttendanceOwners(){
   try{ const raw=originalGetItem(ATTENDANCE_OWNER_KEY)||localStorage.getItem(ATTENDANCE_OWNER_KEY)||'{}'; const obj=JSON.parse(raw); return obj&&typeof obj==='object'?obj:{}; }catch(e){ return {}; }
 }
@@ -11029,7 +11042,7 @@ function getAuthoritativeBillingRowsForMonth(month,year){
   const owners=getStoredAttendanceOwners();
   const groups=new Map();
   source.forEach(r=>{
-    if(!r || r.substituteReference) return;
+    if(!r || r.substituteReference || isMainTrainerBillingRow(r)) return;
     const d=parsePaymentDate(r.date);
     if(!d || d.month!==Number(month) || d.year!==Number(year)) return;
     const key=billingTrainingGroupKey(r);
@@ -11052,6 +11065,7 @@ function getAuthoritativeBillingRowsForMonth(month,year){
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().replace(/\s+/g,' ').toUpperCase();
   const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().replace(/\s+/g,' ').toUpperCase()===target);
+  if(profile && typeof isMainTrainerProfile==='function' && isMainTrainerProfile(profile)) return [];
   const targetId=profile&&profile.id!=null?Number(profile.id):null;
   let rows=getAuthoritativeBillingRowsForMonth(month,year).filter(r=>{
     const rowName=String(r?.trainer||r?.name||'').trim().replace(/\s+/g,' ').toUpperCase();

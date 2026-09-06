@@ -178,6 +178,10 @@ function initCloudSync(){
       let memberDataChanged=false;
       SYNC_KEYS.forEach(k=>{
         if(isGTLocalAuthKey(k)) return;
+        // Členovia sa spracujú naraz v bloku gt-member-save-order-v1.
+        // Následná položka gt-members-real-2026-v847 nesmie tento zlúčený
+        // zoznam prepísať starým cloudovým snapshotom.
+        if((k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') && memberSyncHandled) return;
         if(!data[k]) return;
         if(k==='gt-attendance-delete-order-v1'){
           let remoteDel={};

@@ -11262,8 +11262,15 @@ async function saveBillingRecordToServerNow(record){
         rows=rows.filter(r=>String(r?.key||'')!==String(record.key||''));
       }
       rows.push(record);
-      // Zachovaj najnovšiu mazaciu mapu zo servera.
+      // NOVÉ ULOŽENIE MUSÍ ZRUŠIŤ STARÚ MAZACIU ZNAČKU.
+      // Ak Peter (alebo iný tréner) v minulosti vymazal rovnaké vyúčtovanie,
+      // v billingDeleteOrder zostala značka. Nové vyúčtovanie sa síce správne
+      // zapísalo na server, ale klient ho potom pri merge znovu odfiltroval.
+      // Pri novom uložení je preto tento záznam jednoznačne platný a jeho
+      // starú delete značku treba odstrániť aj priamo v serverovej transakcii.
       const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+      const recordCanonicalKey=`${norm(record.trainer)}|${dk}|${group}`;
+      delete del[recordCanonicalKey];
       tx.set(ref,{records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
     });
     console.log('✅ Vyúčtovanie okamžite uložené na server:',record.trainer,record.date,record.group);
@@ -11371,6 +11378,15 @@ function saveTrainingBilling(saveButton){
     return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
   };
   const recordCanonical=canonicalBillingKey(record);
+  // KRITICKÁ OPRAVA: ak bol tento konkrétny záznam v minulosti vymazaný,
+  // zruš jeho starú mazaciu značku. Inak by ho render/merge po novom uložení
+  // znova skryl, hoci server už obsahuje nové vyúčtovanie.
+  try{
+    if(billingDeleteOrder[recordCanonical]){
+      delete billingDeleteOrder[recordCanonical];
+      persistBillingDeleteOrder();
+    }
+  }catch(e){}
   // JEDNO PRAVIDLO: jeden tréning (dátum + skupina) patrí iba trénerovi,
   // ktorý práve uložil dochádzku/vyúčtovanie. Ak boli staršie kópie uložené
   // pod iným trénerom, aktuálne uloženie ich nahradí.

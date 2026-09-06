@@ -464,6 +464,9 @@ function initCloudSync(){
             }
           }
         }catch(e){}
+        // Spoločný snapshot nesmie zmazať samostatné autoritatívne billing záznamy.
+        // Po jeho prijatí vždy znova načítame priame cloudové vyúčtovania.
+        try{ if(typeof loadBillingDirectCloud==='function') setTimeout(()=>loadBillingDirectCloud(),50); }catch(e){}
         try{
           const rawOffers=originalGetItem('gt-substitution-offers');
           if(rawOffers){
@@ -771,7 +774,13 @@ function pushToCloud(force = false){
         payload['gt-training-attendance-history']=JSON.stringify(out);
       }
     }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
-    return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
+    return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true}).then(result=>{
+      // Po úspešnom pushnutí spoločného snapshotu znovu zosynchronizuj
+      // samostatné billing dokumenty, ktoré sú autoritatívne pre jednotlivé
+      // tréningy.
+      try{ if(typeof loadBillingDirectCloud==='function') setTimeout(()=>loadBillingDirectCloud(),50); }catch(e){}
+      return result;
+    });
   }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
     .catch(e=>console.warn('Push fail',e));
 }

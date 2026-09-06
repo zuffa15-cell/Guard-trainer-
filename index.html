@@ -44,12 +44,14 @@ try {
     cloudEnabled = true;
     console.log("✅ Firebase pripojené - sync zapnutý");
     initCloudSync();
+    setTimeout(()=>{try{initDirectMemberSyncV2();}catch(e){console.warn("Member direct sync init",e);}},0);
     [250,1200,3000,7000].forEach(ms=>setTimeout(()=>{try{syncAllMembersToCloud();}catch(e){}},ms));
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
+const MEMBER_DIRECT_CLOUD_COLLECTION_V2 = "guard-trainer-members-v2";
 const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-billing-delete-order-v1','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-delete-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
@@ -143,6 +145,144 @@ async function syncAllMembersToCloud(){
     }
   }
 }
+
+// ===== ČLENOVIA – PRIAMY REALTIME KANÁL V2 =====
+// Každý člen má vlastný Firestore dokument. Tým sa pri pridaní/úprave jedného
+// člena neposiela celý zoznam a jedno zariadenie už nemôže prepísať druhému
+// jeho nový záznam starou lokálnou kópiou.
+let memberDirectV2Ready=false;
+let memberDirectV2Applying=false;
+let memberDirectV2Queued=new Set();
+let memberDirectV2DeleteQueued=new Set();
+let memberDirectV2Unsub=null;
+
+function memberDirectV2Clean(m){
+  if(!m || m.id==null) return null;
+  const x={...m};
+  delete x.applicationFile;
+  delete x.applicationFileName;
+  return x;
+}
+
+async function memberDirectV2Write(id){
+  try{
+    if(!db || !cloudEnabled || id==null) { if(id!=null) memberDirectV2Queued.add(String(id)); return false; }
+    const m=membersData.find(x=>String(x?.id)===String(id));
+    if(!m) return false;
+    const clean=memberDirectV2Clean(m);
+    await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION_V2).doc(String(id)).set({
+      memberId:String(id), member:clean, updatedAt:Date.now(), deleted:false
+    },{merge:true});
+    memberDirectV2Queued.delete(String(id));
+    return true;
+  }catch(e){
+    memberDirectV2Queued.add(String(id));
+    console.warn('Guard Trainer: priamy zápis člena zlyhal',e);
+    return false;
+  }
+}
+
+async function memberDirectV2WriteDelete(id){
+  try{
+    if(!db || !cloudEnabled || id==null) { memberDirectV2DeleteQueued.add(String(id)); return false; }
+    await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION_V2).doc(String(id)).set({
+      memberId:String(id), updatedAt:Date.now(), deleted:true
+    },{merge:true});
+    memberDirectV2DeleteQueued.delete(String(id));
+    return true;
+  }catch(e){
+    memberDirectV2DeleteQueued.add(String(id));
+    console.warn('Guard Trainer: priamy delete člena zlyhal',e);
+    return false;
+  }
+}
+
+async function seedMemberDirectV2(){
+  try{
+    if(!db || !cloudEnabled || typeof membersData==='undefined') return;
+    const snap=await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION_V2).get();
+    const remoteIds=new Set();
+    snap.forEach(d=>remoteIds.add(String(d.id)));
+    // Zapíš iba lokálne členy, ktoré ešte v novom kanáli nie sú.
+    // Existujúce cloudové záznamy nikdy neprepíšeme pri štarte.
+    const batch=db.batch(); let n=0;
+    const now=Date.now();
+    membersData.forEach(m=>{
+      if(!m||m.id==null || remoteIds.has(String(m.id))) return;
+      const ref=db.collection(MEMBER_DIRECT_CLOUD_COLLECTION_V2).doc(String(m.id));
+      batch.set(ref,{memberId:String(m.id),member:memberDirectV2Clean(m),updatedAt:now,deleted:false},{merge:true});
+      n++;
+      if(n>=450) return;
+    });
+    if(n) await batch.commit();
+    memberDirectV2Ready=true;
+    console.log('☁️ Priamy kanál členov pripravený, doplnené:',n);
+  }catch(e){ console.warn('Guard Trainer: seed členov V2 zlyhal',e); }
+}
+
+function applyDirectMemberSnapshotV2(doc){
+  try{
+    const d=doc.data()||{};
+    const id=String(d.memberId||doc.id);
+    if(!id) return;
+    const remoteUpdated=Number(d.updatedAt||0);
+    if(!remoteUpdated) return;
+    const remoteDeleted=!!d.deleted;
+    const remoteMember=memberDirectV2Clean(d.member);
+    const idx=membersData.findIndex(m=>String(m?.id)===id);
+    // Lokálny save-order je autoritatívny iba pre lokálne zmeny, ktoré sú
+    // novšie než cloudový dokument. Inak musí nový cloudový člen prísť hneď.
+    let localUpdated=0;
+    try{ const o=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}')||{}; localUpdated=Number(o[id]||0); }catch(e){}
+    if(localUpdated>remoteUpdated) return;
+
+    memberDirectV2Applying=true;
+    try{
+      if(remoteDeleted){
+        if(idx>=0) membersData.splice(idx,1);
+        return;
+      }
+      if(!remoteMember) return;
+      if(idx>=0) membersData[idx]=remoteMember;
+      else membersData.push(remoteMember);
+      normalizeMember(remoteMember);
+      const order=(()=>{try{return JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}')||{};}catch(e){return {};}})();
+      order[id]=remoteUpdated;
+      originalSetItem(MEMBER_SAVE_ORDER_KEY,JSON.stringify(order));
+      originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+      try{applyMemberApplicationFiles();}catch(e){}
+    }finally{memberDirectV2Applying=false;}
+    try{ if(typeof renderMembers==='function') renderMembers(); }catch(e){}
+  }catch(e){console.warn('Guard Trainer: prijatie člena V2 zlyhalo',e);}
+}
+
+function initDirectMemberSyncV2(){
+  if(memberDirectV2Unsub || !db || !cloudEnabled) return;
+  memberDirectV2Unsub=db.collection(MEMBER_DIRECT_CLOUD_COLLECTION_V2).onSnapshot(snap=>{
+    snap.docChanges().forEach(ch=>{
+      if(ch.type==='added' || ch.type==='modified') applyDirectMemberSnapshotV2(ch.doc);
+      else if(ch.type==='removed'){
+        // Firestore removal nie je používané pre mazanie členov; mazanie je tombstone.
+      }
+    });
+  },err=>console.warn('Guard Trainer: realtime kanál členov V2 zlyhal',err));
+  setTimeout(()=>seedMemberDirectV2(),250);
+  setInterval(()=>{
+    if(!cloudEnabled) return;
+    const ids=[...memberDirectV2Queued]; ids.forEach(id=>memberDirectV2Write(id));
+    const dels=[...memberDirectV2DeleteQueued]; dels.forEach(id=>memberDirectV2WriteDelete(id));
+  },1000);
+}
+
+function syncMemberDirectV2(id){
+  if(id==null) return;
+  memberDirectV2Write(id);
+}
+function syncDeletedMemberDirectV2(id){
+  if(id==null) return;
+  memberDirectV2WriteDelete(id);
+}
+
 function ensureMemberCloudInitialized(){ return syncAllMembersToCloud(); }
 
 
@@ -6915,7 +7055,10 @@ function persistMembersData(changedMemberId=null){
       if(m&&m.id!=null&&!membersData.some(x=>String(x?.id)===String(m.id)))changedIds.add(String(m.id));
     });
     originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
-    changedIds.forEach(id=>markMemberSaved(id));
+    changedIds.forEach(id=>{
+      markMemberSaved(id);
+      if(!isApplyingRemote) syncMemberDirectV2(id);
+    });
     // Dôležité: synchronizuj priamo celý zoznam transakciou. Nepoužívaj iba
     // všeobecný cloud push, ktorý môže byť v momente uloženia ešte oneskorený.
     if(db && cloudEnabled){
@@ -7129,6 +7272,7 @@ function deleteMemberFromList(id){
    originalSetItem('gt-member-delete-order-v1',JSON.stringify(dels));
  }catch(e){ console.warn('Guard Trainer: member delete tombstone failed',e); }
  persistMembersData(id);
+ try{syncDeletedMemberDirectV2(id);}catch(e){}
  try{pushToCloud(true);}catch(e){}
  renderMembers();
  toast('Člen bol presunutý do archívu');

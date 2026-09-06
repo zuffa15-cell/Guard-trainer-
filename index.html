@@ -44,7 +44,13 @@ try {
     cloudEnabled = true;
     console.log("✅ Firebase pripojené - sync zapnutý");
     initCloudSync();
-    setTimeout(()=>loadBillingDirectCloud(),800);
+    // Po dokončení anonymného Firebase prihlásenia musí zariadenie okamžite
+    // odoslať aj lokálne uložené vyúčtovania. Pri staršej logike sa mohlo stať,
+    // že tréner uložil vyúčtovanie ešte pred dokončením auth; persist bol lokálny
+    // a neskôr sa už do cloudu neposlal. Preto po pripojení vždy flushneme celý
+    // lokálny billing snapshot a potom načítame priame billing záznamy.
+    setTimeout(()=>{try{pushToCloud(true);}catch(e){console.warn('Initial billing cloud flush failed',e);}},300);
+    setTimeout(()=>loadBillingDirectCloud(),1000);
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 

@@ -10569,9 +10569,15 @@ async function deleteMyBillingRecord(recordKey, btn){
     btn.textContent='⏳';
   }
 
-  // KRITICKÉ: mazanie sa nesmie iba naplánovať. Po kliknutí počkáme na
-  // úspešný zápis na server a až potom akciu uzavrieme. Serverová mazacia
-  // značka zároveň zabráni, aby sa starý záznam z iného zariadenia vrátil.
+  // UI sa musí zmeniť OKAMŽITE. Serverový zápis môže chvíľu trvať,
+  // ale používateľ nesmie čakať na sieť, aby tréning zmizol zo zoznamu.
+  // Mazacia značka už bola zapísaná lokálne a persistMonthlyBillingRecords()
+  // ju rešpektuje, takže následná synchronizácia nemá starý záznam vrátiť.
+  try{ renderMonthlyBilling(); }catch(e){ console.warn('okamžité prekreslenie vyúčtovania zlyhalo',e); }
+
+  // KRITICKÉ: mazanie sa zároveň musí dokončiť na serveri. Po lokálnom
+  // odstránení počkáme na cloudový zápis; mazacia značka zabráni návratu
+  // starého záznamu z iného zariadenia.
   let cloudOk=false;
   try{
     if(typeof db!=='undefined' && db && typeof syncDeletedBillingRecordToCloud==='function'){
@@ -10602,7 +10608,9 @@ async function deleteMyBillingRecord(recordKey, btn){
     btn.disabled=false;
   }
   toast(cloudOk ? '✓ Vyúčtovanie bolo vymazané a zmena bola odoslaná na server.' : 'Vyúčtovanie bolo vymazané lokálne. Server momentálne nie je dostupný.');
-  renderMonthlyBilling();
+  // Ešte raz prekresli po dokončení serverovej operácie, aby UI zostalo
+  // konzistentné aj pri návrate z asynchrónnej synchronizácie.
+  try{ renderMonthlyBilling(); }catch(e){}
   return false;
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;

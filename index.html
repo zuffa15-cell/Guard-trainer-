@@ -6786,6 +6786,8 @@ function loadPersistedMembers(){
   normalizeAllMembers();
   return false;
 }
+// DÔLEŽITÉ: načítaj uložený spoločný zoznam ešte pred prvým vykreslením aplikácie.
+loadPersistedMembers();
 applyMemberApplicationFiles();
 persistMemberApplicationFiles();
 persistPaymentHistory();

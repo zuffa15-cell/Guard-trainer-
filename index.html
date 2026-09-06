@@ -10492,6 +10492,9 @@ normalizeMonthlyBillingRecords();
 })();
 const BILLING_DELETE_ORDER_KEY='gt-billing-delete-order-v1';
 const billingDeleteOrder=Object.create(null);
+// Mazania, ktoré práve prebiehajú. Chránia serverový dokument pred tým,
+// aby ho paralelný lokálny persist znovu naplnil starým záznamom.
+const billingDeleteInFlight=new Set();
 try{
   const x=JSON.parse(originalGetItem(BILLING_DELETE_ORDER_KEY)||'{}');
   if(x&&typeof x==='object') Object.assign(billingDeleteOrder,x);
@@ -10508,35 +10511,40 @@ function persistBillingDeleteOrder(){
     localStorage.setItem(BILLING_DELETE_ORDER_KEY,raw);
   }catch(e){}
 }
-function syncDeletedBillingRecordToCloud(canonical, deletedAt){
+async function syncDeletedBillingRecordToCloud(canonical, deletedAt){
   try{
-    if(typeof db==='undefined' || !db) return Promise.resolve(false);
+    if(typeof db==='undefined' || !db) return false;
     const ck=String(canonical||'');
     const at=Number(deletedAt||Date.now());
     const billingDoc=db.collection('guard-trainer-billing').doc('all');
-    return billingDoc.get().then(doc=>{
+    // ATOMICKÉ mazanie: read + filter + delete-order sa vykoná v jednej
+    // transakcii. Paralelný zápis z iného zariadenia tak nemôže vrátiť starý riadok.
+    await db.runTransaction(async tx=>{
+      const doc=await tx.get(billingDoc);
       const data=doc.exists?(doc.data()||{}):{};
-      let del={};
-      try{ if(data.billingDeleteOrder && typeof data.billingDeleteOrder==='object') del={...data.billingDeleteOrder}; }catch(e){}
-      del[ck]=Math.max(Number(del[ck]||0),at);
       let rows=Array.isArray(data.records)?data.records.slice():[];
       rows=rows.filter(r=>billingRecordCanonicalKey(r)!==ck);
-      return billingDoc.set({records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false}).then(()=>{
-        // Rovnakú mazaciu značku zapíš aj do hlavného shared dokumentu.
-        try{
-          const raw=originalGetItem('gt-monthly-billing-v221')||'[]';
-          let localRows=[]; try{localRows=JSON.parse(raw)||[];}catch(e){}
-          localRows=localRows.filter(r=>billingRecordCanonicalKey(r)!==ck);
-          const payload={
-            'gt-monthly-billing-v221':JSON.stringify(localRows),
-            'gt-billing':JSON.stringify(localRows),
-            'gt-billing-delete-order-v1':JSON.stringify(del)
-          };
-          return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true}).catch(e=>console.warn('main billing delete cloud fail',e));
-        }catch(e){ return null; }
-      });
-    }).catch(e=>{ console.warn('billing delete cloud read fail',e); });
-  }catch(e){ console.warn('billing delete cloud sync fail',e); return Promise.resolve(false); }
+      const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+      del[ck]=Math.max(Number(del[ck]||0),at);
+      tx.set(billingDoc,{records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
+    });
+    // Po úspešnom autoritatívnom zápise aktualizuj aj starší shared mirror.
+    try{
+      const raw=originalGetItem('gt-monthly-billing-v221')||'[]';
+      let localRows=[]; try{localRows=JSON.parse(raw)||[];}catch(e){}
+      localRows=localRows.filter(r=>billingRecordCanonicalKey(r)!==ck);
+      const delJson=JSON.stringify(billingDeleteOrder);
+      await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set({
+        'gt-monthly-billing-v221':JSON.stringify(localRows),
+        'gt-billing':JSON.stringify(localRows),
+        'gt-billing-delete-order-v1':delJson
+      },{merge:true});
+    }catch(e){ console.warn('main billing delete cloud mirror fail',e); }
+    return true;
+  }catch(e){
+    console.warn('billing delete cloud transaction fail',e);
+    return false;
+  }
 }
 async function deleteMyBillingRecord(recordKey, btn){
   const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
@@ -10553,12 +10561,23 @@ async function deleteMyBillingRecord(recordKey, btn){
 
   const canonical=billingRecordCanonicalKey(r);
   const deletedAt=Date.now();
+  billingDeleteInFlight.add(canonical);
   billingDeleteOrder[canonical]=Math.max(Number(billingDeleteOrder[canonical]||0),deletedAt);
   persistBillingDeleteOrder();
 
   // Najprv okamžite odstráň z lokálneho zoznamu, aby používateľ videl zmenu hneď.
   monthlyBillingRecords=monthlyBillingRecords.filter(x=>billingRecordCanonicalKey(x)!==canonical);
-  persistMonthlyBillingRecords();
+  // UI hlavného/trénera sa má zmeniť okamžite, bez čakania na Firestore.
+  try{ renderMonthlyBilling(); }catch(e){}
+  try{
+    if(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer())){
+      const detail=window.__gtHeadTrainerDetail;
+      if(document.querySelector('.monthly-billing-page') && detail && typeof renderHeadTrainerDetail==='function')
+        renderHeadTrainerDetail(detail.trainerName,detail.month,detail.year);
+      else if(document.querySelector('.head-billing') && typeof renderHeadTrainerBilling==='function')
+        renderHeadTrainerBilling();
+    }
+  }catch(e){}
 
   if(btn){
     btn.disabled=true;
@@ -10569,48 +10588,25 @@ async function deleteMyBillingRecord(recordKey, btn){
     btn.textContent='⏳';
   }
 
-  // UI sa musí zmeniť OKAMŽITE. Serverový zápis môže chvíľu trvať,
-  // ale používateľ nesmie čakať na sieť, aby tréning zmizol zo zoznamu.
-  // Mazacia značka už bola zapísaná lokálne a persistMonthlyBillingRecords()
-  // ju rešpektuje, takže následná synchronizácia nemá starý záznam vrátiť.
-  try{ renderMonthlyBilling(); }catch(e){ console.warn('okamžité prekreslenie vyúčtovania zlyhalo',e); }
-
-  // KRITICKÉ: mazanie sa zároveň musí dokončiť na serveri. Po lokálnom
-  // odstránení počkáme na cloudový zápis; mazacia značka zabráni návratu
-  // starého záznamu z iného zariadenia.
+  // KRITICKÉ: mazanie sa nesmie iba naplánovať. Po kliknutí počkáme na
+  // úspešný zápis na server a až potom akciu uzavrieme. Serverová mazacia
+  // značka zároveň zabráni, aby sa starý záznam z iného zariadenia vrátil.
   let cloudOk=false;
   try{
     if(typeof db!=='undefined' && db && typeof syncDeletedBillingRecordToCloud==='function'){
-      await syncDeletedBillingRecordToCloud(canonical,deletedAt);
-      cloudOk=true;
+      cloudOk=await syncDeletedBillingRecordToCloud(canonical,deletedAt);
     }
   }catch(e){
     console.warn('billing delete cloud sync fail',e);
   }
 
-  // Druhý okamžitý zápis mazacej značky do hlavného cloudu ako poistka.
-  try{
-    if(typeof db!=='undefined' && db && typeof CLOUD_COLLECTION!=='undefined'){
-      const delJson=JSON.stringify(billingDeleteOrder);
-      const rowsJson=JSON.stringify(monthlyBillingRecords);
-      const payload={
-        'gt-billing-delete-order-v1':delJson,
-        'gt-monthly-billing-v221':rowsJson,
-        'gt-billing':rowsJson
-      };
-      await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
-      cloudOk=true;
-    }
-  }catch(e){ console.warn('main billing delete cloud fail',e); }
-
+  billingDeleteInFlight.delete(canonical);
   if(btn){
     btn.textContent='🗑';
     btn.disabled=false;
   }
   toast(cloudOk ? '✓ Vyúčtovanie bolo vymazané a zmena bola odoslaná na server.' : 'Vyúčtovanie bolo vymazané lokálne. Server momentálne nie je dostupný.');
-  // Ešte raz prekresli po dokončení serverovej operácie, aby UI zostalo
-  // konzistentné aj pri návrate z asynchrónnej synchronizácie.
-  try{ renderMonthlyBilling(); }catch(e){}
+  renderMonthlyBilling();
   return false;
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;
@@ -10620,7 +10616,7 @@ function persistMonthlyBillingRecords(){
     normalizeMonthlyBillingRecords();
     const seen=new Map();
     const norm=s=>String(s||'').trim().toUpperCase();
-    const rows=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
+    const rows=(Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).filter(r=>!billingDeleteInFlight.has(billingRecordCanonicalKey(r)));
     rows.forEach(r=>{
       const d=parsePaymentDate(r.date);
       const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
@@ -10657,6 +10653,7 @@ function persistMonthlyBillingRecords(){
           // výslovne vymazaný. Server môže mať ešte starú kópiu.
           existing=existing.filter(r=>{
             const dk=billingRecordCanonicalKey(r);
+            if(billingDeleteInFlight.has(dk)) return false;
             return Number(billingDeleteOrder[dk]||0) < Number(r.savedAt||r.updatedAt||0);
           });
           const seen=new Map();
@@ -10688,6 +10685,7 @@ function persistMonthlyBillingRecords(){
           persistBillingDeleteOrder();
           const finalRows=Array.from(seen.values()).filter(r=>{
             const k=billingRecordCanonicalKey(r);
+            if(billingDeleteInFlight.has(k)) return false;
             return Number(billingDeleteOrder[k]||0) < Number(r.savedAt||r.updatedAt||0);
           });
           db.collection('guard-trainer-billing').doc('all').set({records: finalRows, billingDeleteOrder: {...billingDeleteOrder}, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', finalRows.length)).catch(e=>console.warn('billing cloud fail', e));

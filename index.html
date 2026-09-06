@@ -5089,7 +5089,9 @@ function getCurrentTrainerDisplayName(){
   try{
     const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
     const norm=s=>String(s||'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
-    const display=String(account?.display_name||'').trim();
+    let display=String(account?.display_name||'').trim();
+    const displayNorm=display.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+    if(displayNorm==='TRENER 1' || displayNorm==='TRENER 2') display='';
     if(display){
       const byName=(trainersData||[]).find(t=>norm(t.full||t.name)===norm(display));
       if(byName) return String(byName.full||byName.name||display).trim();
@@ -5113,7 +5115,9 @@ function currentTrainerAccountId(){
   try{
     const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
     const norm=s=>String(s||'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
-    const display=String(a?.display_name||'').trim();
+    let display=String(a?.display_name||'').trim();
+    const displayNorm=display.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+    if(displayNorm==='TRENER 1' || displayNorm==='TRENER 2') display='';
     // Meno prihláseného účtu má prednosť pred historickým trainer_id.
     if(display){
       const byName=(trainersData||[]).find(t=>norm(t.full||t.name)===norm(display));
@@ -6108,7 +6112,7 @@ function removeObsoleteTemplateTrainer(){
     const cleaned=trainersData.filter(t=>{
       if(t && t.isTemplate===true) return false;
       const n=String(t?.full||t?.name||'').trim().toUpperCase();
-      return n!=='VZOROVÝ TRÉNER' && n!=='VZOROVY TRENER';
+      return n!=='VZOROVÝ TRÉNER' && n!=='VZOROVY TRENER' && n!=='TRÉNER 1' && n!=='TRENER 1' && n!=='TRÉNER 2' && n!=='TRENER 2';
     });
     if(cleaned.length!==before){
       trainersData.splice(0,trainersData.length,...cleaned);
@@ -14141,6 +14145,13 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 
     let account=null;
     try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
+    try{
+      const dn=String(account?.display_name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+      if(dn==='TRENER 1' || dn==='TRENER 2'){
+        ['gt-simple-login-account','gt-simple-login-step1','gt-current-trainer-id','gt-current-trainer-snapshot','gt-test-trainer','gt-admin-testing'].forEach(k=>localStorage.removeItem(k));
+        account=null;
+      }
+    }catch(e){}
     let role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
     // Oprava starších session: účet Hlavný tréner musí vždy dostať vlastný dashboard,

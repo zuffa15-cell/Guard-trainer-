@@ -11170,6 +11170,51 @@ function forceMyBillingScreen(){
 }
 window.forceMyBillingScreen=forceMyBillingScreen;
 
+
+// Okamžitý autoritatívny zápis vyúčtovania na server.
+// Všetci tréneri používajú rovnaký mechanizmus. Nečaká sa na oneskorený
+// pushToCloud(); zmena sa zapíše priamo do guard-trainer-billing/all.
+async function saveBillingRecordToServerNow(record){
+  try{
+    if(typeof db==='undefined' || !db || !record) return false;
+    const ref=db.collection('guard-trainer-billing').doc('all');
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let rows=Array.isArray(data.records)?data.records.slice():[];
+      const norm=v=>String(v||'').trim().toUpperCase();
+      const d=parsePaymentDate(record.date);
+      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record.date||'');
+      const group=norm(record.group);
+      const isRef=r=>!!r?.substituteReference;
+      // Bežný tréning patrí iba trénerovi, ktorý ho práve uložil.
+      // Preto na serveri odstránime staré finančné kópie rovnakého dátumu+skupiny.
+      if(!isRef(record)){
+        rows=rows.filter(r=>{
+          if(isRef(r)) return true;
+          const rd=parsePaymentDate(r?.date);
+          const rdk=rd?`${rd.year}-${String(rd.month).padStart(2,'0')}-${String(rd.day).padStart(2,'0')}`:String(r?.date||'');
+          return !(rdk===dk && norm(r?.group)===group);
+        });
+      }else{
+        // Pri zástupe nechaj finančný záznam zástupcu a aktualizuj iba jeho
+        // informačný riadok, aby sa nepočítal dvakrát.
+        rows=rows.filter(r=>String(r?.key||'')!==String(record.key||''));
+      }
+      rows.push(record);
+      // Zachovaj najnovšiu mazaciu mapu zo servera.
+      const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+      tx.set(ref,{records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
+    });
+    console.log('✅ Vyúčtovanie okamžite uložené na server:',record.trainer,record.date,record.group);
+    return true;
+  }catch(e){
+    console.warn('❌ Okamžitý zápis vyúčtovania na server zlyhal:',e);
+    return false;
+  }
+}
+window.saveBillingRecordToServerNow=saveBillingRecordToServerNow;
+
 function saveTrainingBilling(saveButton){
   // Tréner môže spätne upraviť svoju vlastnú dochádzku a znovu uložiť
   // vyúčtovanie vrátane členského a registračného.
@@ -11314,6 +11359,12 @@ function saveTrainingBilling(saveButton){
     monthlyBillingRecords.push(originalRecord);
   }
   persistMonthlyBillingRecords();
+  // KRITICKÉ: neposielaj iba cez oneskorený všeobecný sync. Tento zápis ide
+  // okamžite na autoritatívny billing dokument, aby hlavný tréner aj ostatné
+  // zariadenia dostali zmenu cez realtime listener bez veľkého refresha.
+  saveBillingRecordToServerNow(record).then(ok=>{
+    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
+  });
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
   if(saveButton){

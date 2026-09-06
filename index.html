@@ -10538,7 +10538,7 @@ function syncDeletedBillingRecordToCloud(canonical, deletedAt){
     }).catch(e=>{ console.warn('billing delete cloud read fail',e); });
   }catch(e){ console.warn('billing delete cloud sync fail',e); return Promise.resolve(false); }
 }
-function deleteMyBillingRecord(recordKey, btn){
+async function deleteMyBillingRecord(recordKey, btn){
   const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
   const idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
   if(idx<0) return false;
@@ -10556,25 +10556,53 @@ function deleteMyBillingRecord(recordKey, btn){
   billingDeleteOrder[canonical]=Math.max(Number(billingDeleteOrder[canonical]||0),deletedAt);
   persistBillingDeleteOrder();
 
-  // Okamžite odstráň zo zobrazenia aj z lokálnych dát.
+  // Najprv okamžite odstráň z lokálneho zoznamu, aby používateľ videl zmenu hneď.
   monthlyBillingRecords=monthlyBillingRecords.filter(x=>billingRecordCanonicalKey(x)!==canonical);
   persistMonthlyBillingRecords();
 
-  // Červený kôš ostane krátko viditeľný ako potvrdenie akcie.
   if(btn){
+    btn.disabled=true;
     btn.classList.add('billing-delete-confirmed');
     btn.style.background='#c62828';
     btn.style.borderColor='#ff5252';
     btn.style.color='#fff';
-    btn.textContent='🗑';
+    btn.textContent='⏳';
   }
 
-  // Trvalá mazacia značka + odstránenie zo serverových kópií.
-  try{ syncDeletedBillingRecordToCloud(canonical,deletedAt); }
-  catch(e){ console.warn('billing delete cloud sync fail',e); }
+  // KRITICKÉ: mazanie sa nesmie iba naplánovať. Po kliknutí počkáme na
+  // úspešný zápis na server a až potom akciu uzavrieme. Serverová mazacia
+  // značka zároveň zabráni, aby sa starý záznam z iného zariadenia vrátil.
+  let cloudOk=false;
+  try{
+    if(typeof db!=='undefined' && db && typeof syncDeletedBillingRecordToCloud==='function'){
+      await syncDeletedBillingRecordToCloud(canonical,deletedAt);
+      cloudOk=true;
+    }
+  }catch(e){
+    console.warn('billing delete cloud sync fail',e);
+  }
 
-  toast('Vyúčtovanie bolo vymazané');
-  setTimeout(()=>renderMonthlyBilling(),50);
+  // Druhý okamžitý zápis mazacej značky do hlavného cloudu ako poistka.
+  try{
+    if(typeof db!=='undefined' && db && typeof CLOUD_COLLECTION!=='undefined'){
+      const delJson=JSON.stringify(billingDeleteOrder);
+      const rowsJson=JSON.stringify(monthlyBillingRecords);
+      const payload={
+        'gt-billing-delete-order-v1':delJson,
+        'gt-monthly-billing-v221':rowsJson,
+        'gt-billing':rowsJson
+      };
+      await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
+      cloudOk=true;
+    }
+  }catch(e){ console.warn('main billing delete cloud fail',e); }
+
+  if(btn){
+    btn.textContent='🗑';
+    btn.disabled=false;
+  }
+  toast(cloudOk ? '✓ Vyúčtovanie bolo vymazané a zmena bola odoslaná na server.' : 'Vyúčtovanie bolo vymazané lokálne. Server momentálne nie je dostupný.');
+  renderMonthlyBilling();
   return false;
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;

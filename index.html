@@ -11020,8 +11020,9 @@ function forceMyBillingScreen(){
 window.forceMyBillingScreen=forceMyBillingScreen;
 
 function saveTrainingBilling(saveButton){
-  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
-  // Vyúčtovanie sa pre rovnaký tréning vždy aktualizuje do jedného záznamu.
+  // Tréner môže spätne upraviť svoju vlastnú dochádzku a znovu uložiť
+  // vyúčtovanie vrátane členského a registračného.
+  // Pri opätovnom uložení sa existujúci záznam aktualizuje.
   // Tréner teda môže uložiť vyúčtovanie opakovane po zmene dochádzky.
   // Členské a registračné sa po potvrdení dochádzky nemenia – ich úpravu
   // riadi attendancePaymentEditGuard() a pri platbe zadanej Adminom je zákaz
@@ -11061,7 +11062,7 @@ function saveTrainingBilling(saveButton){
     otherPlusDate: attendanceState.date,
     otherMinusDate: attendanceState.date,
     gross:trainingSum+membershipSum+registrationSum+otherPlus-otherMinus,
-    trainerReward, clubAmount, trainingFee:trainingFee(), trainerRewardPerMember:trainerRewardPerMember(), trainingScheduleId:attendanceState.trainingScheduleId||null, substitute:false, locked:true,
+    trainerReward, clubAmount, trainingFee:trainingFee(), trainerRewardPerMember:trainerRewardPerMember(), trainingScheduleId:attendanceState.trainingScheduleId||null, substitute:false, locked:false,
     attendanceSnapshot:(attendanceState.members||[])
       .filter(m=>m.training)
       .map(m=>m.surname+'|'+m.name),

@@ -10820,7 +10820,13 @@ function initBillingDirectSync(){
         const currentRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
         const currentCount=(()=>{try{const x=JSON.parse(currentRaw)||[];return Array.isArray(x)?x.length:0;}catch(e){return 0;}})();
         let same=false;
-        try{ same=JSON.stringify(JSON.parse(currentRaw)||[])===JSON.stringify(merged); }catch(e){}
+        try{
+          const stableBillingList=(arr)=> (Array.isArray(arr)?arr:[]).map(r=>{
+            try{return {key:billingRecordCanonicalKey(r),data:JSON.stringify(r||{})};}
+            catch(e){return {key:'',data:JSON.stringify(r||{})};}
+          }).sort((a,b)=>(a.key+a.data).localeCompare(b.key+b.data));
+          same=JSON.stringify(stableBillingList(JSON.parse(currentRaw)||[]))===JSON.stringify(stableBillingList(merged));
+        }catch(e){}
         if(!same || added>0 || updated>0 || remote.length!==currentCount){
           console.log(`📥 [${source}] Vyúčtovanie = SERVER: nové ${added}, aktualizované ${updated}, celkom ${merged.length} (server ${remote.length})`);
           try{
@@ -10841,7 +10847,18 @@ function initBillingDirectSync(){
             const myBillingOpen=location.hash==='#trainer-month' || !!document.querySelector('.monthly-billing-page');
             if(myBillingOpen && typeof renderMonthlyBilling==='function' &&
                !(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer()))){
+              // Realtime snapshot nesmie používateľovi rozbiť práve otvorenú
+              // horizontálne posúvanú tabuľku. Zapamätaj polohu a po prekreslení
+              // ju obnov; zároveň sa sem dostaneme iba pri skutočnej zmene dát.
+              const _gtScrollWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+              const _gtScrollLeft=_gtScrollWrap ? _gtScrollWrap.scrollLeft : 0;
               renderMonthlyBilling();
+              if(_gtScrollLeft){
+                requestAnimationFrame(()=>{
+                  const w=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+                  if(w) w.scrollLeft=_gtScrollLeft;
+                });
+              }
             }
 
             // Realtime serverová zmena pre admina/hlavného trénera.

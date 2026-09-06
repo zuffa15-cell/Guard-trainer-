@@ -49,7 +49,7 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-billing-delete-order-v1','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-billing-delete-order-v1','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-delete-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // Zachovaj originál pred prepisom
@@ -180,6 +180,14 @@ function initCloudSync(){
         if(isGTLocalAuthKey(k)) return;
         if((k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') && memberSyncHandled) return;
         if(!data[k]) return;
+        if(k==='gt-attendance-delete-order-v1'){
+          let remoteDel={};
+          try{ remoteDel=JSON.parse(data[k]||'{}')||{}; }catch(e){}
+          Object.keys(remoteDel).forEach(key=>{ attendanceDeleteOrder[key]=Math.max(Number(attendanceDeleteOrder[key]||0),Number(remoteDel[key]||0)); });
+          persistAttendanceDeleteOrder();
+          changed=true;
+          return;
+        }
         if(k==='gt-training-attendance-history'){
           const localRaw=localAttendanceHistoryRaw;
           let remoteRaw=data[k];
@@ -195,6 +203,7 @@ function initCloudSync(){
             return out;
           };
           const lHist=canonicalizeMap(localHist), rHist=canonicalizeMap(remoteHist);
+          const remoteDeletes=(()=>{try{return JSON.parse(data['gt-attendance-delete-order-v1']||'{}')||{};}catch(e){return {};}})();
           const lOrder={}, rOrder={}, lAdmin={}, rAdmin={};
           Object.keys(localAttendanceOrder||{}).forEach(k=>{const c=canonicalAttendanceHistoryKey(k);lOrder[c]=Math.max(Number(lOrder[c]||0),Number(localAttendanceOrder[k]||0));});
           Object.keys(remoteAttendanceOrder||{}).forEach(k=>{const c=canonicalAttendanceHistoryKey(k);rOrder[c]=Math.max(Number(rOrder[c]||0),Number(remoteAttendanceOrder[k]||0));});
@@ -207,6 +216,8 @@ function initCloudSync(){
             const remoteAt=Number(rOrder[key]||0);
             const localAdminAt=Number(lAdmin[key]||0);
             const remoteAdminAt=Number(rAdmin[key]||0);
+            const delAt=Math.max(Number(attendanceDeleteOrder[key]||0),Number(remoteDeletes[key]||0));
+            if(delAt>=Math.max(localAt,remoteAt,localAdminAt,remoteAdminAt)){ delete merged[key]; return; }
             if(remoteAdminAt>localAdminAt && rHist[key]) merged[key]=rHist[key];
             else if(localAdminAt>remoteAdminAt && lHist[key]) merged[key]=lHist[key];
             else if(localAt>remoteAt && localAt>0) merged[key]=lHist[key]||{};
@@ -400,7 +411,7 @@ function initCloudSync(){
                 });
                 originalSetItem(k, JSON.stringify(merged));
                 try{ localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged)); }catch(e){}
-                try{ if(typeof trainersData!=='undefined'){ trainersData.splice(0,trainersData.length, ...merged); } }catch(e){}
+                try{ if(typeof trainersData!=='undefined'){ trainersData.splice(0,trainersData.length, ...merged.filter(t=>!isRemovedTrainerProfile(t) && !isTestTrainerAccount(t))); } }catch(e){}
                 changed=true;
               } else {
                 // Admin: prijmi len ak má cloud viac alebo rovnako, nikdy neprepisuj menším
@@ -417,7 +428,7 @@ function initCloudSync(){
                   });
                   originalSetItem(k, JSON.stringify(merged));
                   try{ localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged)); }catch(e){}
-                  try{ if(typeof trainersData!=='undefined' && merged.length>=local.length){ trainersData.splice(0,trainersData.length, ...merged); } }catch(e){}
+                  try{ if(typeof trainersData!=='undefined' && merged.length>=local.length){ trainersData.splice(0,trainersData.length, ...merged.filter(t=>!isRemovedTrainerProfile(t) && !isTestTrainerAccount(t))); } }catch(e){}
                   changed=true;
                 }
               }
@@ -654,11 +665,19 @@ function pushToCloud(force = false){
         try{ro=JSON.parse(remote['gt-attendance-save-order-v1']||'{}')||{};}catch(e){}
         const la=JSON.parse(payload['gt-attendance-admin-edits-v1']||'{}')||{};
         const ra=JSON.parse(remote['gt-attendance-admin-edits-v1']||'{}')||{};
+        let ld={},rd={};
+        try{ld=JSON.parse(payload['gt-attendance-delete-order-v1']||'{}')||{};}catch(e){}
+        try{rd=JSON.parse(remote['gt-attendance-delete-order-v1']||'{}')||{};}catch(e){}
+        const deleteMap={};
+        new Set([...Object.keys(ld),...Object.keys(rd)]).forEach(k=>deleteMap[k]=Math.max(Number(ld[k]||0),Number(rd[k]||0)));
+        payload['gt-attendance-delete-order-v1']=JSON.stringify(deleteMap);
         const canonMap=obj=>{const out={};Object.keys(obj||{}).forEach(rawKey=>{const k=canonicalAttendanceHistoryKey(rawKey);out[k]=obj[rawKey];});return out;};
         const lm=canonMap(l),rm=canonMap(r),out={};
         new Set([...Object.keys(lm),...Object.keys(rm)]).forEach(k=>{
           const lat=Math.max(Number(lo[k]||0),Number(getAttendancePendingSaveAt(String(k).split('|')[0],String(k).split('|').slice(1).join('|'))||0));
           const rat=Number(ro[k]||0);
+          const delAt=Number(deleteMap[k]||0);
+          if(delAt>=Math.max(lat,rat,Number(la[k]||0),Number(ra[k]||0))){ return; }
           const lad=Number(la[k]||0),rad=Number(ra[k]||0);
           if(rad>lad && rm[k]) out[k]=rm[k];
           else if(lad>rad && lm[k]) out[k]=lm[k];
@@ -704,6 +723,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
 .home-brand{white-space:nowrap;display:flex;align-items:center;gap:12px}
 .home-brand .logged-trainer-name{font-size:.48em;font-weight:600;letter-spacing:.02em;opacity:.82;overflow:hidden;text-overflow:ellipsis;max-width:45vw}
 @media(max-width:420px){.home-brand{gap:8px}.home-brand .logged-trainer-name{max-width:40vw;font-size:.44em}}
+.delete-attendance-btn{width:100%;margin-top:9px;padding:11px;border:1px solid #a52a2a;border-radius:7px;background:#210707;color:#ff6262;font-weight:900;cursor:pointer}.delete-attendance-btn:active{background:#c62828;color:#fff}
 </style></style>
 
 <meta charset="utf-8">
@@ -1048,8 +1068,20 @@ body{overflow-x:hidden}
 .trainer-avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#333;color:#fff;font-size:24px}
 .monthly-trainer-card div:nth-child(2){display:flex;flex-direction:column}.monthly-trainer-card b{font-size:12px;color:#ffd12b}.monthly-trainer-card span{font-size:14px}.monthly-badge{margin-left:auto;color:#4ea7ff;font-weight:700}
 .monthly-title{margin-bottom:8px}
-.monthly-table-wrap{overflow-x:auto;border:1px solid #8c6800;border-radius:6px}
-.monthly-table{width:100%;min-width:900px;border-collapse:collapse;font-size:11px}
+.monthly-table-wrap{
+  width:100%;
+  max-width:100%;
+  box-sizing:border-box;
+  overflow-x:scroll;
+  overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior-x:contain;
+  touch-action:pan-x;
+  border:1px solid #8c6800;
+  border-radius:6px;
+  scrollbar-width:auto;
+}
+.monthly-table{width:max-content;min-width:900px;border-collapse:collapse;font-size:11px}
 .monthly-table th,.monthly-table td{border:1px solid #6b5200;padding:7px 5px;text-align:center;white-space:nowrap}
 .monthly-table th{color:#eee;font-weight:700;background:#080808}.monthly-table td{color:#ddd}.monthly-table small{display:block;font-size:8px;color:#999;margin-top:2px}
 .monthly-group{display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:4px;color:#fff;font-weight:800}
@@ -3855,6 +3887,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .stats-stack-legend span{display:inline-flex;align-items:center;gap:4px}
 .stats-stack-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
 </style>
+
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -3890,12 +3923,16 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    // Prihlásenie musí nastaviť skutočnú rolu používateľa.
    // Predtým zostávala na zariadení stará rola ADMIN.
    try{
-     const role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
+     let role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
+     const loginName=String(account && (account.display_name||account.name) || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+     const isRealTrainerLogin=(loginName==='VIKTOR ZUFFA'||loginName==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()||loginName==='ANATOLII KUHAL');
+     if(isRealTrainerLogin) role='trainer';
+     else if(loginName==='HLAVNY TRENER' || loginName==='HLAVNY TRÉNER') role='head';
      if(typeof activeUserRole!=='undefined'){
        activeUserRole=(role==='admin')?'admin':(role==='head'?'head':'trainer');
        localStorage.setItem('gt-user-role',activeUserRole);
        if(activeUserRole!=='head') localStorage.removeItem('gt-head-trainer-access');
-       document.body.classList.toggle('head-readonly',activeUserRole==='head');
+       document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
      }else{
        localStorage.setItem('gt-user-role',role==='admin'?'admin':(role==='head'?'head':'trainer'));
      }
@@ -3977,13 +4014,24 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
      console.warn('⛔ Pokus o prihlásenie ako VZOROVÝ - blokované');
      return;
    }
-   openApp({role:String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer',
+   // Hlavný tréner je iba samostatná rola. Viktor, Peter a Anatolii
+   // sú vždy reálni tréneri, aj keby v starých uložených dátach mali
+   // omylom nastavenú rolu HLAVNÝ TRÉNER.
+   const nm=String(t.full||t.name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+   const realTrainer=(nm==='VIKTOR ZUFFA'||nm==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()||nm==='ANATOLII KUHAL');
+   openApp({role:realTrainer?'trainer':(String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer'),
      display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
  }
  function login(){
    error.style.display='none';
    const pass=(input.value||'').trim();
    if(pass==='Admin' || pass==='admin' || pass.toLowerCase()==='admin'){openApp({role:'admin',display_name:'ADMIN'});return}
+   // Hlavný tréner je samostatná rola, nie profil reálneho trénera.
+   // Prihlásenie heslom Hlavny preto musí otvoriť jeho vlastný Domov.
+   if(pass.toLowerCase()==='hlavny' || pass.toLowerCase()==='hlavný tréner' || pass.toLowerCase()==='hlavny trener'){
+     openApp({role:'head',display_name:'Hlavný tréner'});
+     return;
+   }
    // Viktor fallback - ak heslo je viktor, skús nájsť Viktora bez ohľadu na heslo
    if(pass.toLowerCase().includes('viktor') || pass.toLowerCase()==='viktor123'){
      try{
@@ -4859,7 +4907,11 @@ function getCurrentTrainerDisplayName(){
     if(account && account.trainer_id!=null){
       const id=Number(account.trainer_id);
       const t=(trainersData||[]).find(x=>Number(x.id)===id);
-      if(t) return String(t.full||t.name||'').trim();
+      if(t){
+        const tn=String(t.full||t.name||'').trim();
+        if(isPeterOnuscakName(account.display_name||account.name) && /^TRÉNER\s*1$/i.test(tn)) return 'Peter Onuščák';
+        return tn;
+      }
       if(account.display_name) return String(account.display_name).trim();
     }
   }catch(e){}
@@ -5682,9 +5734,9 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
- {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
- {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
+ {id:101,name:'Peter Onuščák',full:'Peter Onuščák',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
+ {id:103,name:'Viktor Žuffa',full:'Viktor Žuffa',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
+ {id:104,name:'Anatolii Kuhal',full:'Anatolii Kuhal',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'}
 ];
 const TRAINERS_STORAGE_KEY='gt-trainers-v395';
 try{
@@ -5711,9 +5763,18 @@ try{
       status: t.active===false || String(t.status||'').toUpperCase()==='NEAKTÍVNA' ? 'NEAKTÍVNA' : 'AKTÍVNA'
     })).filter(t=>t.full||t.name);
     const legacyDemo=new Set(['Martin Lukáč','Tomáš Varga','Ivana Kováčová','Róbert Horváth','Martin L.','Tomáš V.','Ivana K.','Róbert H.']);
-    const cleaned=normalized.filter(t=>!legacyDemo.has(String(t.full||t.name||'').trim()));
-    // Tréner 1/2 sa nepridávajú automaticky, aby neprepisovali zmeny
-
+    const isRemovedTrainerName=(t)=>{
+      const n=String(t?.full||t?.name||'').trim().toUpperCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+      return n==='PETER KOVAC' || n==='VZOROVY TRENER' || n==='HLAVNY TRENER';
+    };
+    const cleaned=normalized.filter(t=>!legacyDemo.has(String(t.full||t.name||'').trim()) && !isRemovedTrainerName(t) && !t.isTemplate);
+    // Hlavný tréner je iba samostatná rola, nie reálny tréner.
+    // Viktor, Peter a Anatolii sú vždy obyčajní tréneri.
+    cleaned.forEach(t=>{
+      const n=String(t.full||t.name||'').trim().toUpperCase().replace(/Á/g,'A').replace(/Č/g,'C').replace(/É/g,'E').replace(/Í/g,'I').replace(/Ľ/g,'L').replace(/Ň/g,'N').replace(/Ó/g,'O').replace(/Š/g,'S').replace(/Ú/g,'U').replace(/Ž/g,'Z');
+      if(n==='VIKTOR ZUFFA' || n==='PETER ONUŠČÁK'.toUpperCase().replace(/Š/g,'S').replace(/Á/g,'A') || n==='ANATOLII KUHAL') t.role='TRÉNER';
+    });
     trainersData.splice(0,trainersData.length,...cleaned);
     persistTrainersData();
   }
@@ -5815,7 +5876,7 @@ function initTrainersDirectSync(){
             localStorage.setItem(TRAINERS_STORAGE_KEY, JSON.stringify(merged));
           }catch(e){}
           if(typeof trainersData!=='undefined'){
-            trainersData.splice(0,trainersData.length, ...merged);
+            trainersData.splice(0,trainersData.length, ...merged.filter(t=>!isRemovedTrainerProfile(t) && !isTestTrainerAccount(t)));
           }
           try{ if(location.hash.includes('trainer') || location.hash==='#more'){ renderTrainers(); } }catch(e){}
         } else {
@@ -5969,31 +6030,20 @@ function isTestTrainerAccount(t){
  const n=String(t?.full||t?.name||'').trim().toLowerCase();
  return n==='tréner 1'||n==='trener 1'||n==='tréner 2'||n==='trener 2';
 }
+function isRemovedTrainerProfile(t){
+ const n=String(t?.full||t?.name||'').trim().toUpperCase()
+   .normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+ return !!t?.isTemplate || n==='PETER KOVAC' || n==='VZOROVY TRENER' || n==='HLAVNY TRENER' ||
+   n==='TRENER 1' || n==='TRENER 2';
+}
 function visibleTrainerProfiles(){
-  // The template is intentionally visible to the Admin, but never usable as
-  // a login account and never included in trainer accounting.
-  return (trainersData||[]).filter(t=>!isTestTrainerAccount(t));
+  return (trainersData||[]).filter(t=>!isRemovedTrainerProfile(t) && !isTestTrainerAccount(t));
 }
-function ensureTemplateTrainer(){
-  try{
-    if(!Array.isArray(trainersData)) return null;
-    let t=trainersData.find(x=>x.isTemplate===true || String(x.full||x.name||'').trim().toUpperCase()==='VZOROVÝ TRÉNER');
-    if(!t){
-      const id=Math.max(0,...trainersData.map(x=>Number(x.id)||0))+1;
-      t={id,full:'VZOROVÝ TRÉNER',name:'VZOROVÝ TRÉNER',email:'',phone:'',
-        role:'TRÉNER',license:'',valid:'',status:'VZOR',active:false,
-        groups:[],loginPassword:'',loginPasswordSet:false,isTemplate:true};
-      trainersData.push(t);
-      persistTrainersData();
-    }
-    return t;
-  }catch(e){return null;}
-}
+// Vzorový tréner už nie je reálny profil a nesmie sa automaticky vytvárať.
+function ensureTemplateTrainer(){ return null; }
 function renderTrainers(){
- ensureTemplateTrainer();
  // Profile assignments are authoritative. Do not overwrite them from the
  // schedule when the trainer list is opened.
- ensureTemplateTrainer();
  const app=document.querySelector('.app');
  const trainerList=visibleTrainerProfiles(); const active=trainerList.filter(t=>!t.isTemplate && t.active!==false && String(t.status||'AKTÍVNA').toUpperCase()!=='NEAKTÍVNA' && new Date(t.valid.split('.').reverse().join('-'))>=new Date()).length;
  app.innerHTML=`
@@ -6820,11 +6870,16 @@ function persistPaymentHistory(){
   try{localStorage.setItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:membershipPayments,registration:registrationPayments}));}catch(e){}
 }
 function recordMembershipPayment(member,amount,date,group,period=membershipPeriodForDate(date)){
+  const trainerName=String(getCurrentTrainerDisplayName?.()||'').trim();
+  const trainerId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
   membershipPayments.push({
     memberId:member.id,surname:member.surname,name:member.name,
     groups:[group||attendanceState.group],paidGroup:group||attendanceState.group,
     date,amount:Number(amount||0),period:Number(period||membershipPeriodForDate(date)||2),
-    year:Number(String(date||'').slice(0,4))||appToday().year
+    year:Number(String(date||'').slice(0,4))||appToday().year,
+    source:(activeUserRole==='admin'?'admin':'trainer'),
+    collectorTrainer:activeUserRole==='trainer'?trainerName:'',
+    collectorTrainerId:activeUserRole==='trainer'&&trainerId!=null?Number(trainerId):null
   });
   persistPaymentHistory();
 }
@@ -6918,14 +6973,14 @@ function memberRows(arr){
      <span class="${secondHalfMembershipVisual(m)} membership-period-icon" title="Členské 2. polrok">Č</span>
      <span class="${memberHasRegistration(m)?'icon-ok':'icon-no'}" title="Registrácia">R</span>
    </div>
-   <div class="member-flags">${(typeof isAdmin==='function'&&isAdmin())||(typeof isHeadTrainer==='function'&&isHeadTrainer())?`<button type="button" class="member-delete-btn" onclick="event.preventDefault();event.stopPropagation();return deleteMemberFromList(${m.id})">🗑</button>`:''}</div>
+   <div class="member-flags">${(typeof isAdmin==='function'&&isAdmin())||(typeof isHeadTrainer==='function'&&isHeadTrainer())||(typeof isTrainer==='function'&&isTrainer())?`<button type="button" class="member-delete-btn" onclick="event.preventDefault();event.stopPropagation();return deleteMemberFromList(${m.id})">🗑</button>`:''}</div>
    <div class="member-arrow">›</div>
  </article>`).join('');
 }
 
 
 function deleteMemberFromList(id){
- const allowed=(typeof isAdmin==='function'&&isAdmin()) || (typeof isHeadTrainer==='function'&&isHeadTrainer());
+ const allowed=(typeof isAdmin==='function'&&isAdmin()) || (typeof isHeadTrainer==='function'&&isHeadTrainer()) || (typeof isTrainer==='function'&&isTrainer());
  if(!allowed){ toast('Nemáš oprávnenie vymazať člena'); return false; }
  const idx=membersData.findIndex(x=>Number(x.id)===Number(id));
  if(idx<0){ toast('Člen nebol nájdený'); return false; }
@@ -7954,17 +8009,18 @@ function saveMemberProfile(id,isNew=false){
 let activeUserRole=localStorage.getItem('gt-user-role')||'trainer';
 let isAdminUser=localStorage.getItem('gt-is-admin')!=='false';
 function isAdmin(){return activeUserRole==='admin';}
+function isTrainer(){return activeUserRole==='trainer';}
 function canEditTrainerProfile(){return isAdmin();}
 let headTrainerSelected='ALL';
 function isAdminTesting(){ return localStorage.getItem('gt-admin-testing')==='true'; }
 function hasHeadTrainerAccess(){ return isHeadTrainer() || localStorage.getItem('gt-head-trainer-access')==='true'; }
-document.body.classList.toggle('head-readonly',activeUserRole==='head');
+document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
 
 function setUserRole(role){
   activeUserRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
   localStorage.setItem('gt-user-role',activeUserRole);
   if(activeUserRole==='head') localStorage.setItem('gt-head-trainer-access','true');
-  document.body.classList.toggle('head-readonly',activeUserRole==='head');
+  document.body.classList.toggle('head-readonly',activeUserRole==='head' && !isAnatoliiAttendanceEditor());
   toast(activeUserRole==='admin'?'Režim administrátora':activeUserRole==='head'?'Režim hlavného trénera':'Režim trénera');
   setTimeout(()=>renderMore(),250);
 }
@@ -8380,8 +8436,30 @@ function canonicalAttendanceHistoryKey(value){
   const group=canonicalAttendanceGroup(parts.join('|'));
   return `${date}|${group}`;
 }
+const ATTENDANCE_DELETE_ORDER_KEY='gt-attendance-delete-order-v1';
+const attendanceDeleteOrder=Object.create(null);
+try{
+  const x=JSON.parse(originalGetItem(ATTENDANCE_DELETE_ORDER_KEY)||'{}');
+  if(x&&typeof x==='object') Object.assign(attendanceDeleteOrder,x);
+}catch(e){}
+function persistAttendanceDeleteOrder(){
+  try{
+    const raw=JSON.stringify(attendanceDeleteOrder);
+    originalSetItem(ATTENDANCE_DELETE_ORDER_KEY,raw);
+    localStorage.setItem(ATTENDANCE_DELETE_ORDER_KEY,raw);
+  }catch(e){}
+}
+function attendanceDeleteKey(date,group){
+  return `${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
+}
+function isAttendanceDeleted(date,group){
+  const k=attendanceDeleteKey(date,group);
+  return Number(attendanceDeleteOrder[k]||0)>0;
+}
+
 function findAttendanceHistory(date,group){
   const wanted=`${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
+  if(isAttendanceDeleted(date,group)) return null;
   try{
     if(typeof trainingAttendanceByGroup==='undefined') return null;
     if(trainingAttendanceByGroup[wanted] && typeof trainingAttendanceByGroup[wanted]==='object') return trainingAttendanceByGroup[wanted];
@@ -8418,8 +8496,27 @@ function isAttendanceTodayForTrainer(){
     return String(attendanceState.date)===`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
   }catch(e){ return false; }
 }
+function isAnatoliiAttendanceEditor(){
+  // Anatolii Kuhal a Peter Onuščák používajú rovnaký reálny-tréner režim.
+  // Peter nesmie mať vlastnú špeciálnu logiku správania, ktorá by sa líšila
+  // od Anatoliiho. Identita sa určuje iba podľa aktuálne prihláseného trénera.
+  try{
+    const n=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+    return n==='ANATOLII KUHAL' || n==='PETER ONUSCAK';
+  }catch(e){ return false; }
+}
+function isRealTrainerAttendanceEditor(){
+  try{
+    const n=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+    return n==='VIKTOR ZUFFA' || n==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase() || n==='ANATOLII KUHAL';
+  }catch(e){ return false; }
+}
+function attendanceEditorHeadAllowed(){ return false; }
+
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
+  // Všetci traja reálni tréneri môžu spätne upravovať svoju dochádzku.
+  if(isRealTrainerAttendanceEditor()) return false;
   if(isHeadTrainer()) return true;
   // FIX: Tréner môže spätne opraviť svoju vlastnú dochádzku
   // Ak je to jeho skupina, môže upravovať aj staršie dni
@@ -8473,6 +8570,8 @@ function attendancePaymentLockKey(){
 }
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
+  // Aj členské a registračné môže spätne meniť každý z troch reálnych trénerov.
+  if(isRealTrainerAttendanceEditor()) return false;
   if(isHeadTrainer()) return true;
   // FIX: Tréner môže spätne opraviť aj členské/registračné pre svoju skupinu
   try{
@@ -8557,6 +8656,8 @@ function saveAdminAttendanceDirectCloud(key, history, savedAt){
 
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
+  // Nové uloženie tréningu je vedomá obnova; odstráni prípadnú starú mazaciu značku.
+  if(attendanceDeleteOrder[key]){ delete attendanceDeleteOrder[key]; persistAttendanceDeleteOrder(); }
   const before=trainingAttendanceByGroup[key]||null;
   // Vždy vytvoríme nový kompletný snapshot a až potom ho priradíme ku kľúču.
   // Starý kód zapisoval do trainingAttendanceByGroup[key] a následne tento
@@ -8587,75 +8688,6 @@ function saveCurrentTrainingAttendance(){
     }catch(e){ adminSavedAt=Date.now(); }
   }
   persistTrainingAttendanceHistory();
-
-  // LIVE PREPOJENIE DO VYÚČTOVANIA:
-  // Ak už pre tento tréning existuje vyúčtovanie, každá zmena dochádzky
-  // musí okamžite prepísať jeho počty a sumy. Tréner nemusí znovu stláčať
-  // tlačidlo „ULOŽIŤ VYÚČTOVANIE“. Tým sa obnoví pôvodné správanie:
-  // tréner uloží dochádzku -> admin a hlavný tréner ju hneď uvidia.
-  try{
-    const activeTrainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
-    const dateDisplay=formatBillingDate(attendanceState.date);
-    const d=parsePaymentDate(dateDisplay);
-    const canonical=d
-      ? `${activeTrainer.toUpperCase()}|${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}|${String(attendanceState.group||'').trim().toUpperCase()}`
-      : '';
-    if(activeTrainer && canonical && Array.isArray(monthlyBillingRecords)){
-      const bi=monthlyBillingRecords.findIndex(r=>billingRecordCanonicalKey(r)===canonical);
-      if(bi>=0){
-        const old=monthlyBillingRecords[bi]||{};
-        const fee=trainingFee();
-        const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
-        const trainingPaid=attendanceState.members.filter(m=>m.training&&!m.newMember&&!m.trainingAccount).length;
-        const trainingSum=trainingPaid*fee;
-        const membershipSum=attendanceState.members.reduce((x,m)=>x+Number(currentMemberPaymentTotals(m).membership||0),0);
-        const registrationSum=attendanceState.members.reduce((x,m)=>x+Number(currentMemberPaymentTotals(m).registration||0),0);
-        const otherPlus=Number(attendanceState.otherPlus||0);
-        const otherMinus=Number(attendanceState.otherMinus||0);
-        const rewardRate=trainerRewardPerMember();
-        const trainerReward=paying*rewardRate;
-        const clubAmount=trainingSum+membershipSum+registrationSum+otherPlus-otherMinus-trainerReward;
-        const updated={...old,
-          trainer:activeTrainer,
-          date:dateDisplay,
-          group:attendanceState.group,
-          name:attendanceState.name,
-          paying, trainingPaid, trainingSum, membershipSum, registrationSum,
-          otherPlus, otherMinus,
-          trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,
-          gross:trainingSum+membershipSum+registrationSum+otherPlus-otherMinus,
-          trainerReward, clubAmount,
-          trainingFee:fee,
-          trainerRewardPerMember:rewardRate,
-          trainingScheduleId:attendanceState.trainingScheduleId||old.trainingScheduleId||null,
-          attendanceSnapshot:(attendanceState.members||[]).filter(m=>m.training).map(m=>m.surname+'|'+m.name),
-          attendanceStateSnapshot:(attendanceState.members||[]).map(m=>({
-            surname:m.surname,name:m.name,training:!!m.training,trainingAccount:!!m.trainingAccount,
-            newMember:!!m.newMember,newMemberDate:m.newMemberDate||'',
-            membershipAccountAmount:Number(m.membershipAccountAmount||0),membershipAccountDate:m.membershipAccountDate||'',
-            registrationAccountAmount:Number(m.registrationAccountAmount||0),registrationAccountDate:m.registrationAccountDate||''
-          })),
-          paymentSnapshot:(attendanceState.members||[]).map(m=>{const pt=currentMemberPaymentTotals(m);return {
-            surname:m.surname,name:m.name,membership:Number(pt.membership||0),registration:Number(pt.registration||0),
-            trainingAccount:!!m.trainingAccount,training:!!m.training,newMember:!!m.newMember
-          };}).filter(x=>x.training||x.membership>0||x.registration>0),
-          presentCount:attendanceState.members.filter(m=>m.training).length,
-          newCount:attendanceState.members.filter(m=>m.newMember).length,
-          savedAt:Date.now(),savedBy:activeTrainer,
-          savedByRole:(typeof isAdmin==='function'&&isAdmin())?'ADMIN':((typeof isHeadTrainer==='function'&&isHeadTrainer())?'HEAD_TRAINER':'TRAINER')
-        };
-        monthlyBillingRecords[bi]=updated;
-        // Toto je zámerne okamžité. Okrem lokálneho uloženia pošleme
-        // práve zmenený tréning priamo do autoritatívneho billing dokumentu.
-        // Transakcia nahradí iba tento jeden záznam, takže stará kópia admina
-        // ho už nemôže prepísať späť. Firestore onSnapshot ho okamžite rozošle
-        // adminovi aj hlavnému trénerovi.
-        persistMonthlyBillingRecords();
-        try{ pushSingleBillingRecordToCloud(updated); }catch(e){ console.warn('Priamy update billing po dochádzke zlyhal',e); }
-      }
-    }
-  }catch(e){ console.warn('Live update vyúčtovania z dochádzky zlyhal',e); }
-
   if(adminSavedAt){
     // Samostatný dokument je zdroj pravdy pre trénerovo zariadenie.
     // Zápis je asynchrónny, ale shared-db sync pokračuje nezávisle.
@@ -8703,12 +8735,16 @@ function commitMembershipDraftsForCurrentTraining(){
       if(idx>=0) membershipPayments.splice(idx,1);
     }else if(ch.action==='add'){
       if(idx<0){
+        const collectorName=String(getCurrentTrainerDisplayName?.()||'').trim();
+        const collectorId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
         membershipPayments.push({
           memberId:ch.memberId,surname:ch.surname,name:ch.name,
           groups:[ch.paidGroup],paidGroup:ch.paidGroup,date:ch.date,
           amount:Number(ch.amount||0),period:Number(ch.period),
           year:Number(String(ch.date||'').slice(0,4))||appToday().year,
-          source:(activeUserRole==='admin'?'admin':'trainer')
+          source:(activeUserRole==='admin'?'admin':'trainer'),
+          collectorTrainer:activeUserRole==='trainer'?collectorName:'',
+          collectorTrainerId:activeUserRole==='trainer'&&collectorId!=null?Number(collectorId):null
         });
         const savedMember=membersData.find(x=>Number(x.id)===Number(ch.memberId));
         if(savedMember && activeUserRole==='admin'){
@@ -8994,20 +9030,92 @@ function applyBillingSnapshotToAttendance(){
   attendanceState.otherMinusReason=String(r.otherMinusReason||'');
 }
 
+function deleteCurrentTrainerAttendance(){
+  try{
+    if(isAdmin()) { /* admin má tiež povolenie */ }
+    else if(isHeadTrainer() && !isRealTrainerAttendanceEditor()) { toast('Hlavný tréner má dochádzku iba na čítanie.'); return false; }
+    const date=String(attendanceState?.date||'');
+    const group=String(attendanceState?.group||'').trim().toUpperCase();
+    if(!date||!group){ toast('Dochádzku sa nepodarilo identifikovať.'); return false; }
+    const key=attendanceDeleteKey(date,group);
+    if(!confirm(`Naozaj vymazať dochádzku?\n\n${date} – skupina ${group}\n\nVymaže sa dochádzka a súvisiace vyúčtovanie tréningu.`)) return false;
+    const deletedAt=Date.now();
+    attendanceDeleteOrder[key]=Math.max(Number(attendanceDeleteOrder[key]||0),deletedAt);
+    persistAttendanceDeleteOrder();
+    // lokálne odstránenie dochádzky
+    delete trainingAttendanceByGroup[key];
+    try{
+      const raw=originalGetItem('gt-attendance-save-order-v1')||'{}';
+      const o=JSON.parse(raw)||{}; delete o[key]; originalSetItem('gt-attendance-save-order-v1',JSON.stringify(o));
+    }catch(e){}
+    try{
+      const raw=originalGetItem('gt-attendance-admin-edits-v1')||'{}';
+      const o=JSON.parse(raw)||{}; delete o[key]; originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(o));
+    }catch(e){}
+    persistTrainingAttendanceHistory();
+    // zmaž aj finančný záznam aktuálneho trénera
+    const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
+    const candidates=(monthlyBillingRecords||[]).filter(r=>{
+      const d=parsePaymentDate(r?.date);
+      const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+      return iso===date && String(r?.group||'').trim().toUpperCase()===group && String(r?.trainer||'').trim().toUpperCase()===me && !r.substituteReference;
+    });
+    candidates.forEach(r=>{
+      const ck=billingRecordCanonicalKey(r);
+      billingDeleteOrder[ck]=Math.max(Number(billingDeleteOrder[ck]||0),deletedAt);
+    });
+    monthlyBillingRecords=(monthlyBillingRecords||[]).filter(r=>{
+      const d=parsePaymentDate(r?.date);
+      const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+      return !(iso===date && String(r?.group||'').trim().toUpperCase()===group && String(r?.trainer||'').trim().toUpperCase()===me && !r.substituteReference);
+    });
+    persistBillingDeleteOrder();
+    persistMonthlyBillingRecords();
+    try{ pushToCloud(true); }catch(e){}
+    attendanceState.billingRecordSnapshot=null;
+    attendanceState.billingAttendanceSnapshot=null;
+    attendanceState.billingPaymentSnapshot=null;
+    toast('Dochádzka bola vymazaná.');
+    setTimeout(()=>nav('home'),300);
+  }catch(e){ console.error('DELETE ATTENDANCE',e); toast('Dochádzku sa nepodarilo vymazať.'); }
+  return false;
+}
+window.deleteCurrentTrainerAttendance=deleteCurrentTrainerAttendance;
+
 function attendance(){
-  if(!isAdmin() && !isHeadTrainer()){
+  if(!isAdmin() && (!isHeadTrainer() || isRealTrainerAttendanceEditor())){
     const accountId=currentTrainerAccountId();
-    if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
+    if(accountId==null){ window.__attendanceOpenedFromBilling=false; toast('Tréner nie je správne prihlásený.'); return; }
     const wantedDate=attendanceState.date||appToday().iso;
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
+    const openedFromBilling=!!window.__attendanceOpenedFromBilling;
+    const billingCtx=window.__attendanceBillingContext||{};
+    const meNorm=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    let billingOwn=false;
+    if(openedFromBilling && String(billingCtx.date||'')===String(wantedDate) && String(billingCtx.group||'').toUpperCase()===wantedGroup){
+      try{
+        const source=(typeof getBillingRecords==='function'?getBillingRecords():monthlyBillingRecords)||[];
+        billingOwn=source.some(r=>{
+          if(r?.substituteReference) return false;
+          const d=parsePaymentDate(r?.date);
+          const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+          if(iso!==String(wantedDate) || String(r?.group||'').trim().toUpperCase()!==wantedGroup) return false;
+          const n=v=>String(v||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+          return n(r.trainer)===meNorm || n(r.savedBy)===meNorm || Number(r.trainerId)===Number(accountId) || (isPeterOnuscakName(meNorm) && (isPeterOnuscakName(r.trainer)||isPeterOnuscakName(r.savedBy)||Number(r.trainerId)===101));
+        });
+      }catch(e){}
+    }
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-    const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
+    const own=billingOwn || acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
       groupRosterCodes(x.code||'').some(c=>c===wantedGroup) &&
       (!wantedTime || String(x.time||'')===wantedTime) &&
       trainerOwnsTraining(x)
     );
+    window.__attendanceOpenedFromBilling=false;
     if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
+  } else {
+    window.__attendanceOpenedFromBilling=false;
   }
 
   // DOMOV and KALENDÁR are intentionally independent entry points.
@@ -9093,7 +9201,7 @@ function attendance(){
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
       <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
     </header>
-    <main class="content attendance-page ${(isAttendanceFullyLocked()||isHeadTrainer())?'attendance-readonly':''}">
+    <main class="content attendance-page ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))?'attendance-readonly':''}">
       <div class="calendar-head">
         <div class="section-title"><span class="calendar-icon">☑</span> DOCHÁDZKA</div>
         <div class="month-btn attendance-fixed-date">${formatAttendanceDate(attendanceState.date)}</div>
@@ -9102,13 +9210,14 @@ function attendance(){
         <span>${attendanceState.group}</span><b>${attendanceState.name}</b>
       </div>
       <div class="att-meta">◷ ${attendanceDisplayTime}　⌖ Watsonova 4　♙ ${attendanceState.members.length} členov</div>
+      ${(!isAdmin() && !isHeadTrainer() && String(attendanceState.date||'') < String(appToday().iso)) ? '<div style="margin:10px 0;padding:10px 12px;border-radius:12px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);color:inherit;font-weight:700;text-align:center;font-size:13px;">✎ SPÄTNÁ ÚPRAVA DOCHÁDZKY JE POVOLENÁ</div>' : ''}
 
       <div class="finance">
-        <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
+        <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
         <button class="fin-card fin-membership" disabled onclick="toast('Členské sa zadáva pri členovi')"><b>ČLENSKÉ</b><strong id="sumMembership">0 €</strong><small id="countMembership">0 platieb</small></button>
         <button class="fin-card fin-registration" disabled onclick="toast('Registrácia je 30 €')"><b>REGISTRÁCIA</b><strong id="sumRegistration">0 €</strong><small id="countRegistration">0 platieb</small></button>
-        <button class="fin-card fin-plus" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
-        <button class="fin-card fin-minus" ${(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
+        <button class="fin-card fin-plus" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('plus')"><b>INÉ +</b><strong id="sumOtherPlus">0 €</strong><small id="countOtherPlus">0 platieb</small></button>
+        <button class="fin-card fin-minus" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('minus')"><b>INÉ −</b><strong id="sumOtherMinus">0 €</strong><small id="countOtherMinus">0 platieb</small></button>
         <button class="fin-card fin-debt" disabled onclick="toast('Dlžné sa nezapočítava do vybraného súčtu')"><b>DLŽNÉ</b><strong id="sumDebt">0 €</strong><small id="countDebt">0 dlžníkov</small></button>
         <div class="finance-total"><span>SPOLU VYBRANÉ</span><strong id="sumSelected">0 €</strong><span>DLŽNÉ SPOLU <b id="sumDebtTotal">0 €</b></span></div>
       </div>
@@ -9120,6 +9229,7 @@ function attendance(){
 
       <div class="members-list" id="attendanceList">${renderAttendanceRows()}</div>
       <button class="club-billing-button" ${isAttendanceFullyLocked()&&!isAdmin()?'disabled':''} onclick="return openTrainingBillingFromAttendance()">✓ POTVRDIŤ DOCHÁDZKU</button>
+      
       <div class="attendance-pdf-actions">
         <button type="button" onclick="return saveAttendancePaymentsPDF()">PDF</button>
         <button type="button" onclick="return shareAttendancePaymentsPDF()">ZDIEĽAŤ</button>
@@ -9153,7 +9263,7 @@ function openAttendanceMemberProfile(index){
  renderMemberProfile(m.id, window.__gtBackTarget);
 }
 function renderAttendanceRows(){
- const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
+ const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
  return attendanceState.members.map((m,i)=>`
  <div class="att-row">
    <div class="att-name" role="button" tabindex="0" title="Otvoriť profil člena" onclick="openAttendanceMemberProfile(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAttendanceMemberProfile(${i})}"><b>${m.surname}</b><span>${m.name}</span></div>
@@ -9458,7 +9568,7 @@ function adminCancelPayment(type,i){
 }
 
 function renderMembershipPaymentCell(m,i){
-  const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
   const dis=locked?'disabled':'';
   const key=`${m.id}|${attendanceDateKey()}|${attendanceState.group}`;
   const draft=attendanceState.membershipDrafts?.[key];
@@ -9500,7 +9610,7 @@ function renderMembershipPaymentCell(m,i){
   return `<button ${dis} class="pay-btn" onclick="adminPaymentClickGuard()&&queueMembershipSingleClick(${i})" ondblclick="membershipDoubleClick(event,${i})" onpointerdown="adminPaymentLongPressStart(event,'membership',${i})" onpointerup="adminPaymentLongPressEnd(event)" onpointerleave="adminPaymentLongPressEnd(event)">ČLENSKÉ</button>`;
 }
 function renderRegistrationPaymentCell(m,i){
-  const locked=(isAttendanceFullyLocked()||isHeadTrainer())&&!isAdmin();
+  const locked=(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin();
   const dis=locked?'disabled':'';
   if(memberAccountDateMatches(m,m.registrationAccountDate) && Number(m.registrationAccountAmount||0)>0){
     const cls='pay-btn reg-account-on';
@@ -10307,6 +10417,59 @@ function goBackAttendance(){ location.hash='home'; renderHome(); }
 
 
 let monthlyBillingRecords=[];
+/* v104x – definitívna identita Petra Onuščáka.
+   Starý účet „Tréner 1“ bol kedysi používaný ako dočasný účet pre Petra.
+   Reálne meno musí zostať Peter Onuščák a jeho vyúčtovania musia patriť
+   tomuto istému trénerovi aj pre hlavného trénera. */
+function normalizeTrainerIdentityText(v){
+  return String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
+}
+function isPeterOnuscakName(v){
+  const n=normalizeTrainerIdentityText(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  return n==='PETER ONUSCAK';
+}
+function repairPeterOnuscakIdentity(){
+  // Peter je obyčajný tréner rovnako ako Anatolii. Táto funkcia iba opraví
+  // starý účet „Tréner 1“ na stabilnú identitu Petra. NIKDY už nepresúva
+  // ľubovoľné vyúčtovania podľa starého trainerId – to spôsobovalo chaos,
+  // keď sa ID účtu časom zmenilo alebo bolo znovu použité.
+  try{
+    let account=null;
+    try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
+    if(!account || String(account.role||'').toLowerCase()!=='trainer') return;
+
+    const display=String(account.display_name||account.name||'').trim();
+    const legacyName=/^TRÉNER\s*1$/i.test(display) || /^TRENER\s*1$/i.test(display);
+    const isPeter= isPeterOnuscakName(display);
+    if(!isPeter && !legacyName) return;
+
+    let peter=(trainersData||[]).find(t=>isPeterOnuscakName(t.full||t.name));
+    if(!peter) peter=(trainersData||[]).find(t=>/^TRÉNER\s*1$/i.test(String(t.full||t.name||'').trim()));
+    if(!peter) return;
+
+    account.trainer_id=Number(peter.id);
+    account.display_name='Peter Onuščák';
+    account.role='trainer';
+    account.groups=Array.isArray(peter.groups)?[...peter.groups]:Array.isArray(account.groups)?account.groups:[];
+    localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
+    localStorage.setItem('gt-current-trainer-id',String(peter.id));
+
+    // Jednorazovo premapuj iba starú explicitnú značku TRÉNER 1.
+    // Nikdy neprepisuj záznamy len preto, že majú rovnaké staré ID.
+    if(Array.isArray(monthlyBillingRecords)){
+      let changed=false;
+      monthlyBillingRecords=monthlyBillingRecords.map(r=>{
+        const rn=normalizeTrainerIdentityText(r?.trainer||r?.name);
+        if(rn==='TRENER 1'){
+          changed=true;
+          return {...r,trainer:'Peter Onuščák',trainerId:Number(peter.id),savedBy:'Peter Onuščák'};
+        }
+        return r;
+      });
+      if(changed) persistMonthlyBillingRecords();
+    }
+  }catch(e){ console.warn('Oprava identity Petra:',e); }
+}
 try{
   Object.keys(localStorage).forEach(k=>{
     if(/^gt-monthly-billing-v(205|206|207|208|209|210|211|212|213|214|215|216|217|218|219|220)$/.test(k)){
@@ -10330,36 +10493,21 @@ function normalizeMonthlyBillingRecords(){
   const map=new Map();
   const norm=s=>String(s||'').trim().toUpperCase();
   (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
-    const d=parsePaymentDate(r.date);
-    if(!d) return;
-    const trainer=String(r.trainer||CURRENT_TRAINER_NAME||'').trim();
-    const group=String(r.group||'').trim();
-    const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    // One trainer + one date + one group is exactly one training record.
-    // Older test data could differ only by trainer capitalization/spacing,
-    // which previously produced a second visible row.
-    // One trainer + one calendar date + one group is ALWAYS one visible
-    // training. Older versions could leave suffixes such as |SUB|,
-    // |ORIGINAL| or slightly different record keys, which created two rows
-    // for the same training. The canonical key deliberately ignores those
-    // suffixes.
-    const key=`${norm(trainer)}|${dateKey}|${norm(group)}`;
+    const d=parsePaymentDate(r.date); if(!d) return;
+    const dk=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    const group=norm(r.group);
+    // Jedno reálne vyúčtovanie = jeden tréning (dátum + skupina).
+    // Informačný riadok zástupu môže existovať navyše, ale nenahrádza finančný záznam.
+    const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${dk}|${group}`;
     const prev=map.get(key);
-    if(!prev){
-      map.set(key,r);
-      return;
-    }
-    // Keep the actual financial record when one exists. If both are real
-    // financial records, the later stored record wins (it represents the
-    // latest re-save of the same training). Informational substitute rows
-    // never create a second training row.
-    if(prev.substituteReference && !r.substituteReference){ map.set(key,r); return; }
-    if(!prev.substituteReference && r.substituteReference){ return; }
-    map.set(key,r);
+    if(!prev){ map.set(key,r); return; }
+    const rt=Number(r.savedAt||r.updatedAt||0), pt=Number(prev.savedAt||prev.updatedAt||0);
+    if(rt>=pt) map.set(key,r);
   });
   monthlyBillingRecords=Array.from(map.values());
 }
 normalizeMonthlyBillingRecords();
+
 (function removeErroneousViktorGroupABilling(){
   try{
     const marker='gt-migration-v679-viktor-group-a-removed';
@@ -10373,6 +10521,16 @@ normalizeMonthlyBillingRecords();
 })();
 const BILLING_DELETE_ORDER_KEY='gt-billing-delete-order-v1';
 const billingDeleteOrder=Object.create(null);
+// Mazania, ktoré práve prebiehajú. Chránia serverový dokument pred tým,
+// aby ho paralelný lokálny persist znovu naplnil starým záznamom.
+const billingDeleteInFlight=new Set();
+// Vyúčtovania, ktoré práve ukladá tréner. Realtime snapshot nesmie dočasne
+// odstrániť lokálne uložený nový záznam, kým sa jeho transakcia nepotvrdí.
+const billingSaveInFlight=new Map();
+// Posledné lokálne uložené vyúčtovania držíme krátko aj po potvrdení serverom.
+// Realtime snapshot môže doraziť o zlomok sekundy neskôr; vlastná obrazovka
+// trénera preto nesmie čakať na snapshot ani na veľký refresh.
+const billingJustSaved=new Map();
 try{
   const x=JSON.parse(originalGetItem(BILLING_DELETE_ORDER_KEY)||'{}');
   if(x&&typeof x==='object') Object.assign(billingDeleteOrder,x);
@@ -10389,129 +10547,149 @@ function persistBillingDeleteOrder(){
     localStorage.setItem(BILLING_DELETE_ORDER_KEY,raw);
   }catch(e){}
 }
-function syncDeletedBillingRecordToCloud(canonical, deletedAt){
+async function syncDeletedBillingRecordToCloud(canonical, deletedAt){
   try{
-    if(typeof db==='undefined' || !db) return Promise.resolve(false);
+    if(typeof db==='undefined' || !db) return false;
     const ck=String(canonical||'');
     const at=Number(deletedAt||Date.now());
     const billingDoc=db.collection('guard-trainer-billing').doc('all');
-    return billingDoc.get().then(doc=>{
+    // ATOMICKÉ mazanie: read + filter + delete-order sa vykoná v jednej
+    // transakcii. Paralelný zápis z iného zariadenia tak nemôže vrátiť starý riadok.
+    await db.runTransaction(async tx=>{
+      const doc=await tx.get(billingDoc);
       const data=doc.exists?(doc.data()||{}):{};
-      let del={};
-      try{ if(data.billingDeleteOrder && typeof data.billingDeleteOrder==='object') del={...data.billingDeleteOrder}; }catch(e){}
-      del[ck]=Math.max(Number(del[ck]||0),at);
       let rows=Array.isArray(data.records)?data.records.slice():[];
       rows=rows.filter(r=>billingRecordCanonicalKey(r)!==ck);
-      return billingDoc.set({records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false}).then(()=>{
-        // Rovnakú mazaciu značku zapíš aj do hlavného shared dokumentu.
-        try{
-          const raw=originalGetItem('gt-monthly-billing-v221')||'[]';
-          let localRows=[]; try{localRows=JSON.parse(raw)||[];}catch(e){}
-          localRows=localRows.filter(r=>billingRecordCanonicalKey(r)!==ck);
-          const payload={
-            'gt-monthly-billing-v221':JSON.stringify(localRows),
-            'gt-billing':JSON.stringify(localRows),
-            'gt-billing-delete-order-v1':JSON.stringify(del)
-          };
-          return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true}).catch(e=>console.warn('main billing delete cloud fail',e));
-        }catch(e){ return null; }
-      });
-    }).catch(e=>{ console.warn('billing delete cloud read fail',e); });
-  }catch(e){ console.warn('billing delete cloud sync fail',e); return Promise.resolve(false); }
-}
-function deleteMyBillingRecord(recordKey, btn){
-  const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
-  const idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
-  if(idx<0) return false;
-  const r=monthlyBillingRecords[idx];
-  const owner=String(r.trainer||'').trim().toUpperCase();
-  // Tréner môže mazať iba vlastné vyúčtovanie. Admin môže mazať ľubovoľné.
-  if(!isAdmin() && owner!==me){
-    toast('Môžeš vymazať iba svoje vyúčtovanie.');
+      const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+      del[ck]=Math.max(Number(del[ck]||0),at);
+      tx.set(billingDoc,{records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
+    });
+    // Po úspešnom autoritatívnom zápise aktualizuj aj starší shared mirror.
+    try{
+      const raw=originalGetItem('gt-monthly-billing-v221')||'[]';
+      let localRows=[]; try{localRows=JSON.parse(raw)||[];}catch(e){}
+      localRows=localRows.filter(r=>billingRecordCanonicalKey(r)!==ck);
+      const delJson=JSON.stringify(billingDeleteOrder);
+      await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set({
+        'gt-monthly-billing-v221':JSON.stringify(localRows),
+        'gt-billing':JSON.stringify(localRows),
+        'gt-billing-delete-order-v1':delJson
+      },{merge:true});
+    }catch(e){ console.warn('main billing delete cloud mirror fail',e); }
+    return true;
+  }catch(e){
+    console.warn('billing delete cloud transaction fail',e);
     return false;
+  }
+}
+async function deleteMyBillingRecord(recordKey, btn){
+  const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
+  // V osobnom vyúčtovaní môže byť zobrazený záznam z autoritatívneho servera,
+  // ktorý ešte nemusí byť v staršom lokálnom poli monthlyBillingRecords.
+  // Preto hľadáme najprv lokálne, potom v aktuálnom zdroji vyúčtovaní.
+  let idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
+  let r=idx>=0 ? monthlyBillingRecords[idx] : null;
+  if(!r && typeof getBillingRecords==='function'){
+    try{
+      const all=getBillingRecords()||[];
+      r=all.find(x=>String(x?.key||'')===String(recordKey||''))||null;
+    }catch(e){}
+  }
+  if(!r){
+    // Posledná poistka pre práve uložený serverový záznam.
+    try{
+      for(const entry of billingJustSaved.values()){
+        if(entry?.record && String(entry.record.key||'')===String(recordKey||'')){ r=entry.record; break; }
+      }
+    }catch(e){}
+  }
+  if(!r) return false;
+  const owner=String(r.trainer||'').trim();
+  // Všetci reálni tréneri majú rovnaké oprávnenie: môžu zmazať iba svoje
+  // vlastné vyúčtovanie. Identita sa overuje rovnakým spôsobom ako pri
+  // zobrazení „Moje vyúčtovanie“ – meno bez diakritiky, trainerId a savedBy.
+  // Tým sa Peter správa presne rovnako ako Anatolii a staré meno „TRÉNER 1“
+  // mu nezablokuje mazanie jeho vlastného tréningu.
+  if(!isAdmin()){
+    const norm=s=>String(s||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+    const meNorm=norm(me);
+    const ownerNorm=norm(owner);
+    const savedByNorm=norm(r.savedBy||'');
+    const rid=Number(r.trainerId);
+    const myId=currentTrainerAccountId();
+    const ownById=(myId!=null && Number.isFinite(rid) && rid>0 && Number(rid)===Number(myId));
+    const ownByName=ownerNorm===meNorm || savedByNorm===meNorm;
+    const peterLegacy=isPeterOnuscakName(me) && (isPeterOnuscakName(owner) || isPeterOnuscakName(r.savedBy||'') || /^TRENER\s*1$/i.test(owner));
+    if(!ownById && !ownByName && !peterLegacy){
+      toast('Môžeš vymazať iba svoje vyúčtovanie.');
+      return false;
+    }
   }
   if(!confirm(`Naozaj vymazať toto vyúčtovanie?\n\n${r.date||''} – ${r.group||''} – ${r.trainer||''}\n\nDochádzka zostane zachovaná.`)) return false;
 
   const canonical=billingRecordCanonicalKey(r);
   const deletedAt=Date.now();
+  billingDeleteInFlight.add(canonical);
   billingDeleteOrder[canonical]=Math.max(Number(billingDeleteOrder[canonical]||0),deletedAt);
   persistBillingDeleteOrder();
 
-  // Okamžite odstráň zo zobrazenia aj z lokálnych dát.
+  // Najprv okamžite odstráň z lokálneho zoznamu, aby používateľ videl zmenu hneď.
   monthlyBillingRecords=monthlyBillingRecords.filter(x=>billingRecordCanonicalKey(x)!==canonical);
-  persistMonthlyBillingRecords();
+  try{ billingJustSaved.delete(canonical); }catch(e){}
+  // UI hlavného/trénera sa má zmeniť okamžite, bez čakania na Firestore.
+  try{ renderMonthlyBilling(); }catch(e){}
+  try{
+    if(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer())){
+      const detail=window.__gtHeadTrainerDetail;
+      if(document.querySelector('.monthly-billing-page') && detail && typeof renderHeadTrainerDetail==='function')
+        renderHeadTrainerDetail(detail.trainerName,detail.month,detail.year);
+      else if(document.querySelector('.head-billing') && typeof renderHeadTrainerBilling==='function')
+        renderHeadTrainerBilling();
+    }
+  }catch(e){}
 
-  // Červený kôš ostane krátko viditeľný ako potvrdenie akcie.
   if(btn){
+    btn.disabled=true;
     btn.classList.add('billing-delete-confirmed');
     btn.style.background='#c62828';
     btn.style.borderColor='#ff5252';
     btn.style.color='#fff';
-    btn.textContent='🗑';
+    btn.textContent='⏳';
   }
 
-  // Trvalá mazacia značka + odstránenie zo serverových kópií.
-  try{ syncDeletedBillingRecordToCloud(canonical,deletedAt); }
-  catch(e){ console.warn('billing delete cloud sync fail',e); }
+  // KRITICKÉ: mazanie sa nesmie iba naplánovať. Po kliknutí počkáme na
+  // úspešný zápis na server a až potom akciu uzavrieme. Serverová mazacia
+  // značka zároveň zabráni, aby sa starý záznam z iného zariadenia vrátil.
+  let cloudOk=false;
+  try{
+    if(typeof db!=='undefined' && db && typeof syncDeletedBillingRecordToCloud==='function'){
+      cloudOk=await syncDeletedBillingRecordToCloud(canonical,deletedAt);
+    }
+  }catch(e){
+    console.warn('billing delete cloud sync fail',e);
+  }
 
-  toast('Vyúčtovanie bolo vymazané');
-  setTimeout(()=>renderMonthlyBilling(),50);
+  billingDeleteInFlight.delete(canonical);
+  if(btn){
+    btn.textContent='🗑';
+    btn.disabled=false;
+  }
+  toast(cloudOk ? '✓ Vyúčtovanie bolo vymazané a zmena bola odoslaná na server.' : 'Vyúčtovanie bolo vymazané lokálne. Server momentálne nie je dostupný.');
+  renderMonthlyBilling();
   return false;
 }
 window.deleteMyBillingRecord=deleteMyBillingRecord;
 
-function pushSingleBillingRecordToCloud(record){
-  try{
-    if(typeof db==='undefined' || !db || !record) return Promise.resolve(false);
-    const canonical=billingRecordCanonicalKey(record);
-    if(!canonical) return Promise.resolve(false);
-    const docRef=db.collection('guard-trainer-billing').doc('all');
-    const run=typeof db.runTransaction==='function' ? db.runTransaction.bind(db) : null;
-    if(run){
-      return run(async transaction=>{
-        const snap=await transaction.get(docRef);
-        const data=snap.exists?(snap.data()||{}):{};
-        let rows=Array.isArray(data.records)?data.records.slice():[];
-        let del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
-        // Ak bol tento záznam vymazaný, nové automatické prepočítanie ho nesmie obnoviť.
-        if(Number(del[canonical]||0)>=Number(record.savedAt||record.updatedAt||0)) return false;
-        // Nahradíme iba konkrétny tréning. Ostatné záznamy zostávajú nedotknuté.
-        const out=[];
-        let replaced=false;
-        rows.forEach(r=>{
-          if(billingRecordCanonicalKey(r)===canonical){
-            if(!replaced){ out.push(record); replaced=true; }
-          }else out.push(r);
-        });
-        if(!replaced) out.push(record);
-        transaction.set(docRef,{records:out,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
-        return true;
-      }).then(ok=>{ if(ok) console.log('⚡ Billing tréningu odoslaný okamžite:',canonical); return ok; });
-    }
-    // Fallback pre staršiu Firebase implementáciu bez transakcie.
-    return docRef.get().then(snap=>{
-      const data=snap.exists?(snap.data()||{}):{};
-      let rows=Array.isArray(data.records)?data.records.slice():[];
-      let del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
-      if(Number(del[canonical]||0)>=Number(record.savedAt||record.updatedAt||0)) return false;
-      rows=rows.filter(r=>billingRecordCanonicalKey(r)!==canonical);
-      rows.push(record);
-      return docRef.set({records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false}).then(()=>true);
-    });
-  }catch(e){ console.warn('Priamy billing sync zlyhal',e); return Promise.resolve(false); }
-}
-window.pushSingleBillingRecordToCloud=pushSingleBillingRecordToCloud;
-
-function persistMonthlyBillingRecords(){
+function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
   try{
     normalizeMonthlyBillingRecords();
     const seen=new Map();
     const norm=s=>String(s||'').trim().toUpperCase();
-    const rows=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
+    const rows=(Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).filter(r=>!billingDeleteInFlight.has(billingRecordCanonicalKey(r)));
     rows.forEach(r=>{
       const d=parsePaymentDate(r.date);
       const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-      const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
+      const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
       const prev=seen.get(key);
       if(!prev){ seen.set(key,r); return; }
       if(prev.substituteReference && !r.substituteReference) seen.set(key,r);
@@ -10534,6 +10712,7 @@ function persistMonthlyBillingRecords(){
       }
     }catch(e){}
     try{
+      if(skipDirectBillingCloud) return;
       if(typeof db!=='undefined' && db){
         // Merge s existujúcim cloudom - neprepisuj menším
         db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
@@ -10544,6 +10723,7 @@ function persistMonthlyBillingRecords(){
           // výslovne vymazaný. Server môže mať ešte starú kópiu.
           existing=existing.filter(r=>{
             const dk=billingRecordCanonicalKey(r);
+            if(billingDeleteInFlight.has(dk)) return false;
             return Number(billingDeleteOrder[dk]||0) < Number(r.savedAt||r.updatedAt||0);
           });
           const seen=new Map();
@@ -10575,6 +10755,7 @@ function persistMonthlyBillingRecords(){
           persistBillingDeleteOrder();
           const finalRows=Array.from(seen.values()).filter(r=>{
             const k=billingRecordCanonicalKey(r);
+            if(billingDeleteInFlight.has(k)) return false;
             return Number(billingDeleteOrder[k]||0) < Number(r.savedAt||r.updatedAt||0);
           });
           db.collection('guard-trainer-billing').doc('all').set({records: finalRows, billingDeleteOrder: {...billingDeleteOrder}, updatedAt: Date.now()}, {merge:false}).then(()=>console.log('✅ Vyúčtovanie v cloude - mergnuté:', finalRows.length)).catch(e=>console.warn('billing cloud fail', e));
@@ -10599,7 +10780,6 @@ function initBillingDirectSync(){
         loadBillingDeleteOrderFromCloud(data);
         if(!data.records || !Array.isArray(data.records)) return;
         mergeBillingRecords(data.records, 'fetch');
-        if(typeof refreshBillingScreenNow==='function') refreshBillingScreenNow();
       }).catch(e=>console.warn('billing fetch fail', e));
     };
     
@@ -10635,13 +10815,37 @@ function initBillingDirectSync(){
             if(Number(billingDeleteOrder[remoteKey]||0) >= Number(r.savedAt||r.updatedAt||0)) return;
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-            const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
+            const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
             const prev=seen.get(key);
             if(!prev){ seen.set(key,r); added++; }
             else if(Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)){ seen.set(key,r); updated++; }
           }catch(e){}
         });
-        const merged=Array.from(seen.values());
+        let merged=Array.from(seen.values());
+        // Ak tréner práve uložil nový záznam, starší realtime snapshot ho môže
+        // na chvíľu ešte neobsahovať. Zachovaj preto lokálny pending záznam až
+        // do potvrdenia serverovej transakcie. Tým sa zobrazí v „Moje vyúčtovanie“
+        // okamžite a nezmizne pri medzičasovom snapshot-e.
+        if(billingSaveInFlight.size){
+          const pendingByKey=new Map();
+          billingSaveInFlight.forEach((pending, ck)=>{
+            if(pending && !Number(billingDeleteOrder[ck]||0)) pendingByKey.set(ck,pending);
+          });
+          merged=merged.filter(r=>!pendingByKey.has(billingRecordCanonicalKey(r)));
+          pendingByKey.forEach((pending, ck)=>{
+            if(!Number(billingDeleteOrder[ck]||0)) merged.push(pending);
+          });
+          // Zachovaj rovnakú deduplikáciu podľa dátum+skupina ako server.
+          const pendingSeen=new Map();
+          merged.forEach(r=>{
+            const d=parsePaymentDate(r.date);
+            const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+            const k=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+            const prev=pendingSeen.get(k);
+            if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) pendingSeen.set(k,r);
+          });
+          merged=Array.from(pendingSeen.values());
+        }
         // Synchronizácia musí vedieť aj ZMAZAŤ starý lokálny záznam.
         // Predtým sa záznam odstránený trénerom na serveri neobjavil v remote,
         // ale stará kópia na zariadení admina/hlavného trénera zostala navždy,
@@ -10649,7 +10853,13 @@ function initBillingDirectSync(){
         const currentRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
         const currentCount=(()=>{try{const x=JSON.parse(currentRaw)||[];return Array.isArray(x)?x.length:0;}catch(e){return 0;}})();
         let same=false;
-        try{ same=JSON.stringify(JSON.parse(currentRaw)||[])===JSON.stringify(merged); }catch(e){}
+        try{
+          const stableBillingList=(arr)=> (Array.isArray(arr)?arr:[]).map(r=>{
+            try{return {key:billingRecordCanonicalKey(r),data:JSON.stringify(r||{})};}
+            catch(e){return {key:'',data:JSON.stringify(r||{})};}
+          }).sort((a,b)=>(a.key+a.data).localeCompare(b.key+b.data));
+          same=JSON.stringify(stableBillingList(JSON.parse(currentRaw)||[]))===JSON.stringify(stableBillingList(merged));
+        }catch(e){}
         if(!same || added>0 || updated>0 || remote.length!==currentCount){
           console.log(`📥 [${source}] Vyúčtovanie = SERVER: nové ${added}, aktualizované ${updated}, celkom ${merged.length} (server ${remote.length})`);
           try{
@@ -10661,11 +10871,44 @@ function initBillingDirectSync(){
           if(typeof monthlyBillingRecords!=='undefined'){
             monthlyBillingRecords.splice(0, monthlyBillingRecords.length, ...merged);
           }
-          try{ 
-            if(typeof renderHeadTrainerBilling==='function' && (isAdmin()||isHeadTrainer())){
-              if((location.hash||'').includes('billing')) renderHeadTrainerBilling();
+          try{
+            // REALTIME OPRAVA: serverový snapshot musí prekresliť aj obrazovku
+            // "Moje vyúčtovanie" bežného trénera. Predtým sa UI po prijatí
+            // snapshotu prekresľovalo iba pre admina/hlavného trénera. To
+            // spôsobovalo, že Peter mal záznam už uložený na serveri, ale jeho
+            // otvorená obrazovka zostala na starom zozname.
+            const myBillingOpen=location.hash==='#trainer-month' || !!document.querySelector('.monthly-billing-page');
+            if(myBillingOpen && typeof renderMonthlyBilling==='function' &&
+               !(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer()))){
+              // Realtime snapshot nesmie používateľovi rozbiť práve otvorenú
+              // horizontálne posúvanú tabuľku. Zapamätaj polohu a po prekreslení
+              // ju obnov; zároveň sa sem dostaneme iba pri skutočnej zmene dát.
+              const _gtScrollWrap=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+              const _gtScrollLeft=_gtScrollWrap ? _gtScrollWrap.scrollLeft : 0;
+              renderMonthlyBilling();
+              if(_gtScrollLeft){
+                requestAnimationFrame(()=>{
+                  const w=document.querySelector('.monthly-billing-page .monthly-table-wrap');
+                  if(w) w.scrollLeft=_gtScrollLeft;
+                });
+              }
             }
-          }catch(e){}
+
+            // Realtime serverová zmena pre admina/hlavného trénera.
+            if(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer())){
+              const detail=window.__gtHeadTrainerDetail;
+              const detailOpen=!!document.querySelector('.monthly-billing-page');
+              const overviewOpen=!!document.querySelector('.head-billing');
+              const headHomeOpen=!!document.querySelector('.head-home-dashboard');
+              if(detailOpen && detail && typeof renderHeadTrainerDetail==='function'){
+                renderHeadTrainerDetail(detail.trainerName, detail.month, detail.year);
+              }else if(overviewOpen && typeof renderHeadTrainerBilling==='function'){
+                renderHeadTrainerBilling();
+              }else if(headHomeOpen && typeof renderHeadHome==='function'){
+                renderHeadHome();
+              }
+            }
+          }catch(e){ console.warn('realtime billing UI refresh fail',e); }
         }
       }catch(e){ console.warn('merge billing fail', e); }
     };
@@ -10680,39 +10923,13 @@ function initBillingDirectSync(){
       }
     }catch(e){}
     
-    // Live sync – po prijatí nových údajov okamžite prekresli otvorené
-    // vyúčtovanie. Predtým sa dáta síce načítali do localStorage, ale obrazovka
-    // zostala na starej hodnote až do veľkého refreshu.
-    let billingRealtimeRenderTimer=null;
-    const refreshBillingScreenNow=()=>{
-      try{
-        const hash=String(location.hash||'').toLowerCase();
-        if(hash!=='#billing' && hash!=='#trainer-month') return;
-        if(billingRealtimeRenderTimer) clearTimeout(billingRealtimeRenderTimer);
-        billingRealtimeRenderTimer=setTimeout(()=>{
-          billingRealtimeRenderTimer=null;
-          try{
-            if(typeof isAdmin==='function' && isAdmin()){
-              if(typeof renderHeadTrainerBilling==='function') renderHeadTrainerBilling();
-            }else if(typeof isHeadTrainer==='function' && isHeadTrainer()){
-              if(typeof renderHeadTrainerBilling==='function') renderHeadTrainerBilling();
-            }else{
-              if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
-            }
-          }catch(e){ console.warn('⚡ Realtime prekreslenie vyúčtovania zlyhalo',e); }
-        },30);
-      }catch(e){}
-    };
-    window.refreshBillingScreenNow=refreshBillingScreenNow;
-
+    // Live sync
     db.collection('guard-trainer-billing').doc('all').onSnapshot(doc=>{
       if(!doc.exists) return;
       const data=doc.data()||{};
       loadBillingDeleteOrderFromCloud(data);
       if(!data.records || !Array.isArray(data.records)) return;
       mergeBillingRecords(data.records, 'snapshot');
-      // Dôležité: render až po zlúčení do monthlyBillingRecords.
-      refreshBillingScreenNow();
     });
     
     // Aj hlavný cloud doc (gt-monthly-billing-v221 v guard-trainer-app)
@@ -11092,9 +11309,62 @@ function forceMyBillingScreen(){
 }
 window.forceMyBillingScreen=forceMyBillingScreen;
 
+
+// Okamžitý autoritatívny zápis vyúčtovania na server.
+// Všetci tréneri používajú rovnaký mechanizmus. Nečaká sa na oneskorený
+// pushToCloud(); zmena sa zapíše priamo do guard-trainer-billing/all.
+async function saveBillingRecordToServerNow(record){
+  try{
+    if(typeof db==='undefined' || !db || !record) return false;
+    const ref=db.collection('guard-trainer-billing').doc('all');
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let rows=Array.isArray(data.records)?data.records.slice():[];
+      const norm=v=>String(v||'').trim().toUpperCase();
+      const d=parsePaymentDate(record.date);
+      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record.date||'');
+      const group=norm(record.group);
+      const isRef=r=>!!r?.substituteReference;
+      // Bežný tréning patrí iba trénerovi, ktorý ho práve uložil.
+      // Preto na serveri odstránime staré finančné kópie rovnakého dátumu+skupiny.
+      if(!isRef(record)){
+        rows=rows.filter(r=>{
+          if(isRef(r)) return true;
+          const rd=parsePaymentDate(r?.date);
+          const rdk=rd?`${rd.year}-${String(rd.month).padStart(2,'0')}-${String(rd.day).padStart(2,'0')}`:String(r?.date||'');
+          return !(rdk===dk && norm(r?.group)===group);
+        });
+      }else{
+        // Pri zástupe nechaj finančný záznam zástupcu a aktualizuj iba jeho
+        // informačný riadok, aby sa nepočítal dvakrát.
+        rows=rows.filter(r=>String(r?.key||'')!==String(record.key||''));
+      }
+      rows.push(record);
+      // NOVÉ ULOŽENIE MUSÍ ZRUŠIŤ STARÚ MAZACIU ZNAČKU.
+      // Ak Peter (alebo iný tréner) v minulosti vymazal rovnaké vyúčtovanie,
+      // v billingDeleteOrder zostala značka. Nové vyúčtovanie sa síce správne
+      // zapísalo na server, ale klient ho potom pri merge znovu odfiltroval.
+      // Pri novom uložení je preto tento záznam jednoznačne platný a jeho
+      // starú delete značku treba odstrániť aj priamo v serverovej transakcii.
+      const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+      const recordCanonicalKey=`${norm(record.trainer)}|${dk}|${group}`;
+      delete del[recordCanonicalKey];
+      tx.set(ref,{records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
+    });
+    console.log('✅ Vyúčtovanie okamžite uložené na server:',record.trainer,record.date,record.group);
+    return true;
+  }catch(e){
+    console.warn('❌ Okamžitý zápis vyúčtovania na server zlyhal:',e);
+    return false;
+  }
+}
+window.saveBillingRecordToServerNow=saveBillingRecordToServerNow;
+
 function saveTrainingBilling(saveButton){
-  if(!isAdmin() && isAttendanceFullyLocked()){ toast('Uložená dochádzka je zamknutá – meniť ju môže iba administrátor.'); return false; }
-  // Vyúčtovanie sa pre rovnaký tréning vždy aktualizuje do jedného záznamu.
+  // Tréner môže spätne upraviť svoju vlastnú dochádzku a znovu uložiť
+  // vyúčtovanie vrátane členského a registračného.
+  // Pri opätovnom uložení sa existujúci záznam aktualizuje.
   // Tréner teda môže uložiť vyúčtovanie opakovane po zmene dochádzky.
   // Členské a registračné sa po potvrdení dochádzky nemenia – ich úpravu
   // riadi attendancePaymentEditGuard() a pri platbe zadanej Adminom je zákaz
@@ -11125,6 +11395,7 @@ function saveTrainingBilling(saveButton){
   const record = {
     key:trainingKey,
     trainer:activeTrainer,
+    trainerId:currentTrainerAccountId(),
     date, group:attendanceState.group, name:attendanceState.name,
     paying, trainingPaid, trainingSum, membershipSum, registrationSum, otherPlus, otherMinus,
     trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,
@@ -11133,7 +11404,7 @@ function saveTrainingBilling(saveButton){
     otherPlusDate: attendanceState.date,
     otherMinusDate: attendanceState.date,
     gross:trainingSum+membershipSum+registrationSum+otherPlus-otherMinus,
-    trainerReward, clubAmount, trainingFee:trainingFee(), trainerRewardPerMember:trainerRewardPerMember(), trainingScheduleId:attendanceState.trainingScheduleId||null, substitute:false, locked:true,
+    trainerReward, clubAmount, trainingFee:trainingFee(), trainerRewardPerMember:trainerRewardPerMember(), trainingScheduleId:attendanceState.trainingScheduleId||null, substitute:false, locked:false,
     attendanceSnapshot:(attendanceState.members||[])
       .filter(m=>m.training)
       .map(m=>m.surname+'|'+m.name),
@@ -11186,11 +11457,30 @@ function saveTrainingBilling(saveButton){
     return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
   };
   const recordCanonical=canonicalBillingKey(record);
-  // Remove every old variant of this same trainer/date/group, including
-  // records whose legacy key contained SUB/ORIGINAL suffixes. Then store one
-  // authoritative record for the training.
-  monthlyBillingRecords=monthlyBillingRecords.filter(r=>canonicalBillingKey(r)!==recordCanonical);
+  // KRITICKÁ OPRAVA: ak bol tento konkrétny záznam v minulosti vymazaný,
+  // zruš jeho starú mazaciu značku. Inak by ho render/merge po novom uložení
+  // znova skryl, hoci server už obsahuje nové vyúčtovanie.
+  try{
+    if(billingDeleteOrder[recordCanonical]){
+      delete billingDeleteOrder[recordCanonical];
+      persistBillingDeleteOrder();
+    }
+  }catch(e){}
+  // JEDNO PRAVIDLO: jeden tréning (dátum + skupina) patrí iba trénerovi,
+  // ktorý práve uložil dochádzku/vyúčtovanie. Ak boli staršie kópie uložené
+  // pod iným trénerom, aktuálne uloženie ich nahradí.
+  const trainingOwnerKey=(()=>{ const d=parsePaymentDate(record.date); const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record.date||''); return `${dk}|${String(record.group||'').trim().toUpperCase()}`; })();
+  monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
+    const d=parsePaymentDate(r&&r.date);
+    const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
+    const k=`${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
+    return k!==trainingOwnerKey || !!r.substituteReference;
+  });
   monthlyBillingRecords.push(record);
+  // Okamžitá lokálna kópia pre „Moje vyúčtovanie“. Uchováme ju aj po
+  // potvrdení servera, aby oneskorený Firestore snapshot nemohol dočasne
+  // schovať práve uložený tréning.
+  billingJustSaved.set(recordCanonical,{record, savedAt:Date.now()});
 
   if(substitution){
     const originalKey=trainingKey+'|ORIGINAL|'+substitution.from;
@@ -11227,18 +11517,64 @@ function saveTrainingBilling(saveButton){
     });
     monthlyBillingRecords.push(originalRecord);
   }
-  persistMonthlyBillingRecords();
+  // Lokálny záznam je autoritatívny pre práve otvorenú obrazovku trénera.
+  // Označ ho ako pending, aby ho starší realtime snapshot dočasne neodstránil.
+  billingSaveInFlight.set(recordCanonical, record);
+  persistMonthlyBillingRecords(true);
+  // Okamžite prekresli „Moje vyúčtovanie“ – bez čakania na veľký refresh.
+  try{
+    if(typeof renderMonthlyBilling==='function'){
+      renderMonthlyBilling();
+      try{ history.replaceState(null,'','#trainer-month'); }catch(e){ location.hash='trainer-month'; }
+    }
+  }catch(e){ console.warn('Okamžité zobrazenie nového vyúčtovania:',e); }
+  // KRITICKÉ: zápis ide okamžite na autoritatívny billing dokument.
+  saveBillingRecordToServerNow(record).then(ok=>{
+    billingSaveInFlight.delete(recordCanonical);
+    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
+
+    // Po úspešnom zápise si bežný tréner okamžite načíta AUTORITATÍVNY
+    // záznam priamo zo servera a až potom prekreslí svoje vyúčtovanie.
+    // Týmto sa odstráni rozdiel medzi stavom "na serveri je" a "v Moje
+    // vyúčtovanie nie je". Platí rovnako pre Petra aj ostatných trénerov.
+    const refreshOwnBillingFromServer=()=>{
+      try{
+        if(typeof db==='undefined' || !db || typeof window.mergeBillingRecords!=='function') return;
+        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+          if(doc.exists){
+            const data=doc.data()||{};
+            if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
+            if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
+          }
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        }).catch(()=>{
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        });
+      }catch(e){
+        try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
+      }
+    };
+    if(ok) refreshOwnBillingFromServer();
+    else { try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){} }
+    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
+  }).catch(err=>{
+    billingSaveInFlight.delete(recordCanonical);
+    console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
+    try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
+  });
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
   if(saveButton){
     saveButton.classList.add('billing-saved');
     saveButton.textContent='✓ ULOŽENÉ';
   }
-  setTimeout(function(){
+  // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
+  // ani na ďalší veľký refresh zariadenia.
+  try{
     location.hash='trainer-month';
-    try{ window.dispatchEvent(new HashChangeEvent('hashchange')); }
-    catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
-  },1500);
+    if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
+  }catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
   return false;
 }
 
@@ -11334,19 +11670,6 @@ const headTrainerYearData=[
 
 
 
-function cleanupPeterOnuscakBillingX(){
-  try{
-    const target='PETER ONUŠČÁK';
-    const before=monthlyBillingRecords.length;
-    monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
-      const trainer=String(r?.trainer||r?.name||'').trim().toUpperCase();
-      const group=String(r?.group||r?.groupCode||'').trim().toUpperCase();
-      return !(trainer===target && group==='X');
-    });
-    if(monthlyBillingRecords.length!==before) persistMonthlyBillingRecords();
-  }catch(e){ console.warn('Čistenie skupiny X z vyúčtovania Petra sa nepodarilo',e); }
-}
-cleanupPeterOnuscakBillingX();
 
 
 /* v669 – nový štart tréningov od 31.08.2026.
@@ -11414,47 +11737,53 @@ function cleanupMayJune2026TrainingData(){
 cleanupMayJune2026TrainingData();
 
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
-  const target=String(trainerName||'').trim().toUpperCase();
-  let rows=monthlyBillingRecords.filter(r=>{
+  const target=String(trainerName||'').trim();
+  const norm=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
+  const targetNorm=norm(target);
+  // Nájdeme skutočný profil trénera a jeho ID. ID je primárne, meno je iba
+  // fallback pre historické záznamy, ktoré ešte trainerId nemajú.
+  // Jeden tréner môže mať po starších migráciách viac profilov s rovnakým menom.
+  // Preto nepoužívaj iba prvé nájdené ID – vyúčtovanie môže byť uložené pod
+  // ktorýmkoľvek platným profilovým ID toho istého trénera.
+  const matchingProfiles=(trainersData||[]).filter(t=>norm(t.full||t.name)===targetNorm);
+  const targetIds=new Set(matchingProfiles.map(t=>Number(t.id)).filter(id=>Number.isFinite(id)&&id>0));
+
+  let rows=(monthlyBillingRecords||[]).filter(r=>{
     const delAt=Number(billingDeleteOrder[billingRecordCanonicalKey(r)]||0);
     const savedAt=Number(r.savedAt||r.updatedAt||0);
     if(delAt>0 && delAt>=savedAt) return false;
-    return String(r.trainer||r.name||'').trim().toUpperCase()===target;
+    const rid=Number(r?.trainerId);
+    if(Number.isFinite(rid) && rid>0){
+      // Nové záznamy: stačí, ak trainerId patrí niektorému z profilov
+      // s týmto menom. Toto rieši staré duplicitné profily po migrácii účtov.
+      if(targetIds.has(rid)) return true;
+      // Ak je v starom zázname trainerId historicky chybné, ale uložený autor
+      // je jednoznačne meno požadovaného trénera, ponechaj ho v jeho vyúčtovaní.
+      const author=String(r?.savedBy||r?.trainer||'').trim();
+      return norm(author)===targetNorm;
+    }
+    // Staré záznamy bez trainerId sa určujú podľa uloženého autora.
+    const author=String(r?.savedBy||r?.trainer||r?.name||'').trim();
+    return norm(author)===targetNorm;
   }).filter(r=>{
     const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
   });
 
-  // Rovnaké poradie ako v „Moje vyúčtovanie“ trénera:
-  // dátumy od najnovšieho a pri rovnakom dátume skupiny podľa posledného
-  // uloženia dochádzky (najnovšie uložená skupina je prvá).
   const originalOrder=new Map(rows.map((r,i)=>[r,i]));
   rows.sort((a,b)=>{
     const da=parsePaymentDate(a.date), db=parsePaymentDate(b.date);
     const dayDiff=new Date(db.year,db.month-1,db.day)-new Date(da.year,da.month-1,da.day);
     if(dayDiff!==0) return dayDiff;
-
     const aDate=da?`${da.year}-${String(da.month).padStart(2,'0')}-${String(da.day).padStart(2,'0')}`:String(a.date||'');
     const bDate=db?`${db.year}-${String(db.month).padStart(2,'0')}-${String(db.day).padStart(2,'0')}`:String(b.date||'');
-    const as=getAttendanceSavedAt(aDate,a.group);
-    const bs=getAttendanceSavedAt(bDate,b.group);
-    if(as!==bs){
-      if(as===0) return 1;
-      if(bs===0) return -1;
-      return bs-as;
-    }
-
-    // Staršie záznamy bez timestampu dochádzky zachovajú poradie podľa uloženia vyúčtovania.
+    const as=getAttendanceSavedAt(aDate,a.group), bs=getAttendanceSavedAt(bDate,b.group);
+    if(as!==bs){ if(as===0) return 1; if(bs===0) return -1; return bs-as; }
     const sa=Number(a.savedAt||0), sb=Number(b.savedAt||0);
-    if(sa!==sb){
-      if(sa===0) return 1;
-      if(sb===0) return -1;
-      return sb-sa;
-    }
+    if(sa!==sb){ if(sa===0) return 1; if(sb===0) return -1; return sb-sa; }
     return (originalOrder.get(a)||0)-(originalOrder.get(b)||0);
   });
   return rows;
 }
-
 window.renderTrainerMonthlyFor=function(trainerName, month, year){
   const now=new Date();
   const targetMonth=Number(month)||((now.getMonth()+1));
@@ -11506,6 +11835,7 @@ window.deleteBillingTrainingAsAdmin=deleteBillingTrainingAsAdmin;
 
 function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToday().year){
   const app=document.querySelector('.app');
+  window.__gtHeadTrainerDetail={trainerName:String(trainerName||'').trim(),month:Number(month),year:Number(year)};
   const rows=getTrainerMonthlyRecords(trainerName,month,year);
   const targetTrainerName=String(trainerName||'').trim().toUpperCase();
   const realTrainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===targetTrainerName);
@@ -11519,7 +11849,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
   <main class="content monthly-billing-page">
     <div class="monthly-trainer-card">
       <div class="trainer-avatar">${String(trainerName||'T').charAt(0)}</div>
-      <div><b>HLAVNÝ TRÉNER</b><span>${trainerName}</span></div>
+      <div><b>${String(realTrainer.role||'TRÉNER').toUpperCase()}</b><span>${trainerName}</span></div>
       <div class="monthly-badge">MESAČNÉ VYÚČTOVANIE</div>
     </div>
     <div class="section-title monthly-title">▣ &nbsp; VYÚČTOVANIE – <b>${mName} ${year}</b></div>
@@ -11676,7 +12006,7 @@ function getHeadTrainerRowsForMonth(month=appToday().month,year=appToday().year)
   // ZDROJ PRAVDY PRE HLAVNÉHO TRÉNERA:
   // Použi presne tie isté mesačné záznamy, ktoré vidí detail „Moje vyúčtovanie“
   // konkrétneho trénera. Tým sa čísla (vrátane REGISTRÁCIE) nemôžu rozísť.
-  const trainers=(trainersData||[]).filter(t=>String(t.role||'').trim().toUpperCase()!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t) && !t.isTemplate);
+  const trainers=(trainersData||[]).filter(t=>!isRemovedTrainerProfile(t) && !isTestTrainerAccount(t));
   const normName=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
   return trainers.map(t=>{
     const name=String(t.full||t.name||'').trim();
@@ -11734,7 +12064,7 @@ function resetHeadTrainerBillingMonth(){
 }
 
 function standardBottomNav(active='billing', forceAttendance=false){
-  const showAttendance = forceAttendance || !isHeadTrainer();
+  const showAttendance = forceAttendance || !isHeadTrainer() || isAnatoliiAttendanceEditor();
   const navClass = forceAttendance && isHeadTrainer() ? 'bottom head-billing-nav' : 'bottom';
   return `<nav class="${navClass}">
     <a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
@@ -11778,12 +12108,11 @@ window.renderTrainerMonthlyFor = function(trainerName, month=null, year=null){
 };
 
 function getMainTrainerProfile(){
-  return (trainersData||[]).find(t=>String(t.role||'').toUpperCase()==='HLAVNÝ TRÉNER') || (trainersData||[])[0] || null;
+  // Hlavný tréner je rola, nie jeden z troch reálnych trénerov.
+  if(!isHeadTrainer()) return null;
+  return {id:null,name:'Hlavný tréner',full:'Hlavný tréner',role:'HLAVNÝ TRÉNER',groups:[],active:true};
 }
-function getMainTrainerDisplayName(){
-  const t=getMainTrainerProfile();
-  return String(t?.full||t?.name||'HLAVNÝ TRÉNER');
-}
+function getMainTrainerDisplayName(){ return 'Hlavný tréner'; }
 
 function buildGuardTrainerVectorPDF(title,subtitle,headers,bodyRows,totalRow,detailRows=[]){
   const W=842,H=595,M=28;
@@ -12039,6 +12368,7 @@ if(!window.__guardTrainerDetailPdfHandlers){
 
 function renderHeadTrainerBilling(){
   const app=document.querySelector('.app');
+  window.__gtHeadTrainerDetail=null;
   const period=getHeadTrainerBillingPeriod();
   const month=period.month, year=period.year;
   const d=getHeadTrainerRowsForMonth(month,year);
@@ -12294,6 +12624,7 @@ html,body{color-scheme:dark!important;}
 .head-other-detail-row strong{text-align:right}
 .head-other-empty{padding:12px 8px;color:#999}
 </style>
+
 </head><body>
       <h1>ZAPLATENÉ ČLENSKÉ</h1>
       <div class="meta">${summary?.innerText||''}</div>
@@ -12667,6 +12998,7 @@ html,body{color-scheme:dark!important;}
 .photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
 </style>
 
+
 </body>
 <style id="v650-statistika-fit-final">
 /* v650: statistics tile stays fully inside its profile slot; no transform clipping */
@@ -12804,6 +13136,38 @@ function parsePaymentDate(value){
   if(m) return {year:Number(m[3]),month:Number(m[2]),day:Number(m[1])};
   return null;
 }
+function membershipPaymentBelongsToCurrentTrainer(p){
+  if(!p || activeUserRole!=='trainer') return false;
+  const me=String(getCurrentTrainerDisplayName?.()||'').trim();
+  const norm=s=>String(s||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+  const meNorm=norm(me);
+  const myId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
+  const collectorId=Number(p.collectorTrainerId);
+  if(Number.isFinite(collectorId) && collectorId>0 && myId!=null && Number(myId)===collectorId) return true;
+  const collector=String(p.collectorTrainer||p.collectedBy||p.paidByTrainer||'').trim();
+  if(collector && norm(collector)===meNorm) return true;
+  // Staršie platby ešte nemajú uloženého trénera. Ak sú priradené ku konkrétnemu
+  // tréningu, vlastníkom je tréner, ktorý uložil dané vyúčtovanie. Takto sa
+  // zachovajú staršie platby bez toho, aby sa zobrazili všetkým trénerom.
+  if(!collector && !Number.isFinite(collectorId)){
+    const pd=parsePaymentDate(p.date);
+    const pg=norm(p.paidGroup||'');
+    if(pd && pg && Array.isArray(monthlyBillingRecords)){
+      const ownerRows=monthlyBillingRecords.filter(r=>{
+        const rd=parsePaymentDate(r?.date);
+        return rd && rd.year===pd.year && rd.month===pd.month && rd.day===pd.day && norm(r?.group||'')===pg;
+      });
+      return ownerRows.some(r=>{
+        const rid=Number(r?.trainerId);
+        const author=norm(r?.savedBy||r?.trainer||'');
+        const byId=Number.isFinite(rid) && rid>0 && myId!=null && Number(myId)===rid;
+        return byId || (!!author && author===meNorm);
+      });
+    }
+  }
+  return false;
+}
+
 function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
   const now=appToday();
   const pad=n=>String(n).padStart(2,'0');
@@ -12813,6 +13177,7 @@ function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
   const last=iso(now.year,now.month,lastDay);
   const from=fromValue||first, to=toValue||last;
   const paid=membershipPayments
+    .filter(p=>membershipPaymentBelongsToCurrentTrainer(p))
     .filter(p=>{
       if(!p || p.memberId==null || Number(p.amount||0)<=0)return false;
       const d=parsePaymentDate(p.date); if(!d)return false;
@@ -12890,8 +13255,8 @@ function renderHeadTrainerYear(view='trainers'){
   const app=document.querySelector('.app');
   const months=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const money=v=>Number(v||0).toLocaleString('sk-SK')+' €';
-  const realTrainers=(trainersData||[]).filter(t=>String(t.role||'').toUpperCase()!=='HLAVNÝ TRÉNER');
-  const trainers=realTrainers.length?realTrainers:(trainersData||[]);
+  const realTrainers=(trainersData||[]).filter(t=>!isRemovedTrainerProfile(t) && !isTestTrainerAccount(t));
+  const trainers=realTrainers;
   const selectedYear=getHeadTrainerBillingPeriod().year;
   const rows=trainers.map(t=>{
     const name=String(t.full||t.name||'').trim();
@@ -12969,7 +13334,13 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
   if(privileged) return rows;
 
   const me=String(getCurrentTrainerDisplayName()||'').trim();
-  const norm=s=>String(s||'').trim().toUpperCase();
+  // Billing identity must be diacritic-insensitive. Peter's old records were
+  // created under legacy variants such as "Peter Onušcak" / "TRÉNER 1".
+  // The real trainer account is identified primarily by trainerId, with name
+  // and savedBy as compatible fallbacks.
+  const norm=s=>String(s||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+  const meNorm=norm(me);
+  const meIsPeter=isPeterOnuscakName(me);
 
   const accepted=substitutionOffers.filter(o=>{
     if(!o.acceptedBy) return false;
@@ -13034,7 +13405,25 @@ function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
     }
 
     // Normal training unrelated to substitution.
-    if(norm(r.trainer)===norm(me)) result.push(r);
+    // Be strict: a trainer sees only the financial record that he himself saved.
+    // New records use trainerId; older records fall back to savedBy/name.
+    let owns=false;
+    const rid=Number(r.trainerId);
+    const myId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
+    const author=String(r.savedBy||'').trim();
+    const trainerField=String(r.trainer||'').trim();
+    // Vlastníkom vyúčtovania je tréner, ktorý ho skutočne uložil.
+    // trainerId používame ako identifikátor, ale uložený autor a meno trénera
+    // sú tiež platné identity. Toto platí pre všetkých trénerov.
+    const byAuthor=author ? norm(author)===meNorm : false;
+    const byTrainerField=trainerField ? norm(trainerField)===meNorm : false;
+    const byId=(myId!=null && Number.isFinite(rid) && rid>0) ? Number(rid)===Number(myId) : false;
+    // Peter is a real trainer with a stable profile identity (id 101 in the
+    // current data). Accept his legacy name variants as the final fallback so
+    // an old billing row cannot disappear from "Moje vyúčtovanie".
+    const peterLegacy=isPeterOnuscakName(author)||isPeterOnuscakName(trainerField)||rid===101;
+    owns=byAuthor || byTrainerField || byId || (meIsPeter && peterLegacy);
+    if(owns) result.push(r);
   });
 
   // If the original trainer's informational row is missing, create exactly
@@ -13149,6 +13538,12 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
     const iso=`${parsed.year}-${String(parsed.month).padStart(2,'0')}-${String(parsed.day).padStart(2,'0')}`;
     const code=String(groupCode||'').trim().toUpperCase();
     const name=String(groupName||getAdminGroupName(code)||code).trim();
+    // Otvorenie z „Moje vyúčtovanie“ je autoritatívny odkaz na konkrétny
+    // uložený tréning. Nemá byť zablokované iba preto, že sa medzičasom
+    // zmenil tréner v rozvrhu. Toto platí rovnako pre všetkých reálnych
+    // trénerov, teda aj pre Petra.
+    window.__attendanceOpenedFromBilling=true;
+    window.__attendanceBillingContext={date:iso,group:code,trainer:String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim()};
     const items=(typeof scheduleItemsForDate==='function'?scheduleItemsForDate(iso):[])||[];
     const match=items.find(x=>String(x.code||'').trim().toUpperCase()===code &&
       (!name || String(x.name||'').trim()===name));
@@ -13245,6 +13640,10 @@ repairLegacyTrainer1BillingOwnership();
 function renderMonthlyBilling(year=null,targetMonth=null){
   const app=document.querySelector('.app');
   if(!app) return false;
+  // Peter's account had legacy billing rows under the temporary "TRÉNER 1"
+  // identity. Re-apply the safe identity migration before every personal
+  // render so a fresh realtime cloud snapshot cannot hide his saved training.
+  try{ if(typeof repairPeterOnuscakIdentity==='function') repairPeterOnuscakIdentity(); }catch(e){}
   normalizeMonthlyBillingRecords();
   const now=appToday();
   if(year==null||targetMonth==null){
@@ -13257,7 +13656,19 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   if(future){selectedBillingYear=now.year;selectedBillingMonth=now.month;}
   const shownYear=selectedBillingYear, shownMonth=selectedBillingMonth;
   const month=skMonths[shownMonth-1].toUpperCase()+' '+shownYear;
-  let rows=monthlyBillingRecords
+  // Zostav zdroj pre UI z aktuálneho lokálneho zoznamu + práve uložených
+  // záznamov. Toto je zámerne pred filtrovaním podľa trénera.
+  const billingUiMap=new Map();
+  (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
+    const k=billingRecordCanonicalKey(r);
+    billingUiMap.set(k,r);
+  });
+  billingJustSaved.forEach((entry,k)=>{
+    if(entry && entry.record && !Number(billingDeleteOrder[k]||0)){
+      billingUiMap.set(k,entry.record);
+    }
+  });
+  let rows=Array.from(billingUiMap.values())
     .filter(r=>{
       const d=parsePaymentDate(r.date);
       return d && d.month===shownMonth && d.year===shownYear;
@@ -13603,7 +14014,7 @@ function appBack(){
     if(r==='home'){ renderHome(); return; }
     if(r==='statistics') renderStatistics();
     else if(r==='calendar') renderCalendar();
-    else if(r==='attendance'){ if(isHeadTrainer()){ nav('home'); } else attendance(); }
+    else if(r==='attendance'){ if(isHeadTrainer() && !isAnatoliiAttendanceEditor()){ nav('home'); } else attendance(); }
     else if(r==='training-billing') trainingBilling();
     else if(r==='trainer-month'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); else renderMonthlyBilling(); }
     else if(r==='billing'){ if(typeof isHeadTrainer==='function' && isHeadTrainer()) renderHeadTrainerBilling(); }
@@ -13671,20 +14082,64 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const daysInMonth=new Date(y,m,0).getDate();
   const monthPrefix=`${y}-${String(m).padStart(2,'0')}-`;
 
-  // Štatistiky používajú iba ULOŽENÉ vyúčtovania.
-  // Rozpracovaná dochádzka sa do štatistík nedostane, kým sa vyúčtovanie neuloží.
-  const entries=[];
-  getBillingRecords().forEach(r=>{
-    // A record is a valid statistics source only if it was saved together
-    // with the attendance snapshot. Older/demo billing rows are ignored.
-    if(!Array.isArray(r.attendanceSnapshot)) return;
-    const d=parsePaymentDate(r.date);
-    if(!d || d.month!==m || d.year!==y) return;
-    const people=r.attendanceSnapshot.slice();
-    entries.push({date:`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`,
-      group:r.group||'', people, paymentSnapshot:Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[], newCount:Number(r.newCount||0)});
-  });
-  entries.sort((a,b)=>a.date.localeCompare(b.date));
+  // ŠTATISTIKY = VÝHRADNE Z ULOŽENÉHO VYÚČTOVANIA.
+  // Autoritatívnym zdrojom je attendanceStateSnapshot uložený spolu
+  // s konkrétnym vyúčtovaním. Neberieme údaje z aktuálnej dochádzky,
+  // kalendára ani zo starých lokálnych snapshotov. Tým pádom sa štatistika
+  // vždy zhoduje s tým, čo bolo pri vyúčtovaní skutočne uložené.
+  // Jeden kalendárny tréning = jeden záznam podľa DÁTUM + SKUPINA.
+  // Staršie verzie mohli mať ten istý tréning uložený viackrát (napr. po
+  // synchronizácii medzi trénerom a adminom). Štatistika preto nesmie tieto
+  // kópie sčítať. Vyberieme iba najnovšie uložené vyúčtovanie pre daný
+  // dátum/skupinu. Toto je zároveň presne to, čo sa zobrazuje ako jeden
+  // tréning vo vyúčtovaní klubu.
+  const entryMap=new Map();
+  try{
+    (getBillingRecords()||[]).forEach(r=>{
+      const d=parsePaymentDate(r.date);
+      if(!d || d.month!==m || d.year!==y) return;
+      if(!Array.isArray(r.attendanceStateSnapshot)) return;
+
+      const attendanceHistory={};
+      r.attendanceStateSnapshot.forEach(x=>{
+        if(!x) return;
+        const surname=String(x.surname||'').trim();
+        const name=String(x.name||'').trim();
+        const key=surname+'|'+name;
+        if(!surname && !name) return;
+        attendanceHistory[key]={
+          training:!!x.training,
+          newMember:!!x.newMember,
+          trainingAccount:!!x.trainingAccount
+        };
+      });
+
+      const people=Object.keys(attendanceHistory).filter(k=>{
+        const v=attendanceHistory[k]||{};
+        return !!v.training || !!v.newMember;
+      });
+      const newCount=Object.values(attendanceHistory).filter(v=>v&&v.newMember).length;
+      if(people.length===0 && newCount===0) return;
+
+      const iso=`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      const group=quickGroupCode(r.group||'');
+      if(!group) return;
+      const entry={
+        date:iso,
+        group:r.group||'',
+        people,
+        paymentSnapshot:Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[],
+        newCount,
+        attendanceHistory,
+        billingKey:r.key||'',
+        savedAt:Number(r.savedAt||r.updatedAt||0)
+      };
+      const uniqueKey=`${iso}|${group}`;
+      const prev=entryMap.get(uniqueKey);
+      if(!prev || entry.savedAt>=prev.savedAt) entryMap.set(uniqueKey,entry);
+    });
+  }catch(e){ console.warn('Štatistiky – načítanie uložených vyúčtovaní zlyhalo',e); }
+  const entries=Array.from(entryMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||quickGroupCode(a.group).localeCompare(quickGroupCode(b.group)));
 
   const memberCounts={};
   // ÚČASŤ PODĽA SKUPÍN = PRÍTOMNÍ + NOVÍ.
@@ -13693,34 +14148,26 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   entries.forEach(e=>{
     const group=quickGroupCode(e.group);
     let presentCount=0, newCount=0;
-    let usedHistory=false;
-    // Presný stav berieme priamo z uloženej dochádzky pre konkrétny deň/skupinu.
-    // TRÉNING/ÚČET = PRÍTOMNÝ, NOVÝ = NOVÝ; NOVÝ sa nikdy nesmie rátať medzi prítomných.
-    try{
-      const histKey=`${e.date}|${group}`;
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey])||null;
-      if(hist && typeof hist==='object' && Object.keys(hist).length){
-        usedHistory=true;
-        Object.values(hist).forEach(v=>{
-          if(!v) return;
-          if(v.newMember) newCount++;
-          else if(v.training) presentCount++;
-        });
-      }
-    }catch(err){}
-    // Staršie uložené záznamy bez histórie použijú svoje historické počty.
-    if(!usedHistory){
-      presentCount=Number(e.people.length||0);
-      newCount=Number(e.newCount||0);
-    }
+    Object.values(e.attendanceHistory||{}).forEach(v=>{
+      if(!v) return;
+      if(v.newMember) newCount++;
+      else if(v.training) presentCount++;
+    });
     groupCounts[group]=(groupCounts[group]||0)+presentCount+newCount;
-    e.people.forEach(n=>memberCounts[n]=(memberCounts[n]||0)+1);
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) memberCounts[n]=(memberCounts[n]||0)+1;
+    });
   });
   const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);
   const groupMembers={A:{},B:{},C:{},D:{},'D+':{}};
   entries.forEach(e=>{
-    if(!groupMembers[e.group]) groupMembers[e.group]={};
-    e.people.forEach(n=>groupMembers[e.group][n]=(groupMembers[e.group][n]||0)+1);
+    const group=quickGroupCode(e.group);
+    if(!groupMembers[group]) groupMembers[group]={};
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) groupMembers[group][n]=(groupMembers[group][n]||0)+1;
+    });
   });
   const topByGroup={};
   Object.keys(groupMembers).forEach(g=>{
@@ -13733,15 +14180,8 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   // Training day with the highest and lowest attendance FOR EACH GROUP.
   const attendanceDays=entries.map(e=>{
     const group=quickGroupCode(e.group);
-    let present=0,newCount=0,usedHistory=false;
-    try{
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[`${e.date}|${group}`])||null;
-      if(hist && typeof hist==='object' && Object.keys(hist).length){
-        usedHistory=true;
-        Object.values(hist).forEach(v=>{ if(v?.newMember) newCount++; else if(v?.training) present++; });
-      }
-    }catch(err){}
-    if(!usedHistory){ present=e.people.length; newCount=Number(e.newCount||0); }
+    let present=0,newCount=0;
+    Object.values(e.attendanceHistory||{}).forEach(v=>{ if(v?.newMember) newCount++; else if(v?.training) present++; });
     return {date:e.date, group, count:present+newCount};
   });
   const formatStatDate=iso=>{
@@ -13785,7 +14225,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   // štatistiky začínajú od nuly – nepoužívajú testovacie ani profilové údaje.
   const hasSavedStats=entries.length>0;
   const active=hasSavedStats
-    ? new Set(entries.flatMap(e=>e.people)).size
+    ? new Set(entries.flatMap(e=>Object.keys(e.attendanceHistory||{}).filter(k=>{const v=e.attendanceHistory[k]||{}; return !!v.training || !!v.newMember;}))).size
     : 0;
   // NOVÍ: zdrojom je uložená dochádzka + uložené vyúčtovania.
   // Aktuálny stav profilu nepoužívame, preto sa NOVÝ nestratí po neskoršej zmene profilu.
@@ -13795,54 +14235,50 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     const day=Number(String(e.date).slice(8,10));
     if(day<1 || day>daysInMonth) return;
     const group=quickGroupCode(e.group);
-    // 1) Najpresnejší zdroj: attendance history pre konkrétny deň/skupinu.
-    try{
-      const histKey=`${e.date}|${group}`;
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey])||null;
-      if(hist && typeof hist==='object'){
-        Object.keys(hist).forEach(k=>{
-          const v=hist[k]||{};
-          if(v.newMember){
-            newMemberSet.add(k);
-            if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(k);
-          }
-        });
+    // NOVÝ sa berie výhradne zo snapshotu uloženého vo vyúčtovaní.
+    Object.keys(e.attendanceHistory||{}).forEach(k=>{
+      const v=e.attendanceHistory[k]||{};
+      if(v.newMember){
+        newMemberSet.add(k);
+        if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(k);
       }
-    }catch(err){}
-    // 2) Vyúčtovanie si uchováva historický príznak NOVÝ.
-    if(Array.isArray(e.paymentSnapshot)){
-      e.paymentSnapshot.forEach(x=>{
-        if(x && x.newMember){
-          const key=String(x.surname||'').trim()+'|'+String(x.name||'').trim();
-          if(key && key!=='|'){
-            newMemberSet.add(key);
-            if(dailyNewByGroup[group]) dailyNewByGroup[group][day-1].add(key);
-          }
-        }
-      });
-    }
+    });
   });
   const newMembers=newMemberSet.size;
   const dailyNewByGroupCounts=Object.fromEntries(Object.keys(groupNames).map(g=>[g,dailyNewByGroup[g].map(set=>set.size)]));
   const dailyNewCounts=Array.from({length:daysInMonth},(_,i)=>Object.keys(groupNames).reduce((sum,g)=>sum+(dailyNewByGroupCounts[g][i]||0),0));
 
+  // Graf DOCHÁDZKY = výhradne z ULOŽENÉHO VYÚČTOVANIA.
+  // Dôležité: nepoužívame attendanceStateSnapshot, pretože ten môže obsahovať
+  // viac členov než bolo vo finálnom vyúčtovaní. Pre graf je rozhodujúci počet
+  // PLATIEB uložený vo vyúčtovaní (paying). NOVÝ člen sa pridá iba vtedy, ak bol
+  // vo vyúčtovaní uložený ako newCount. Jeden dátum + skupina sa započíta iba raz.
   const daily=Array.from({length:daysInMonth},()=>0);
   const stackedAttendanceByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>0)]));
-  entries.forEach(e=>{
-    const group=quickGroupCode(e.group);
-    const day=Number(String(e.date).slice(8,10));
-    if(day<1 || day>daysInMonth || !stackedAttendanceByGroup[group]) return;
-    let count=0,usedHistory=false;
-    try{
-      const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[`${e.date}|${group}`])||null;
-      if(hist && typeof hist==='object' && Object.keys(hist).length){
-        usedHistory=true;
-        Object.values(hist).forEach(v=>{ if(v?.newMember || v?.training) count++; });
-      }
-    }catch(err){}
-    if(!usedHistory) count=e.people.length+Number(e.newCount||0);
-    stackedAttendanceByGroup[group][day-1]+=count;
-    daily[day-1]+=count;
+  const billingChartMap=new Map();
+  (getBillingRecords()||[]).forEach(r=>{
+    if(r.substituteReference) return;
+    const d=parsePaymentDate(r.date);
+    if(!d || d.month!==m || d.year!==y || d.day<1 || d.day>daysInMonth) return;
+    const group=quickGroupCode(r.group);
+    if(!stackedAttendanceByGroup[group]) return;
+    const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    const uniqueKey=`${iso}|${group}`;
+    const savedAt=Number(r.savedAt||r.updatedAt||0);
+    const prev=billingChartMap.get(uniqueKey);
+    if(prev && Number(prev.savedAt||0)>savedAt) return;
+    // Vyúčtovanie eviduje počet platených tréningov v "paying" a počet NOVÝCH
+    // samostatne. Tento súčet je presne údaj, ktorý má byť v štatistike.
+    let count=Number(r.paying);
+    if(!Number.isFinite(count) || count<0) count=Number(r.presentCount||0);
+    const newCount=Number(r.newCount||0);
+    count+=(Number.isFinite(newCount)&&newCount>0?newCount:0);
+    if(!Number.isFinite(count) || count<0) count=0;
+    billingChartMap.set(uniqueKey,{day:d.day,group,count,savedAt});
+  });
+  billingChartMap.forEach(item=>{
+    stackedAttendanceByGroup[item.group][item.day-1]=item.count;
+    daily[item.day-1]+=item.count;
   });
   const maxDaily=Math.max(1,...daily);
   const stackedDayMax=Math.max(1,...daily);
@@ -13857,9 +14293,9 @@ function renderStatistics(month=appToday().month,year=appToday().year){
         const v=Number((seriesByGroup[g]||[])[i]||0);
         if(!v) return '';
         const h=Math.max(2,Math.round(v/Math.max(1,maxValue)*120));
-        return `<i class=\"stats-stack-segment\" title=\"${g}: ${v}\" style=\"height:${h}px;background:${statGroupColors[g]}\"></i>`;
+        return `<i class=\"stats-stack-segment\" title=\"${g}: ${v}\" style=\"height:${h}px;background:${statGroupColors[g]}\"><span>${v}</span></i>`;
       }).join('');
-      return `<div class=\"stats-stack-col\"><b>${sum||''}</b><div class=\"stats-stack-bar\">${segments}</div><small>${i+1}</small></div>`;
+      return `<div class=\"stats-stack-col\"><b>${sum?`SPOLU ${sum}`:''}</b><div class=\"stats-stack-bar\">${segments}</div><small>${i+1}</small></div>`;
     }).join('')}</div><div class=\"stats-stack-legend\">${groups.map(g=>`<span><i style=\"background:${statGroupColors[g]}\"></i>${g}</span>`).join('')}</div>`;
   };
 
@@ -13886,7 +14322,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     <section class="stats-section">
       <h3>📈 DOCHÁDZKA V MESIACI – CELÝ KLUB</h3>
       ${renderStackedMonthChart(stackedAttendanceByGroup,stackedDayMax,`Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.`)}
-      <div class="stats-money-note">Každý stĺpec je jeden deň. Farby sú rozdelené podľa skupín a hodnoty sa sčítavajú nad seba.</div>
+      <div class="stats-money-note">Každý stĺpec je jeden deň. Každá farba zobrazuje počet ľudí zo samostatného uloženého vyúčtovania skupiny a číslo SPOLU je súčet všetkých vyúčtovaných tréningov v daný deň.</div>
     </section>
 
     <section class="stats-section stats-new-members">
@@ -14023,7 +14459,9 @@ function nav(route){
     if(route==='home'){ if(location.hash!=='#home'){ history.pushState({gtRoute:'home'},'',location.pathname+location.search+'#home'); } renderHome(); return false; }
     if(route==='statistics'){ return openStatisticsScreen(); }
     if(route==='calendar'){ history.pushState({gtRoute:'calendar'},'',location.pathname+location.search+'#calendar'); renderCalendar(); return false; }
-    if(route==='attendance'){ if(isHeadTrainer()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
+    if(route==='attendance'){ if(isHeadTrainer() && !isRealTrainerAttendanceEditor()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
+      window.__attendanceOpenedFromBilling=false;
+      window.__attendanceBillingContext=null;
       // DOCHÁDZKA z Domova / hlavnej navigácie je vždy dnešný deň.
       // Dátum z Kalendára sa nesmie preniesť do tejto vstupnej cesty.
       window.__attendanceOpenedFromCalendar=false;
@@ -14490,8 +14928,13 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 
     let account=null;
     try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
-    const role=account && account.role ? String(account.role).toLowerCase() :
+    try{ repairPeterOnuscakIdentity(); account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
+    let role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
+    const loginName=String(account && (account.display_name||account.name) || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+    const isRealTrainerLogin=(loginName==='VIKTOR ZUFFA'||loginName==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()||loginName==='ANATOLII KUHAL');
+    if(isRealTrainerLogin) role='trainer';
+    else if(loginName==='HLAVNY TRENER') role='head';
     const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
      if(finalRole==='trainer' && account && account.trainer_id!=null){
        try{
@@ -14752,6 +15195,94 @@ setTimeout(set,80);setTimeout(set,300)})();
   }
   document.addEventListener('DOMContentLoaded',fixStats);
   setTimeout(fixStats,300); setTimeout(fixStats,1000);
+})();
+</script>
+
+<style id="gt-my-billing-horizontal-scroll-final">
+/* Mobile: MOJE VYÚČTOVANIE must be horizontally scrollable. */
+.monthly-billing-page .monthly-table-wrap{
+  display:block !important;
+  width:100% !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  box-sizing:border-box !important;
+  overflow-x:auto !important;
+  overflow-y:hidden !important;
+  -webkit-overflow-scrolling:touch !important;
+  overscroll-behavior-x:contain !important;
+  touch-action:pan-x !important;
+  scrollbar-width:auto !important;
+}
+.monthly-billing-page .monthly-table-wrap > .monthly-table{
+  display:table !important;
+  width:max-content !important;
+  min-width:1100px !important;
+  max-width:none !important;
+  table-layout:auto !important;
+}
+</style>
+<script id="gt-my-billing-horizontal-scroll-final">
+(function(){
+  if(window.__gtMyBillingHorizontalFinal) return;
+  window.__gtMyBillingHorizontalFinal=true;
+  var drag=null, touch=null;
+  function wrapOf(e){
+    var t=e && e.target;
+    return t && t.closest ? t.closest('.monthly-billing-page .monthly-table-wrap') : null;
+  }
+  function begin(w,x,y,id){
+    drag={w:w,x:x,y:y,start:w.scrollLeft,id:id,active:false};
+  }
+  document.addEventListener('pointerdown',function(e){
+    var w=wrapOf(e); if(!w) return;
+    begin(w,e.clientX,e.clientY,e.pointerId);
+    try{w.setPointerCapture(e.pointerId);}catch(_){ }
+  },{passive:true});
+  document.addEventListener('pointermove',function(e){
+    if(!drag || drag.id!==e.pointerId) return;
+    var dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+    if(!drag.active){
+      if(Math.abs(dx)<5 && Math.abs(dy)<5) return;
+      if(Math.abs(dx)<=Math.abs(dy)){drag=null;return;}
+      drag.active=true;
+    }
+    if(drag.active){e.preventDefault();drag.w.scrollLeft=drag.start-dx;}
+  },{passive:false});
+  document.addEventListener('pointerup',function(e){
+    if(!drag || drag.id!==e.pointerId) return;
+    var w=drag.w;
+    if(drag.active){
+      w.__gtBillingMoved=true;
+      setTimeout(function(){if(w)w.__gtBillingMoved=false;},450);
+    }
+    try{w.releasePointerCapture(e.pointerId);}catch(_){ }
+    drag=null;
+  },{passive:true});
+  document.addEventListener('touchstart',function(e){
+    var w=wrapOf(e); if(!w || !e.touches.length) return;
+    var t=e.touches[0]; touch={w:w,x:t.clientX,y:t.clientY,start:w.scrollLeft,active:false};
+  },{passive:true});
+  document.addEventListener('touchmove',function(e){
+    if(!touch || !e.touches.length) return;
+    var t=e.touches[0],dx=t.clientX-touch.x,dy=t.clientY-touch.y;
+    if(!touch.active){
+      if(Math.abs(dx)<5 && Math.abs(dy)<5)return;
+      if(Math.abs(dx)<=Math.abs(dy)){touch=null;return;}
+      touch.active=true;
+    }
+    if(touch.active){e.preventDefault();touch.w.scrollLeft=touch.start-dx;}
+  },{passive:false});
+  document.addEventListener('touchend',function(){
+    if(touch && touch.active){
+      var w=touch.w; w.__gtBillingMoved=true;
+      setTimeout(function(){if(w)w.__gtBillingMoved=false;},450);
+    }
+    touch=null;
+  },{passive:true});
+  document.addEventListener('click',function(e){
+    var w=wrapOf(e);
+    if(w && w.__gtBillingMoved){e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();w.__gtBillingMoved=false;}
+  },true);
 })();
 </script>
 </body>

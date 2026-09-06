@@ -1068,8 +1068,20 @@ body{overflow-x:hidden}
 .trainer-avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#333;color:#fff;font-size:24px}
 .monthly-trainer-card div:nth-child(2){display:flex;flex-direction:column}.monthly-trainer-card b{font-size:12px;color:#ffd12b}.monthly-trainer-card span{font-size:14px}.monthly-badge{margin-left:auto;color:#4ea7ff;font-weight:700}
 .monthly-title{margin-bottom:8px}
-.monthly-table-wrap{overflow-x:auto;border:1px solid #8c6800;border-radius:6px}
-.monthly-table{width:100%;min-width:900px;border-collapse:collapse;font-size:11px}
+.monthly-table-wrap{
+  width:100%;
+  max-width:100%;
+  box-sizing:border-box;
+  overflow-x:scroll;
+  overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior-x:contain;
+  touch-action:pan-x;
+  border:1px solid #8c6800;
+  border-radius:6px;
+  scrollbar-width:auto;
+}
+.monthly-table{width:max-content;min-width:900px;border-collapse:collapse;font-size:11px}
 .monthly-table th,.monthly-table td{border:1px solid #6b5200;padding:7px 5px;text-align:center;white-space:nowrap}
 .monthly-table th{color:#eee;font-weight:700;background:#080808}.monthly-table td{color:#ddd}.monthly-table small{display:block;font-size:8px;color:#999;margin-top:2px}
 .monthly-group{display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:4px;color:#fff;font-weight:800}

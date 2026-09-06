@@ -3912,7 +3912,9 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    try{
      let role=account && account.role ? String(account.role).toLowerCase() : 'trainer';
      const loginName=String(account && (account.display_name||account.name) || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
-     if(loginName==='HLAVNY TRENER' || loginName==='HLAVNY TRÉNER') role='head';
+     const isRealTrainerLogin=(loginName==='VIKTOR ZUFFA'||loginName==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()||loginName==='ANATOLII KUHAL');
+     if(isRealTrainerLogin) role='trainer';
+     else if(loginName==='HLAVNY TRENER' || loginName==='HLAVNY TRÉNER') role='head';
      if(typeof activeUserRole!=='undefined'){
        activeUserRole=(role==='admin')?'admin':(role==='head'?'head':'trainer');
        localStorage.setItem('gt-user-role',activeUserRole);
@@ -3999,7 +4001,12 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
      console.warn('⛔ Pokus o prihlásenie ako VZOROVÝ - blokované');
      return;
    }
-   openApp({role:String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer',
+   // Hlavný tréner je iba samostatná rola. Viktor, Peter a Anatolii
+   // sú vždy reálni tréneri, aj keby v starých uložených dátach mali
+   // omylom nastavenú rolu HLAVNÝ TRÉNER.
+   const nm=String(t.full||t.name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+   const realTrainer=(nm==='VIKTOR ZUFFA'||nm==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()||nm==='ANATOLII KUHAL');
+   openApp({role:realTrainer?'trainer':(String(t.role||'TRÉNER').toUpperCase()==='HLAVNÝ TRÉNER'?'head':'trainer'),
      display_name:String(t.full||t.name||'').trim(),trainer_id:t.id,groups:Array.isArray(t.groups)?t.groups:[]});
  }
  function login(){
@@ -9142,6 +9149,7 @@ function attendance(){
         <span>${attendanceState.group}</span><b>${attendanceState.name}</b>
       </div>
       <div class="att-meta">◷ ${attendanceDisplayTime}　⌖ Watsonova 4　♙ ${attendanceState.members.length} členov</div>
+      ${(!isAdmin() && !isHeadTrainer() && String(attendanceState.date||'') < String(appToday().iso)) ? '<div style="margin:10px 0;padding:10px 12px;border-radius:12px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);color:inherit;font-weight:700;text-align:center;font-size:13px;">✎ SPÄTNÁ ÚPRAVA DOCHÁDZKY JE POVOLENÁ</div>' : ''}
 
       <div class="finance">
         <button class="fin-card fin-training" ${(isAttendanceFullyLocked()||(isHeadTrainer()&&!isAnatoliiAttendanceEditor()))&&!isAdmin()?'disabled':''} onclick="editOther('training')"><b>TRÉNING</b><strong id="sumTraining">0 €</strong><small id="countTraining">0 platieb</small></button>
@@ -14543,7 +14551,9 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     let role=account && account.role ? String(account.role).toLowerCase() :
       (localStorage.getItem('gt-user-role')||'trainer').toLowerCase();
     const loginName=String(account && (account.display_name||account.name) || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
-    if(loginName==='HLAVNY TRENER') role='head';
+    const isRealTrainerLogin=(loginName==='VIKTOR ZUFFA'||loginName==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase()||loginName==='ANATOLII KUHAL');
+    if(isRealTrainerLogin) role='trainer';
+    else if(loginName==='HLAVNY TRENER') role='head';
     const finalRole=role==='admin'?'admin':(role==='head'?'head':'trainer');
      if(finalRole==='trainer' && account && account.trainer_id!=null){
        try{

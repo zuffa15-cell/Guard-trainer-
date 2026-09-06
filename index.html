@@ -178,10 +178,6 @@ function initCloudSync(){
       let memberDataChanged=false;
       SYNC_KEYS.forEach(k=>{
         if(isGTLocalAuthKey(k)) return;
-        // Členovia majú vlastný realtime kanál guard-trainer-members.
-        // Shared-db ich nesmie čítať ani zapisovať, inak môže starý snapshot
-        // prepísať novšiu zmenu člena z iného zariadenia.
-        if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1') return;
         if(!data[k]) return;
         if(k==='gt-attendance-delete-order-v1'){
           let remoteDel={};
@@ -577,7 +573,6 @@ function initCloudSync(){
 
   // v846: staré cloudové member kľúče sa NESMÚ migrovať.
     syncEnabled = true;
-    initMemberDirectCloudSync();
     try{ initTrainersDirectSync(); }catch(e){}
     try{ initBillingDirectSync(); }catch(e){}
 
@@ -598,7 +593,7 @@ function pushToCloud(force = false){
   SYNC_KEYS.forEach(k=>{
     // Vyúčtovanie má vlastný realtime dokument guard-trainer-billing/all.
     // Nikdy ho neposielaj do shared-db, kde by stará kópia mohla prepísať novú.
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
+    if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
     let v = originalGetItem(k);
     if(k==='gt-members-real-2026-v847' && v){
       try{ const arr=JSON.parse(v); if(Array.isArray(arr)) v=JSON.stringify(arr.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})); }catch(e){}
@@ -607,7 +602,7 @@ function pushToCloud(force = false){
   });
   Object.keys(localStorage).forEach(k=>{
     if(isGTLocalAuthKey(k)) return;
-    if(k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1' || k==='gt-member-delete-order-v1' || k==='gt-member-application-files-v1' || k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
+    if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
     if(k.startsWith('gt-') && !payload[k]){
       const v=originalGetItem(k);
       if(v) payload[k]=v;
@@ -702,8 +697,7 @@ function pushToCloud(force = false){
 localStorage.setItem = function(key, value){
   originalSetItem(key, value);
   if(isApplyingRemote) return; // ignoruj zmeny ktoré prišli z cloudu
-  const isMemberSyncKey = key==='gt-members-real-2026-v847' || key==='gt-member-save-order-v1' || key==='gt-member-delete-order-v1' || key==='gt-member-application-files-v1';
-  if(syncEnabled && cloudEnabled && key.startsWith('gt-') && !isGTLocalAuthKey(key) && !isMemberSyncKey){
+  if(syncEnabled && cloudEnabled && key.startsWith('gt-') && !isGTLocalAuthKey(key)){
     clearTimeout(window._cloudPushTimeout);
     const delay = (key==='gt-members-real-2026-v845') ? 400 : 1500;
     window._cloudPushTimeout = setTimeout(()=>pushToCloud(), delay);
@@ -6665,87 +6659,56 @@ const MEMBER_APPLICATION_CLOUD_COLLECTION='guard-trainer-applications';
 // v961: členovia majú samostatný Firestore kanál; shared-db už členov nesynchronizuje. Spoločný dokument
 // zostáva zachovaný ako kompatibilita, ale vytvorenie/úprava/vymazanie člena
 // sa už nespolieha iba na veľký spoločný snapshot.
-const MEMBER_DIRECT_CLOUD_COLLECTION='guard-trainer-members';
-let memberDirectSyncReady=false;
-function memberDirectStamp(m){
-  try{return Math.max(Number(localStorage.getItem('gt-member-save-order-v1')?JSON.parse(localStorage.getItem('gt-member-save-order-v1'))[String(m?.id)]||0:0),Number(localStorage.getItem('gt-member-delete-order-v1')?JSON.parse(localStorage.getItem('gt-member-delete-order-v1'))[String(m?.id)]||0:0));}catch(e){return 0;}
-}
-async function saveMemberDirectCloud(member,deleted=false){
+async function syncMemberChangeToSharedCloud(member, deleted=false){
   try{
     if(!db || !member || member.id==null) return false;
     const id=String(member.id);
-    let stamp=memberDirectStamp(member); if(!stamp) stamp=Date.now();
-    if(deleted){
-      await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION).doc(id).set({memberId:id,deleted:true,deletedAt:stamp,updatedAt:stamp},{merge:true});
-    }else{
-      const clean={...member}; delete clean.applicationFile; delete clean.applicationFileName;
-      await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION).doc(id).set({memberId:id,deleted:false,member:clean,updatedAt:stamp},{merge:true});
-    }
-    return true;
-  }catch(e){ console.warn('Guard Trainer: direct member cloud save failed',e); return false; }
-}
-function initMemberDirectCloudSync(){
-  if(!db || memberDirectSyncReady) return;
-  memberDirectSyncReady=true;
-  let directFirstSnapshot=true;
-  db.collection(MEMBER_DIRECT_CLOUD_COLLECTION).onSnapshot(snap=>{
-    let uiChanged=false;
-    // Ak bol samostatný kanál ešte úplne prázdny (napr. po nasadení v960),
-    // jednorazovo ho naplň zo spoločného zoznamu. Potom je autoritatívny už
-    // iba guard-trainer-members a shared-db sa k členom viac nepoužíva.
-    if(directFirstSnapshot && snap.empty){
-      directFirstSnapshot=false;
-      try{
-        db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get().then(doc=>{
-          const data=doc.exists?(doc.data()||{}):{};
-          let arr=[];
-          try{arr=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];}catch(e){arr=[];}
-          if(Array.isArray(arr) && arr.length){
-            arr.forEach(m=>{ if(m&&m.id!=null) saveMemberDirectCloud(m,false); });
-          }else{
-            // Ak ani starý shared snapshot nemá členov, seedni aktuálne lokálne dáta.
-            membersData.forEach(m=>{ if(m&&m.id!=null) saveMemberDirectCloud(m,false); });
-          }
-        }).catch(()=>{});
-      }catch(e){}
-    }else{
-      directFirstSnapshot=false;
-    }
+    let stamp=Date.now();
     try{
-      snap.docChanges().forEach(ch=>{
-        const d=ch.doc.data()||{}, id=String(d.memberId||ch.doc.id);
-        if(!id) return;
-        const remoteAt=Number(d.updatedAt||d.deletedAt||0);
-        let saveOrder={},deleteOrder={};
-        try{saveOrder=JSON.parse(originalGetItem('gt-member-save-order-v1')||'{}')||{};}catch(e){}
-        try{deleteOrder=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};}catch(e){}
-        const localAt=Math.max(Number(saveOrder[id]||0),Number(deleteOrder[id]||0));
-        if(remoteAt && remoteAt<localAt) return;
-        const idx=membersData.findIndex(m=>String(m?.id)===id);
-        if(d.deleted){
-          if(idx>=0){
-            const m=membersData[idx];
-            const deleted=getDeletedMembers().filter(x=>!memberSameName(x,m));
-            const archived=JSON.parse(JSON.stringify(m)); archived.archived=true; archived.deletedAt=new Date(Number(d.deletedAt||remoteAt||Date.now())).toISOString();
-            deleted.push(archived); persistDeletedMembers(deleted);
-            membersData.splice(idx,1); uiChanged=true;
-          }
-          try{deleteOrder[id]=Math.max(Number(deleteOrder[id]||0),remoteAt||Date.now());originalSetItem('gt-member-delete-order-v1',JSON.stringify(deleteOrder));}catch(e){}
-        }else if(d.member){
-          const remote={...d.member};
-          if(idx>=0) membersData[idx]=remote; else membersData.push(remote);
-          try{saveOrder[id]=Math.max(Number(saveOrder[id]||0),remoteAt||Date.now());originalSetItem('gt-member-save-order-v1',JSON.stringify(saveOrder));}catch(e){}
-          uiChanged=true;
+      const so=JSON.parse(originalGetItem('gt-member-save-order-v1')||'{}')||{};
+      const de=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
+      stamp=Math.max(Number(so[id]||0),Number(de[id]||0),stamp);
+    }catch(e){}
+    const uid=firebase.auth().currentUser?.uid || 'unknown';
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let members=[];
+      let saveOrder={};
+      let deleteOrder={};
+      try{const x=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];if(Array.isArray(x))members=x;}catch(e){}
+      try{const x=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};if(x&&typeof x==='object')saveOrder=x;}catch(e){}
+      try{const x=data['gt-member-delete-order-v1']?JSON.parse(data['gt-member-delete-order-v1']):{};if(x&&typeof x==='object')deleteOrder=x;}catch(e){}
+      const byId=new Map();
+      members.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
+      if(deleted){
+        deleteOrder[id]=Math.max(Number(deleteOrder[id]||0),stamp);
+        byId.delete(id);
+      }else{
+        const clean={...member}; delete clean.applicationFile; delete clean.applicationFileName;
+        const old=byId.get(id);
+        const oldAt=Math.max(Number(saveOrder[id]||0),Number(deleteOrder[id]||0));
+        if(!old || stamp>=oldAt){
+          byId.set(id,clean);
+          saveOrder[id]=stamp;
+          if(Number(deleteOrder[id]||0)<=stamp) delete deleteOrder[id];
         }
-      });
-      if(uiChanged){
-        normalizeAllMembers();
-        try{originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));}catch(e){}
-        if(location.hash==='#members') setTimeout(()=>{try{renderMembers();}catch(e){}},0);
-        if(location.hash==='#attendance') setTimeout(()=>{try{attendance();}catch(e){}},0);
       }
-    }catch(e){console.warn('Guard Trainer: direct member cloud sync failed',e);}
-  },err=>console.warn('Guard Trainer: direct member listener failed',err));
+      tx.set(ref,{
+        'gt-members-real-2026-v847':JSON.stringify(Array.from(byId.values())),
+        'gt-member-save-order-v1':JSON.stringify(saveOrder),
+        'gt-member-delete-order-v1':JSON.stringify(deleteOrder),
+        _lastUpdateBy:uid,
+        _updatedAt:Date.now()
+      },{merge:true});
+    });
+    console.log('☁️ Spoločný zoznam členov uložený',id,deleted?'DELETE':'SAVE');
+    return true;
+  }catch(e){
+    console.warn('Guard Trainer: shared member transaction failed',e);
+    return false;
+  }
 }
 
 async function saveApplicationFileToCloud(memberId, fileRec){

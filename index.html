@@ -248,6 +248,21 @@ function initCloudSync(){
           if(mergedRaw!==localRaw){ originalSetItem(k,mergedRaw); changed=true; }
           return;
         }
+        if(k==='gt-attendance-owner-v1'){
+          let localOwners={},remoteOwners={};
+          try{localOwners=JSON.parse(originalGetItem(k)||'{}')||{};}catch(e){}
+          try{remoteOwners=data[k]?JSON.parse(data[k]):{};}catch(e){}
+          const merged={};
+          new Set([...Object.keys(localOwners),...Object.keys(remoteOwners)]).forEach(rawKey=>{
+            const key=canonicalAttendanceHistoryKey(rawKey);
+            const l=localOwners[rawKey],r=remoteOwners[rawKey];
+            const chosen=Number(r?.savedAt||0)>Number(l?.savedAt||0)?r:l;
+            if(chosen&&chosen.trainer)merged[key]=chosen;
+          });
+          const rawMerged=JSON.stringify(merged);
+          if(rawMerged!==String(originalGetItem(k)||'{}')){originalSetItem(k,rawMerged);changed=true;}
+          return;
+        }
         if(k==='gt-monthly-billing-v221'){
           // Vyúčtovanie je zdieľané medzi viacerými zariadeniami/rolami.
           // Nikdy neprepíš celý zoznam starším snapshotom z iného zariadenia.
@@ -596,7 +611,21 @@ async function saveBillingRecordToSharedCloud(record){
     });
     // Aktuálne ukladaný záznam musí byť vždy v cloudovom zozname.
     map.set(canon(record),record);
-    const billing=Array.from(map.values());
+    let owners={}; try{owners=JSON.parse(originalGetItem(ATTENDANCE_OWNER_KEY)||'{}')||{};}catch(e){}
+    const grouped=new Map(),refs=[];
+    Array.from(map.values()).forEach(r=>{
+      if(r.substituteReference){refs.push(r);return;}
+      const k=canonicalAttendanceHistoryKey(`${r.date}|${r.group}`);
+      if(!grouped.has(k))grouped.set(k,[]); grouped.get(k).push(r);
+    });
+    const owned=[];
+    grouped.forEach((rows,k)=>{
+      const o=owners[k]; let pick=null;
+      if(o?.trainer){const on=String(o.trainer).trim().replace(/\s+/g,' ').toUpperCase();const oi=o.trainerId!=null?Number(o.trainerId):null;pick=rows.filter(r=>String(r.trainer||'').trim().replace(/\s+/g,' ').toUpperCase()===on||(oi!=null&&Number.isFinite(oi)&&Number(r.trainerId)===oi)).sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;}
+      if(!pick)pick=[...rows].sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;
+      if(pick)owned.push(pick);
+    });
+    const billing=[...owned,...refs];
     await docRef.set({
       'gt-monthly-billing-v221':JSON.stringify(billing),
       _updatedAt:Date.now()
@@ -635,10 +664,12 @@ async function syncAllLocalBillingToSharedCloud(){
     const map=new Map();
     [...remote,...local].forEach(r=>{
       if(!r || !r.trainer || !r.date || !r.group) return;
-      const k=canon(r), prev=map.get(k);
-      if(!prev || Number(r.savedAt||0)>=Number(prev.savedAt||0)) map.set(k,r);
+      const k=canon(r),prev=map.get(k); if(!prev||Number(r.savedAt||0)>=Number(prev.savedAt||0))map.set(k,r);
     });
-    await docRef.set({'gt-monthly-billing-v221':JSON.stringify(Array.from(map.values())),_updatedAt:Date.now()},{merge:true});
+    let owners={};try{owners=JSON.parse(originalGetItem(ATTENDANCE_OWNER_KEY)||'{}')||{};}catch(e){}
+    const grouped=new Map(),refs=[]; Array.from(map.values()).forEach(r=>{if(r.substituteReference){refs.push(r);return;}const k=canonicalAttendanceHistoryKey(`${r.date}|${r.group}`);if(!grouped.has(k))grouped.set(k,[]);grouped.get(k).push(r);});
+    const owned=[]; grouped.forEach((rows,k)=>{const o=owners[k];let pick=null;if(o?.trainer){const on=String(o.trainer).trim().replace(/\s+/g,' ').toUpperCase();const oi=o.trainerId!=null?Number(o.trainerId):null;pick=rows.filter(r=>String(r.trainer||'').trim().replace(/\s+/g,' ').toUpperCase()===on||(oi!=null&&Number.isFinite(oi)&&Number(r.trainerId)===oi)).sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;}if(!pick)pick=[...rows].sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;if(pick)owned.push(pick);});
+    await docRef.set({'gt-monthly-billing-v221':JSON.stringify([...owned,...refs]),_updatedAt:Date.now()},{merge:true});
     return true;
   }catch(e){
     console.warn('Synchronizácia lokálnych vyúčtovaní do shared-db zlyhala',e);
@@ -671,8 +702,12 @@ async function refreshBillingFromSharedCloud(shouldRender=false){
       if(!prev || Number(r.savedAt||0)>=Number(prev.savedAt||0)) map.set(k,r);
     });
     const merged=Array.from(map.values());
-    const changed=JSON.stringify(merged)!==JSON.stringify(local);
-    if(changed){ monthlyBillingRecords=merged; normalizeMonthlyBillingRecords(); persistMonthlyBillingRecords(); }
+    monthlyBillingRecords=merged; normalizeMonthlyBillingRecords();
+    const owners=getStoredAttendanceOwners(); const grouped=new Map(),refs=[];
+    monthlyBillingRecords.forEach(r=>{if(r.substituteReference){refs.push(r);return;}const k=canonicalAttendanceHistoryKey(`${r.date}|${r.group}`);if(!grouped.has(k))grouped.set(k,[]);grouped.get(k).push(r);});
+    const owned=[]; grouped.forEach((rows,k)=>{const o=owners[k];let pick=null;if(o?.trainer){const on=String(o.trainer).trim().replace(/\s+/g,' ').toUpperCase();const oi=o.trainerId!=null?Number(o.trainerId):null;pick=rows.filter(r=>String(r.trainer||'').trim().replace(/\s+/g,' ').toUpperCase()===on||(oi!=null&&Number.isFinite(oi)&&Number(r.trainerId)===oi)).sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;}if(!pick)pick=[...rows].sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;if(pick)owned.push(pick);});
+    const finalMerged=[...owned,...refs]; const changed=JSON.stringify(finalMerged)!==JSON.stringify(local);
+    if(changed){monthlyBillingRecords=finalMerged;persistMonthlyBillingRecords();}
     if(shouldRender && isHeadTrainer() && location.hash==='#trainer-month'){
       renderHeadTrainerBilling();
     }
@@ -839,6 +874,20 @@ function pushToCloud(force = false){
         const m={}; new Set([...Object.keys(l),...Object.keys(r)]).forEach(k=>m[k]=Math.max(Number(l[k]||0),Number(r[k]||0)));
         payload['gt-attendance-admin-edits-v1']=JSON.stringify(m);
       }
+      // Vlastníctvo tréningu: jeden dátum + skupina má presne jedného vlastníka.
+      {
+        let localOwners={},remoteOwners={};
+        try{localOwners=JSON.parse(payload['gt-attendance-owner-v1']||'{}')||{};}catch(e){}
+        try{remoteOwners=JSON.parse(remote['gt-attendance-owner-v1']||'{}')||{};}catch(e){}
+        const out={};
+        new Set([...Object.keys(localOwners),...Object.keys(remoteOwners)]).forEach(rawKey=>{
+          const key=canonicalAttendanceHistoryKey(rawKey);
+          const l=localOwners[rawKey],r=remoteOwners[rawKey];
+          const chosen=Number(r?.savedAt||0)>Number(l?.savedAt||0)?r:l;
+          if(chosen&&chosen.trainer)out[key]=chosen;
+        });
+        payload['gt-attendance-owner-v1']=JSON.stringify(out);
+      }
       // Vyúčtovanie: pri pushnutí zlúčime lokálne a cloudové záznamy podľa
       // tréner + dátum + skupina. Vymazanie je chránené tombstonom, aby sa
       // odstránený tréning z druhého zariadenia znovu neobjavil.
@@ -865,7 +914,24 @@ function pushToCloud(force = false){
           if(Number(row.savedAt||0)>=Number(prev.savedAt||0)) map.set(ck,row);
         };
         localRows.forEach(put); remoteRows.forEach(put);
-        payload['gt-monthly-billing-v221']=JSON.stringify(Array.from(map.values()));
+        let owners={}; try{owners=JSON.parse(payload['gt-attendance-owner-v1']||'{}')||{};}catch(e){}
+        const byTraining=new Map(),refs=[];
+        Array.from(map.values()).forEach(row=>{
+          if(row.substituteReference){refs.push(row);return;}
+          const key=canonicalAttendanceHistoryKey(`${row.date}|${row.group}`);
+          if(!byTraining.has(key))byTraining.set(key,[]); byTraining.get(key).push(row);
+        });
+        const finalRows=[];
+        byTraining.forEach((rows,key)=>{
+          const owner=owners[key]; let pick=null;
+          if(owner&&owner.trainer){
+            const on=String(owner.trainer).trim().replace(/\s+/g,' ').toUpperCase(); const oi=owner.trainerId!=null?Number(owner.trainerId):null;
+            pick=rows.filter(r=>String(r.trainer||'').trim().replace(/\s+/g,' ').toUpperCase()===on || (oi!=null&&Number.isFinite(oi)&&Number(r.trainerId)===oi)).sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;
+          }
+          if(!pick)pick=[...rows].sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;
+          if(pick)finalRows.push(pick);
+        });
+        payload['gt-monthly-billing-v221']=JSON.stringify([...finalRows,...refs]);
       }
       // Dochádzka: union podľa canonical date|group. Pri rovnakom kľúči
       // vyhrá záznam s novším uložením; ak nemáme timestamp, existujúci
@@ -4250,7 +4316,12 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
          if(!arr.length && data.trainersData){
            try{const x=JSON.parse(data.trainersData||'[]');if(Array.isArray(x))arr=x;}catch(e){}
          }
-         const found=arr.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
+         const found=arr.find(x=>{
+           if(!x || x.active===false || Number(x.id)===101 || Number(x.id)===102) return false;
+           const nn=String(x.full||x.name||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+           if(nn==='TRENER 1' || nn==='TRENER 2') return false;
+           return String(x.loginPassword||'').trim()===pass;
+         });
          if(found) finish(found);
        }).catch(()=>{});
      }
@@ -4514,7 +4585,7 @@ function persistSubstitutionOffers(){
   catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
 }
 const ALL_TRAINERS = ['JÁN NOVÁK','MATEJ KOVÁČ','LUCIA ŠIMKOVÁ','PETER TÓTH','ZUZANA MIHÁLOVÁ'];
-let CURRENT_TRAINER_NAME = 'TRÉNER 1';
+let CURRENT_TRAINER_NAME = '';
 MY_TRAINER_GROUPS=[];
 
 function currentDateKey(){
@@ -10219,35 +10290,16 @@ try{
   }
 }catch(e){ console.warn('Načítanie uložených vyúčtovaní sa nepodarilo',e); }
 function normalizeMonthlyBillingRecords(){
+  const source=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
   const map=new Map();
-  const norm=s=>String(s||'').trim().toUpperCase();
-  (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
-    const d=parsePaymentDate(r.date);
-    if(!d) return;
-    const trainer=String(r.trainer||CURRENT_TRAINER_NAME||'').trim();
-    const group=String(r.group||'').trim();
-    const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    // One trainer + one date + one group is exactly one training record.
-    // Older test data could differ only by trainer capitalization/spacing,
-    // which previously produced a second visible row.
-    // One trainer + one calendar date + one group is ALWAYS one visible
-    // training. Older versions could leave suffixes such as |SUB|,
-    // |ORIGINAL| or slightly different record keys, which created two rows
-    // for the same training. The canonical key deliberately ignores those
-    // suffixes.
-    const key=`${norm(trainer)}|${dateKey}|${norm(group)}`;
+  const norm=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
+  source.forEach(r=>{
+    if(!r) return;
+    const d=parsePaymentDate(r.date); if(!d) return;
+    const dk=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    const key=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
     const prev=map.get(key);
-    if(!prev){
-      map.set(key,r);
-      return;
-    }
-    // Keep the actual financial record when one exists. If both are real
-    // financial records, the later stored record wins (it represents the
-    // latest re-save of the same training). Informational substitute rows
-    // never create a second training row.
-    if(prev.substituteReference && !r.substituteReference){ map.set(key,r); return; }
-    if(!prev.substituteReference && r.substituteReference){ return; }
-    map.set(key,r);
+    if(!prev || (prev.substituteReference && !r.substituteReference) || (!prev.substituteReference && !r.substituteReference && Number(r.savedAt||0)>=Number(prev.savedAt||0))) map.set(key,r);
   });
   monthlyBillingRecords=Array.from(map.values());
 }
@@ -10948,49 +11000,60 @@ function cleanupMayJune2026TrainingData(){
 }
 cleanupMayJune2026TrainingData();
 
+function billingTrainingGroupKey(record){
+  const d=parsePaymentDate(record&&record.date);
+  const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record&&record.date||'');
+  return `${dk}|${String(record&&record.group||'').trim().toUpperCase()}`;
+}
+function getStoredAttendanceOwners(){
+  try{ const raw=originalGetItem(ATTENDANCE_OWNER_KEY)||localStorage.getItem(ATTENDANCE_OWNER_KEY)||'{}'; const obj=JSON.parse(raw); return obj&&typeof obj==='object'?obj:{}; }catch(e){ return {}; }
+}
+function getAuthoritativeBillingRowsForMonth(month,year){
+  const source=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
+  const owners=getStoredAttendanceOwners();
+  const groups=new Map();
+  source.forEach(r=>{
+    if(!r || r.substituteReference) return;
+    const d=parsePaymentDate(r.date);
+    if(!d || d.month!==Number(month) || d.year!==Number(year)) return;
+    const key=billingTrainingGroupKey(r);
+    if(!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(r);
+  });
+  const chosen=[];
+  groups.forEach((rows,key)=>{
+    const owner=owners[key]; let pick=null;
+    if(owner&&owner.trainer){
+      const on=String(owner.trainer).trim().replace(/\s+/g,' ').toUpperCase();
+      const oi=owner.trainerId!=null?Number(owner.trainerId):null;
+      pick=rows.filter(r=>String(r.trainer||r.name||'').trim().replace(/\s+/g,' ').toUpperCase()===on || (oi!=null&&Number.isFinite(oi)&&Number(r.trainerId)===oi)).sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;
+    }
+    if(!pick) pick=[...rows].sort((a,b)=>Number(b.savedAt||0)-Number(a.savedAt||0))[0]||null;
+    if(pick) chosen.push(pick);
+  });
+  return chosen;
+}
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().replace(/\s+/g,' ').toUpperCase();
-  // VYÚČTOVANIE VLASTNÍ KONKRÉTNY TRÉNER, KTORÝ HO ULOŽIL.
-  // Meno je autoritatívne, pretože staršie/opravené účty môžu mať historicky
-  // nesprávny trainerId. trainerId používame ako záložnú identitu iba pri
-  // záznamoch, ktoré nemajú použiteľné meno trénera.
   const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().replace(/\s+/g,' ').toUpperCase()===target);
   const targetId=profile&&profile.id!=null?Number(profile.id):null;
-  let rows=monthlyBillingRecords.filter(r=>{
+  let rows=getAuthoritativeBillingRowsForMonth(month,year).filter(r=>{
     const rowName=String(r?.trainer||r?.name||'').trim().replace(/\s+/g,' ').toUpperCase();
     if(rowName) return rowName===target;
     const rid=r&&r.trainerId!=null?Number(r.trainerId):null;
-    return targetId!=null && Number.isFinite(targetId) && rid===targetId;
-  }).filter(r=>{
-    const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
+    return targetId!=null&&Number.isFinite(targetId)&&rid===targetId;
   });
-
-  // Rovnaké poradie ako v „Moje vyúčtovanie“ trénera:
-  // dátumy od najnovšieho a pri rovnakom dátume skupiny podľa posledného
-  // uloženia dochádzky (najnovšie uložená skupina je prvá).
   const originalOrder=new Map(rows.map((r,i)=>[r,i]));
   rows.sort((a,b)=>{
-    const da=parsePaymentDate(a.date), db=parsePaymentDate(b.date);
+    const da=parsePaymentDate(a.date),db=parsePaymentDate(b.date);
     const dayDiff=new Date(db.year,db.month-1,db.day)-new Date(da.year,da.month-1,da.day);
-    if(dayDiff!==0) return dayDiff;
-
+    if(dayDiff!==0)return dayDiff;
     const aDate=da?`${da.year}-${String(da.month).padStart(2,'0')}-${String(da.day).padStart(2,'0')}`:String(a.date||'');
     const bDate=db?`${db.year}-${String(db.month).padStart(2,'0')}-${String(db.day).padStart(2,'0')}`:String(b.date||'');
-    const as=getAttendanceSavedAt(aDate,a.group);
-    const bs=getAttendanceSavedAt(bDate,b.group);
-    if(as!==bs){
-      if(as===0) return 1;
-      if(bs===0) return -1;
-      return bs-as;
-    }
-
-    // Staršie záznamy bez timestampu dochádzky zachovajú poradie podľa uloženia vyúčtovania.
-    const sa=Number(a.savedAt||0), sb=Number(b.savedAt||0);
-    if(sa!==sb){
-      if(sa===0) return 1;
-      if(sb===0) return -1;
-      return sb-sa;
-    }
+    const as=getAttendanceSavedAt(aDate,a.group),bs=getAttendanceSavedAt(bDate,b.group);
+    if(as!==bs){if(as===0)return 1;if(bs===0)return -1;return bs-as;}
+    const sa=Number(a.savedAt||0),sb=Number(b.savedAt||0);
+    if(sa!==sb){if(sa===0)return 1;if(sb===0)return -1;return sb-sa;}
     return (originalOrder.get(a)||0)-(originalOrder.get(b)||0);
   });
   return rows;

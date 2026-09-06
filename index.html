@@ -10765,11 +10765,23 @@ function initBillingDirectSync(){
           if(typeof monthlyBillingRecords!=='undefined'){
             monthlyBillingRecords.splice(0, monthlyBillingRecords.length, ...merged);
           }
-          try{ 
-            if(typeof renderHeadTrainerBilling==='function' && (isAdmin()||isHeadTrainer())){
-              if((location.hash||'').includes('billing')) renderHeadTrainerBilling();
+          try{
+            // Realtime serverová zmena sa musí okamžite premietnuť aj do práve
+            // otvorenej obrazovky hlavného trénera. Predtým sa kontroloval iba
+            // URL hash "billing", ale detail trénera používa #head-trainer-detail.
+            // Preto sa po príchode snapshotu mohla zmena po vymazaní ukázať až
+            // po veľkom refreshe. Stav otvoreného detailu si držíme explicitne.
+            if(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer())){
+              const detail=window.__gtHeadTrainerDetail;
+              const detailOpen=!!document.querySelector('.monthly-billing-page');
+              const overviewOpen=!!document.querySelector('.head-billing');
+              if(detailOpen && detail && typeof renderHeadTrainerDetail==='function'){
+                renderHeadTrainerDetail(detail.trainerName, detail.month, detail.year);
+              }else if(overviewOpen && typeof renderHeadTrainerBilling==='function'){
+                renderHeadTrainerBilling();
+              }
             }
-          }catch(e){}
+          }catch(e){ console.warn('realtime billing UI refresh fail',e); }
         }
       }catch(e){ console.warn('merge billing fail', e); }
     };
@@ -11649,6 +11661,7 @@ window.deleteBillingTrainingAsAdmin=deleteBillingTrainingAsAdmin;
 
 function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToday().year){
   const app=document.querySelector('.app');
+  window.__gtHeadTrainerDetail={trainerName:String(trainerName||'').trim(),month:Number(month),year:Number(year)};
   const rows=getTrainerMonthlyRecords(trainerName,month,year);
   const targetTrainerName=String(trainerName||'').trim().toUpperCase();
   const realTrainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===targetTrainerName);
@@ -12181,6 +12194,7 @@ if(!window.__guardTrainerDetailPdfHandlers){
 
 function renderHeadTrainerBilling(){
   const app=document.querySelector('.app');
+  window.__gtHeadTrainerDetail=null;
   const period=getHeadTrainerBillingPeriod();
   const month=period.month, year=period.year;
   const d=getHeadTrainerRowsForMonth(month,year);

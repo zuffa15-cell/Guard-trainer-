@@ -10558,11 +10558,26 @@ async function deleteMyBillingRecord(recordKey, btn){
   const idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
   if(idx<0) return false;
   const r=monthlyBillingRecords[idx];
-  const owner=String(r.trainer||'').trim().toUpperCase();
-  // Tréner môže mazať iba vlastné vyúčtovanie. Admin môže mazať ľubovoľné.
-  if(!isAdmin() && owner!==me){
-    toast('Môžeš vymazať iba svoje vyúčtovanie.');
-    return false;
+  const owner=String(r.trainer||'').trim();
+  // Všetci reálni tréneri majú rovnaké oprávnenie: môžu zmazať iba svoje
+  // vlastné vyúčtovanie. Identita sa overuje rovnakým spôsobom ako pri
+  // zobrazení „Moje vyúčtovanie“ – meno bez diakritiky, trainerId a savedBy.
+  // Tým sa Peter správa presne rovnako ako Anatolii a staré meno „TRÉNER 1“
+  // mu nezablokuje mazanie jeho vlastného tréningu.
+  if(!isAdmin()){
+    const norm=s=>String(s||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+    const meNorm=norm(me);
+    const ownerNorm=norm(owner);
+    const savedByNorm=norm(r.savedBy||'');
+    const rid=Number(r.trainerId);
+    const myId=currentTrainerAccountId();
+    const ownById=(myId!=null && Number.isFinite(rid) && rid>0 && Number(rid)===Number(myId));
+    const ownByName=ownerNorm===meNorm || savedByNorm===meNorm;
+    const peterLegacy=isPeterOnuscakName(me) && (isPeterOnuscakName(owner) || isPeterOnuscakName(r.savedBy||'') || /^TRENER\s*1$/i.test(owner));
+    if(!ownById && !ownByName && !peterLegacy){
+      toast('Môžeš vymazať iba svoje vyúčtovanie.');
+      return false;
+    }
   }
   if(!confirm(`Naozaj vymazať toto vyúčtovanie?\n\n${r.date||''} – ${r.group||''} – ${r.trainer||''}\n\nDochádzka zostane zachovaná.`)) return false;
 

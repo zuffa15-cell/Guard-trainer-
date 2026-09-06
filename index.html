@@ -8477,12 +8477,27 @@ function isAttendanceTodayForTrainer(){
     return String(attendanceState.date)===`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
   }catch(e){ return false; }
 }
-function isAnatoliiAttendanceEditor(){ return false; }
-function attendanceEditorHeadAllowed(){ return isAnatoliiAttendanceEditor(); }
+function isAnatoliiAttendanceEditor(){
+  // Anatolii Kuhal je reálny tréner, nie hlavný tréner. Staré uložené
+  // účty mohli mať nesprávnu rolu, preto jeho identitu určujeme aj podľa mena.
+  try{
+    const n=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+    return n==='ANATOLII KUHAL';
+  }catch(e){ return false; }
+}
+function isRealTrainerAttendanceEditor(){
+  try{
+    const n=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+    return n==='VIKTOR ZUFFA' || n==='PETER ONUŠČÁK'.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase() || n==='ANATOLII KUHAL';
+  }catch(e){ return false; }
+}
+function attendanceEditorHeadAllowed(){ return false; }
 
 function isAttendanceFullyLocked(){
   if(isAdmin()) return false;
-  if(isHeadTrainer() && !isAnatoliiAttendanceEditor()) return true;
+  // Všetci traja reálni tréneri môžu spätne upravovať svoju dochádzku.
+  if(isRealTrainerAttendanceEditor()) return false;
+  if(isHeadTrainer()) return true;
   // FIX: Tréner môže spätne opraviť svoju vlastnú dochádzku
   // Ak je to jeho skupina, môže upravovať aj staršie dni
   try{
@@ -8535,7 +8550,9 @@ function attendancePaymentLockKey(){
 }
 function isAttendancePaymentsLocked(){
   if(isAdmin()) return false;
-  if(isHeadTrainer() && !isAnatoliiAttendanceEditor()) return true;
+  // Aj členské a registračné môže spätne meniť každý z troch reálnych trénerov.
+  if(isRealTrainerAttendanceEditor()) return false;
+  if(isHeadTrainer()) return true;
   // FIX: Tréner môže spätne opraviť aj členské/registračné pre svoju skupinu
   try{
     const myId=currentTrainerAccountId();
@@ -8992,7 +9009,7 @@ function applyBillingSnapshotToAttendance(){
 function deleteCurrentTrainerAttendance(){
   try{
     if(isAdmin()) { /* admin má tiež povolenie */ }
-    else if(isHeadTrainer()) { toast('Hlavný tréner má dochádzku iba na čítanie.'); return false; }
+    else if(isHeadTrainer() && !isRealTrainerAttendanceEditor()) { toast('Hlavný tréner má dochádzku iba na čítanie.'); return false; }
     const date=String(attendanceState?.date||'');
     const group=String(attendanceState?.group||'').trim().toUpperCase();
     if(!date||!group){ toast('Dochádzku sa nepodarilo identifikovať.'); return false; }
@@ -9042,7 +9059,7 @@ function deleteCurrentTrainerAttendance(){
 window.deleteCurrentTrainerAttendance=deleteCurrentTrainerAttendance;
 
 function attendance(){
-  if(!isAdmin() && (!isHeadTrainer() || isAnatoliiAttendanceEditor())){
+  if(!isAdmin() && (!isHeadTrainer() || isRealTrainerAttendanceEditor())){
     const accountId=currentTrainerAccountId();
     if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
     const wantedDate=attendanceState.date||appToday().iso;
@@ -9168,7 +9185,7 @@ function attendance(){
 
       <div class="members-list" id="attendanceList">${renderAttendanceRows()}</div>
       <button class="club-billing-button" ${isAttendanceFullyLocked()&&!isAdmin()?'disabled':''} onclick="return openTrainingBillingFromAttendance()">✓ POTVRDIŤ DOCHÁDZKU</button>
-      ${(!isAdmin() && !isHeadTrainer()) ? '<button type="button" class="delete-attendance-btn" onclick="return deleteCurrentTrainerAttendance()">🗑 VYMAZAŤ DOCHÁDZKU</button>' : ''}
+      ${(!isAdmin() && (!isHeadTrainer() || isRealTrainerAttendanceEditor())) ? '<button type="button" class="delete-attendance-btn" onclick="return deleteCurrentTrainerAttendance()">🗑 VYMAZAŤ DOCHÁDZKU</button>' : ''}
       <div class="attendance-pdf-actions">
         <button type="button" onclick="return saveAttendancePaymentsPDF()">PDF</button>
         <button type="button" onclick="return shareAttendancePaymentsPDF()">ZDIEĽAŤ</button>

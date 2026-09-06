@@ -84,37 +84,76 @@ function initMemberSharedCloudSync(){
   const ref=db.collection(CLOUD_COLLECTION).doc('shared-members');
   ref.onSnapshot(doc=>{
     try{
-      if(!doc.exists){
-        // Jednorazové založenie spoločného zoznamu. Existujúci lokálny zoznam
-        // sa použije iba vtedy, keď server ešte nemá spoločný dokument.
-        if(typeof membersData!=='undefined' && Array.isArray(membersData) && membersData.length){
-          const clean=membersData.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;});
-          const saveOrder={}; clean.forEach(m=>saveOrder[String(m.id)]=Date.now());
-          ref.set({members:JSON.stringify(clean),saveOrder:JSON.stringify(saveOrder),deleteOrder:'{}',_updatedAt:Date.now(),_lastUpdateBy:firebase.auth().currentUser?.uid||'unknown'},{merge:true}).catch(e=>console.warn('Guard Trainer: shared-members init failed',e));
-        }
+      if(typeof membersData==='undefined' || !Array.isArray(membersData)) return;
+      let remote=[],remoteSave={},remoteDelete={};
+      if(doc.exists){
+        const d=doc.data()||{};
+        try{const x=d.members?JSON.parse(d.members):[];if(Array.isArray(x))remote=x;}catch(e){}
+        try{const x=d.saveOrder?JSON.parse(d.saveOrder):{};if(x&&typeof x==='object')remoteSave=x;}catch(e){}
+        try{const x=d.deleteOrder?JSON.parse(d.deleteOrder):{};if(x&&typeof x==='object')remoteDelete=x;}catch(e){}
+      }else{
+        // Server ešte nemá zoznam – založ ho z aktuálneho lokálneho zoznamu.
+        const clean=membersData.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;});
+        const saveOrder={}; clean.forEach(m=>saveOrder[String(m.id)]=Date.now());
+        ref.set({members:JSON.stringify(clean),saveOrder:JSON.stringify(saveOrder),deleteOrder:'{}',_updatedAt:Date.now(),_lastUpdateBy:firebase.auth().currentUser?.uid||'unknown'},{merge:true}).catch(e=>console.warn('Guard Trainer: shared-members init failed',e));
         return;
       }
-      const d=doc.data()||{};
-      let remote=[];
-      try{const x=d.members?JSON.parse(d.members):[];if(Array.isArray(x))remote=x;}catch(e){}
-      if(!remote.length) return;
-      const clean=remote.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;});
-      if(typeof membersData==='undefined') return;
-      const old=JSON.stringify(membersData);
-      membersData.splice(0,membersData.length,...clean);
+
+      // Zlúč lokálny a serverový zoznam podľa timestampu konkrétneho člena.
+      // Server nesmie vyhodiť nového člena, ktorý bol práve uložený na inom zariadení.
+      const localRaw=originalGetItem(MEMBERS_STORAGE_KEY);
+      let local=[];
+      try{const x=localRaw?JSON.parse(localRaw):[];if(Array.isArray(x))local=x;}catch(e){}
+      const localSaveRaw=originalGetItem(MEMBER_SAVE_ORDER_KEY);
+      const localDeleteRaw=originalGetItem('gt-member-delete-order-v1');
+      let localSave={},localDelete={};
+      try{const x=localSaveRaw?JSON.parse(localSaveRaw):{};if(x&&typeof x==='object')localSave=x;}catch(e){}
+      try{const x=localDeleteRaw?JSON.parse(localDeleteRaw):{};if(x&&typeof x==='object')localDelete=x;}catch(e){}
+
+      const lm=new Map(local.filter(m=>m&&m.id!=null).map(m=>[String(m.id),m]));
+      const rm=new Map(remote.filter(m=>m&&m.id!=null).map(m=>[String(m.id),m]));
+      const ids=new Set([...lm.keys(),...rm.keys(),...Object.keys(localDelete),...Object.keys(remoteDelete)]);
+      const merged=[];
+      const localNeedsPush=[];
+      const remoteNeedsPush=[];
+      ids.forEach(id=>{
+        const la=Math.max(Number(localSave[id]||0),Number(localDelete[id]||0));
+        const ra=Math.max(Number(remoteSave[id]||0),Number(remoteDelete[id]||0));
+        if(Number(localDelete[id]||0)>0 && Number(localDelete[id]||0)>=ra){
+          return;
+        }
+        if(Number(remoteDelete[id]||0)>0 && Number(remoteDelete[id]||0)>=la){
+          return;
+        }
+        const l=lm.get(id), r=rm.get(id);
+        if(l && (!r || Number(localSave[id]||0)>Number(remoteSave[id]||0))){
+          merged.push(l); localNeedsPush.push(l);
+        }else if(r){
+          merged.push(r);
+        }else if(l){
+          merged.push(l); localNeedsPush.push(l);
+        }
+      });
+
+      merged.sort((a,b)=>String(a.surname||'').localeCompare(String(b.surname||''),'sk')||String(a.name||'').localeCompare(String(b.name||''),'sk'));
+      const before=JSON.stringify(membersData);
+      membersData.splice(0,membersData.length,...merged);
       normalizeAllMembers();
       applyMemberApplicationFiles();
       originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
-      if(old!==JSON.stringify(membersData)){
+
+      if(before!==JSON.stringify(membersData)){
         if(location.hash==='#members' || location.hash==='#attendance'){
           try{ if(location.hash==='#members') renderMembers(); else refreshAttendance(); }catch(e){}
         }
-        console.log('📥 Spoločný zoznam členov načítaný zo servera:',membersData.length);
+        console.log('📥 Spoločný zoznam členov načítaný/zosúladený zo servera:',membersData.length);
       }
+
+      // Ak je na tomto zariadení novší člen, dorovnaj ho na server cez transakciu.
+      localNeedsPush.forEach(m=>{ try{ syncMemberChangeToSharedCloud(m,false); }catch(e){} });
     }catch(e){console.warn('Guard Trainer: shared member snapshot failed',e);}
   },e=>console.warn('Guard Trainer: shared-members listener failed',e));
 }
-
 function initCloudSync(){
   if(!db) return;
   

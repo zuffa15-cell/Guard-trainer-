@@ -3932,11 +3932,11 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
            }catch(e){}
            if(fullProfile){
              if(String(fullProfile.full||'').toUpperCase().includes('VZOROV')) continue;
-             return fullProfile;
+             return canonicalTrainerLoginProfile(fullProfile);
            }
            // Ak profil nie je, vráť aspoň entry ako trainer
            if(String(entry.name||'').toUpperCase().includes('VZOROV')) continue;
-           return {id:tId, full:String(entry.name||''), name:String(entry.name||''), role:entry.role||'TRÉNER', groups:Array.isArray(entry.groups)?entry.groups:[], loginPassword:cleanPass, active:true};
+           return canonicalTrainerLoginProfile({id:tId, full:String(entry.name||''), name:String(entry.name||''), role:entry.role||'TRÉNER', groups:Array.isArray(entry.groups)?entry.groups:[], loginPassword:cleanPass, active:true});
          }
        }
      }
@@ -3951,7 +3951,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
          const arr=JSON.parse(localStorage.getItem(kk)||'[]');
          if(Array.isArray(arr)){
            const hit=arr.find(x=>x && !x.isTemplate && x.active!==false && String(x.loginPassword||'').trim()===cleanPass && !String(x.full||'').toUpperCase().includes('VZOROV'));
-           if(hit) return hit;
+           if(hit) return canonicalTrainerLoginProfile(hit);
          }
        }catch(e){}
      }
@@ -3972,7 +3972,20 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
    return null;
  }
  
- function openTrainer(t){
+ function canonicalTrainerLoginProfile(t){
+   if(!t) return t;
+   const n=String(t.full||t.name||'').trim().toLowerCase();
+   const legacy=(n==='tréner 1'||n==='trener 1');
+   if(legacy){
+     const peter=(trainersData||[]).find(x=>String(x.full||x.name||'').trim().toLowerCase()==='peter onuščák');
+     if(peter) return {...peter, loginPassword:t.loginPassword||peter.loginPassword};
+     return {...t,id:Number(t.id)||101,full:'Peter Onuščák',name:'Peter Onuščák',role:'TRÉNER',isTemplate:false,active:true,status:'AKTÍVNA'};
+   }
+   if(n==='tréner 2'||n==='trener 2') return null;
+   return t;
+}
+function openTrainer(t){
+   t=canonicalTrainerLoginProfile(t);
    if(!t || t.isTemplate || String(t.full||'').toUpperCase().includes('VZOROV')){
      console.warn('⛔ Pokus o prihlásenie ako VZOROVÝ - blokované');
      return;
@@ -4037,12 +4050,12 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
              const found=Object.values(pw||{}).find(x=>x && x.active!==false && !x.isTemplate && String(x.password||'').trim()===pass);
              if(found){
                const live=(trainersData||[]).find(t=>Number(t.id)===Number(found.id));
-               finish({
+               finish(canonicalTrainerLoginProfile({
                  id:found.id,
                  full:String(live?.full||live?.name||found.name||'').trim(),
                  role:live?.role||found.role,
                  groups:Array.isArray(live?.groups)?[...live.groups]:(Array.isArray(found.groups)?[...found.groups]:[])
-               });
+               }));
                return;
              }
            }
@@ -4062,7 +4075,7 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
            try{const x=JSON.parse(data.trainersData||'[]');if(Array.isArray(x))arr=x;}catch(e){}
          }
          const found=arr.find(x=>x && x.active!==false && String(x.loginPassword||'').trim()===pass);
-         if(found) finish(found);
+         if(found) finish(canonicalTrainerLoginProfile(found));
        }).catch(()=>{});
      }
    }catch(e){}
@@ -4361,7 +4374,7 @@ function persistSubstitutionOffers(){
   catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
 }
 const ALL_TRAINERS = ['JÁN NOVÁK','MATEJ KOVÁČ','LUCIA ŠIMKOVÁ','PETER TÓTH','ZUZANA MIHÁLOVÁ'];
-let CURRENT_TRAINER_NAME = 'TRÉNER 1';
+let CURRENT_TRAINER_NAME = 'Peter Onuščák';
 MY_TRAINER_GROUPS=[];
 
 function currentDateKey(){
@@ -5686,9 +5699,9 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:1,name:'Peter K.',full:'Peter Kováč',role:'HLAVNÝ TRÉNER',email:'peter@guard.sk',phone:'0905 123 456',license:'Trieda 2',valid:'30. 06. 2027',groups:['A','B','C']},
- {id:101,name:'Tréner 1',full:'Tréner 1',role:'TRÉNER',email:'trener1@guard.sk',phone:'0900 000 001',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'},
- {id:102,name:'Tréner 2',full:'Tréner 2',role:'TRÉNER',email:'trener2@guard.sk',phone:'0900 000 002',license:'Trieda 1',valid:'31. 12. 2027',groups:['A','B'],active:true,status:'AKTÍVNA'}
+ {id:101,name:'Peter Onuščák',full:'Peter Onuščák',role:'TRÉNER',email:'',phone:'',license:'',valid:'31. 12. 2027',groups:[],active:true,status:'AKTÍVNA'},
+ {id:103,name:'Viktor Žuffa',full:'Viktor Žuffa',role:'TRÉNER',email:'',phone:'',license:'',valid:'31. 12. 2027',groups:[],active:true,status:'AKTÍVNA'},
+ {id:104,name:'Anatolii Kuhal',full:'Anatolii Kuhal',role:'TRÉNER',email:'',phone:'',license:'',valid:'31. 12. 2027',groups:[],active:true,status:'AKTÍVNA'}
 ];
 const TRAINERS_STORAGE_KEY='gt-trainers-v395';
 try{
@@ -8422,21 +8435,7 @@ function isAttendanceTodayForTrainer(){
     return String(attendanceState.date)===`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
   }catch(e){ return false; }
 }
-function isAnatoliiAttendanceEditor(){
-  // Anatolii Kuhal is the hlavný tréner, but he is also allowed to edit
-  // attendance retroactively, including membership and registration payments.
-  // This exception is intentionally limited to his real trainer profile.
-  try{
-    if(!isHeadTrainer()) return false;
-    const myId=currentTrainerAccountId();
-    if(myId!=null){
-      const t=(trainersData||[]).find(x=>Number(x.id)===Number(myId) && !x.isTemplate);
-      if(t && /ANATOLII\s+KUHAL/i.test(String(t.full||t.name||''))) return true;
-    }
-    const name=String(getCurrentTrainerDisplayName()||'').trim();
-    return /ANATOLII\s+KUHAL/i.test(name);
-  }catch(e){ return false; }
-}
+function isAnatoliiAttendanceEditor(){ return false; }
 function attendanceEditorHeadAllowed(){ return isAnatoliiAttendanceEditor(); }
 
 function isAttendanceFullyLocked(){
@@ -11633,7 +11632,7 @@ function getHeadTrainerRowsForMonth(month=appToday().month,year=appToday().year)
   // ZDROJ PRAVDY PRE HLAVNÉHO TRÉNERA:
   // Použi presne tie isté mesačné záznamy, ktoré vidí detail „Moje vyúčtovanie“
   // konkrétneho trénera. Tým sa čísla (vrátane REGISTRÁCIE) nemôžu rozísť.
-  const trainers=(trainersData||[]).filter(t=>String(t.role||'').trim().toUpperCase()!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t) && !t.isTemplate);
+  const trainers=(trainersData||[]).filter(t=>{ const r=String(t.role||'').trim().toUpperCase(); return r!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t) && !t.isTemplate && ['PETER ONUSČÁK','PETER ONUŠČÁK','VIKTOR ŽUFFA','VIKTOR ZUFFA','ANATOLII KUHAL'].includes(String(t.full||t.name||'').trim().toUpperCase().normalize('NFC')); });
   const normName=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
   return trainers.map(t=>{
     const name=String(t.full||t.name||'').trim();
@@ -11735,7 +11734,14 @@ window.renderTrainerMonthlyFor = function(trainerName, month=null, year=null){
 };
 
 function getMainTrainerProfile(){
-  return (trainersData||[]).find(t=>String(t.role||'').toUpperCase()==='HLAVNÝ TRÉNER') || (trainersData||[])[0] || null;
+  // HLAVNÝ TRÉNER je iba rola/oprávnenie, nie jeden zo 3 reálnych trénerov.
+  try{
+    const a=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    if(a && String(a.role||'').toLowerCase()==='head'){
+      return {id:a.trainer_id||null,full:String(a.display_name||a.name||'HLAVNÝ TRÉNER').trim(),name:String(a.display_name||a.name||'HLAVNÝ TRÉNER').trim(),role:'HLAVNÝ TRÉNER',groups:[]};
+    }
+  }catch(e){}
+  return null;
 }
 function getMainTrainerDisplayName(){
   const t=getMainTrainerProfile();
@@ -12847,7 +12853,7 @@ function renderHeadTrainerYear(view='trainers'){
   const app=document.querySelector('.app');
   const months=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const money=v=>Number(v||0).toLocaleString('sk-SK')+' €';
-  const realTrainers=(trainersData||[]).filter(t=>String(t.role||'').toUpperCase()!=='HLAVNÝ TRÉNER');
+  const realTrainers=(trainersData||[]).filter(t=>{ const n=String(t.full||t.name||'').trim().toUpperCase(); const r=String(t.role||'').toUpperCase(); return r!=='HLAVNÝ TRÉNER' && !isTestTrainerAccount(t) && !t.isTemplate && ['PETER ONUŠČÁK','VIKTOR ŽUFFA','VIKTOR ZUFFA','ANATOLII KUHAL'].includes(n); });
   const trainers=realTrainers.length?realTrainers:(trainersData||[]);
   const selectedYear=getHeadTrainerBillingPeriod().year;
   const rows=trainers.map(t=>{

@@ -8527,11 +8527,9 @@ function getAttendanceOwner(date=attendanceState.date,group=attendanceState.grou
 
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
-  // Vlastníkom vyúčtovania je tréner, ktorý túto dochádzku reálne zapísal
-  // a uložil. Rozvrh/skupina vlastníka neurčuje. Administrátor pri otvorení
-  // alebo úprave existujúcej dochádzky nesmie vlastníka prepísať na seba.
-  if(!isAdmin()) markAttendanceOwner(attendanceState.date,attendanceState.group);
-  else if(!getAttendanceOwner(attendanceState.date,attendanceState.group)?.trainer) markAttendanceOwner(attendanceState.date,attendanceState.group);
+  // Vlastníkom vyúčtovania je vždy tréner, ktorý práve túto dochádzku zapísal
+  // a uložil. Neurčujeme ho podľa skupiny ani podľa trénera uvedeného v rozvrhu.
+  markAttendanceOwner(attendanceState.date,attendanceState.group);
   const before=trainingAttendanceByGroup[key]||null;
   // Vždy vytvoríme nový kompletný snapshot a až potom ho priradíme ku kľúču.
   // Starý kód zapisoval do trainingAttendanceByGroup[key] a následne tento
@@ -10457,24 +10455,10 @@ function upsertBillingRecordFromAttendance(){
     savedAt:Date.now(),
     locked:true
   };
-  // Jeden tréning = jeden vlastník. Ak sú v skupine dvaja tréneri a tento
-  // tréner teraz dochádzku uložil ako posledný, starý billing záznam iného
-  // trénera pre rovnaký dátum + skupinu sa odstráni. Tým sa tréning nikdy
-  // nezapočíta obom trénerom.
-  const recordDateKey=parsePaymentDate(record.date);
-  const recordDayKey=recordDateKey?`${recordDateKey.year}-${String(recordDateKey.month).padStart(2,'0')}-${String(recordDateKey.day).padStart(2,'0')}`:String(record.date||'');
-  const recordGroupKey=String(record.group||'').trim().toUpperCase();
-  monthlyBillingRecords=(monthlyBillingRecords||[]).filter(r=>{
-    const d=parsePaymentDate(r&&r.date);
-    const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
-    const g=String(r&&r.group||'').trim().toUpperCase();
-    if(dk!==recordDayKey || g!==recordGroupKey) return true;
-    // Záznam tohto istého vlastníka nahradíme nižšie; záznam iného trénera
-    // je starý vlastník a musí preč.
-    return String(r&&r.trainer||'').trim().toUpperCase()===String(activeTrainer||'').trim().toUpperCase() ? false : false;
-  });
+  const idx=monthlyBillingRecords.findIndex(r=>r.key===key);
+  if(idx>=0 && !isAdmin() && monthlyBillingRecords[idx].locked){ return; }
   record.locked=true;
-  monthlyBillingRecords.push(record);
+  if(idx>=0) monthlyBillingRecords[idx]=record; else monthlyBillingRecords.push(record);
   normalizeMonthlyBillingRecords();
   persistMonthlyBillingRecords();
   try{ saveBillingDirectCloud(record); }catch(e){}
@@ -10947,43 +10931,1885 @@ cleanupMayJune2026TrainingData();
 
 function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appToday().year){
   const target=String(trainerName||'').trim().replace(/\s+/g,' ').toUpperCase();
-  // JEDEN TRÉNING = JEDEN VLASTNÍK.
-  // Ak sú dvaja tréneri priradení k rovnakej skupine, neznamená to, že obaja
-  // dostanú ten istý tréning. Rozhoduje posledné reálne uloženie dochádzky.
-  // Staršie verzie mohli mať duplicitné billing riadky pre rovnaký dátum/skupinu;
-  // pred zobrazením ich preto zjednotíme na najnovší záznam.
-  const monthRows=(monthlyBillingRecords||[]).filter(r=>{
-    const d=parsePaymentDate(r&&r.date);
-    return d&&d.month===Number(month)&&d.year===Number(year);
-  });
-  const effective=new Map();
-  monthRows.forEach(r=>{
-    const d=parsePaymentDate(r&&r.date);
-    const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
-    const g=String(r&&r.group||'').trim().toUpperCase();
-    const k=`${dk}|${g}`;
-    const prev=effective.get(k);
-    if(!prev || Number(r&&r.savedAt||0)>=Number(prev&&prev.savedAt||0)) effective.set(k,r);
-  });
-  let rows=Array.from(effective.values()).filter(r=>{
+  // VYÚČTOVANIE VLASTNÍ KONKRÉTNY TRÉNER, KTORÝ HO ULOŽIL.
+  // Meno je autoritatívne, pretože staršie/opravené účty môžu mať historicky
+  // nesprávny trainerId. trainerId používame ako záložnú identitu iba pri
+  // záznamoch, ktoré nemajú použiteľné meno trénera.
+  const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().replace(/\s+/g,' ').toUpperCase()===target);
+  const targetId=profile&&profile.id!=null?Number(profile.id):null;
+  let rows=monthlyBillingRecords.filter(r=>{
     const rowName=String(r?.trainer||r?.name||'').trim().replace(/\s+/g,' ').toUpperCase();
     if(rowName) return rowName===target;
-    const profile=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().replace(/\s+/g,' ').toUpperCase()===target);
-    const targetId=profile&&profile.id!=null?Number(profile.id):null;
     const rid=r&&r.trainerId!=null?Number(r.trainerId):null;
     return targetId!=null && Number.isFinite(targetId) && rid===targetId;
+  }).filter(r=>{
+    const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
   });
 
+  // Rovnaké poradie ako v „Moje vyúčtovanie“ trénera:
+  // dátumy od najnovšieho a pri rovnakom dátume skupiny podľa posledného
+  // uloženia dochádzky (najnovšie uložená skupina je prvá).
+  const originalOrder=new Map(rows.map((r,i)=>[r,i]));
   rows.sort((a,b)=>{
     const da=parsePaymentDate(a.date), db=parsePaymentDate(b.date);
     const dayDiff=new Date(db.year,db.month-1,db.day)-new Date(da.year,da.month-1,da.day);
     if(dayDiff!==0) return dayDiff;
+
+    const aDate=da?`${da.year}-${String(da.month).padStart(2,'0')}-${String(da.day).padStart(2,'0')}`:String(a.date||'');
+    const bDate=db?`${db.year}-${String(db.month).padStart(2,'0')}-${String(db.day).padStart(2,'0')}`:String(b.date||'');
+    const as=getAttendanceSavedAt(aDate,a.group);
+    const bs=getAttendanceSavedAt(bDate,b.group);
+    if(as!==bs){
+      if(as===0) return 1;
+      if(bs===0) return -1;
+      return bs-as;
+    }
+
+    // Staršie záznamy bez timestampu dochádzky zachovajú poradie podľa uloženia vyúčtovania.
     const sa=Number(a.savedAt||0), sb=Number(b.savedAt||0);
-    return sb-sa;
+    if(sa!==sb){
+      if(sa===0) return 1;
+      if(sb===0) return -1;
+      return sb-sa;
+    }
+    return (originalOrder.get(a)||0)-(originalOrder.get(b)||0);
   });
   return rows;
 }
 
+window.renderTrainerMonthlyFor=function(trainerName, month, year){
+  const now=new Date();
+  const targetMonth=Number(month)||((now.getMonth()+1));
+  const targetYear=Number(year)||now.getFullYear();
+  if(typeof window.renderHeadTrainerDetail==='function'){
+    window.renderHeadTrainerDetail(String(trainerName||'').trim(), targetMonth, targetYear);
+  }
+};
+
+function deleteBillingTrainingAsAdmin(recordKey,trainerName,date,groupCode,month,year){
+  if(!isAdmin()){ toast('Tréning môže z vyúčtovania vymazať iba administrátor.'); return false; }
+  const key=String(recordKey||'');
+  const label=`${date||''} – ${groupCode||''} – ${trainerName||''}`;
+  if(!key){ toast('Záznam tréningu nemá platný kľúč.'); return false; }
+  if(!confirm(`Naozaj vymazať tento tréning z vyúčtovania?\n\n${label}\n\nZáznam sa odstráni aj z vyúčtovania tohto trénera.`)) return false;
+  try{
+    const before=monthlyBillingRecords.length;
+    monthlyBillingRecords=monthlyBillingRecords.filter(r=>String(r?.key||'')!==key);
+    if(monthlyBillingRecords.length===before){
+      const tn=String(trainerName||'').trim().toUpperCase();
+      const gc=String(groupCode||'').trim().toUpperCase();
+      const dd=parsePaymentDate(date);
+      monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
+        const rd=parsePaymentDate(r?.date);
+        return !(String(r?.trainer||r?.name||'').trim().toUpperCase()===tn && String(r?.group||'').trim().toUpperCase()===gc && rd&&dd && rd.year===dd.year&&rd.month===dd.month&&rd.day===dd.day);
+      });
+    }
+    persistMonthlyBillingRecords();
+    toast('Tréning bol vymazaný z vyúčtovania.');
+    renderHeadTrainerDetail(trainerName,Number(month),Number(year));
+  }catch(e){ console.error('ADMIN DELETE BILLING TRAINING:',e); toast('Tréning sa nepodarilo vymazať.'); }
+  return false;
+}
+window.deleteBillingTrainingAsAdmin=deleteBillingTrainingAsAdmin;
+
+function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToday().year){
+  const app=document.querySelector('.app');
+  const rows=getTrainerMonthlyRecords(trainerName,month,year);
+  const targetTrainerName=String(trainerName||'').trim().toUpperCase();
+  const realTrainer=(trainersData||[]).find(t=>String(t.full||t.name||'').trim().toUpperCase()===targetTrainerName);
+  if(!realTrainer){ toast('Tréner sa v zozname nenašiel'); renderHeadTrainerBilling(); return; }
+  const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
+  const otherDetails=getMonthlyOtherDetails(rows);
+  const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const mName=monthNames[month-1]||'MÁJ';
+  app.innerHTML=`
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <main class="content monthly-billing-page">
+    <div class="monthly-trainer-card">
+      <div class="trainer-avatar">${String(trainerName||'T').charAt(0)}</div>
+      <div><b>HLAVNÝ TRÉNER</b><span>${trainerName}</span></div>
+      <div class="monthly-badge">MESAČNÉ VYÚČTOVANIE</div>
+    </div>
+    <div class="section-title monthly-title">▣ &nbsp; VYÚČTOVANIE – <b>${mName} ${year}</b></div>
+    <div class="billing-overview-actions">
+      <button class="active-overview">📅 MESIAC</button>
+      <button onclick='renderHeadTrainerYearFor(${JSON.stringify(trainerName)})'>📊 ROK</button>
+    </div>
+    <div class="monthly-table-wrap">
+      <table class="monthly-table">
+       <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>${isAdmin()?'<th>ZMAZAŤ</th>':''}</tr></thead>
+       <tbody>
+       ${rows.map(r=>`<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(getAdminGroupName(r.group)||r.group||''))})' title="Otvoriť dochádzku tohto dňa"><td>${r.date}</td><td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>${r.substituteLabel?`<small class="sub-label">⇄ ZASTUPOVANÝ TRÉNING<br><b>${r.substituteLabel}</b></small>`:''}</td><td>${r.trainingSum} €<small>${r.paying} platieb</small></td><td>${r.membershipSum} €</td><td>${r.registrationSum} €</td><td class="plus">${r.otherPlus} €</td><td class="minus">−${r.otherMinus} €</td><td>${r.gross} €</td><td class="minus">−${r.trainerReward} €</td><td class="club-amount">${r.clubAmount} €</td>${isAdmin()?`<td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.stopPropagation(); return window.deleteBillingTrainingAsAdmin(${JSON.stringify(String(r.key||''))},${JSON.stringify(String(trainerName||''))},${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${Number(month)},${Number(year)});'>🗑 ZMAZAŤ</button></td>`:''}</tr>`).join('')}
+       ${!rows.length?`<tr><td colspan="${isAdmin()?11:10}" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
+       </tbody>
+       <tfoot><tr><th>SPOLU<br><small>${mName} ${year}</small></th><th>${rows.length}</th><th>${sum('trainingSum')} €</th><th>${sum('membershipSum')} €</th><th>${sum('registrationSum')} €</th><th>${sum('otherPlus')} €</th><th>−${sum('otherMinus')} €</th><th>${sum('gross')} €</th><th class="minus">−${sum('trainerReward')} €</th><th class="club-amount">${sum('clubAmount')} €</th>${isAdmin()?'<th>—</th>':''}</tr></tfoot>
+      </table>
+    </div>
+    <section class="billing-card head-other-summary">
+      <h3>INÉ PLATBY – PODROBNOSTI</h3>
+      <div class="head-other-detail-head">
+        <span>DÁTUM</span>
+        <span>INÉ +/−</span>
+        <span>POPIS</span>
+        <span>SUMA</span>
+      </div>
+      ${otherDetails.length ? otherDetails.map(x => `
+        <div class="head-other-detail-row">
+          <span class="head-other-date">${x.date}</span>
+          <span class="head-other-type ${x.type==='Iné +'?'plus':'minus'}">${x.type}</span>
+          <span class="head-other-desc">${x.reason}</span>
+          <strong class="${x.type==='Iné +'?'plus':'minus'}">${Number(x.amount)>0?'+':'−'}${Math.abs(Number(x.amount||0))} €</strong>
+        </div>
+      `).join('') : `<div class="head-other-empty">Žiadne iné platby.</div>`}
+    </section>
+    <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${mName} ${year}</small><br>${clubHandoverLabel(getClubHandoverStatus(trainerName,month,year),true,trainerName,month,year,sum('clubAmount'))}</span><strong>${sum('clubAmount')} €${getClubHandoverStatus(trainerName,month,year)?' <span style="color:#4ade80;font-weight:900;font-size:26px;vertical-align:middle;margin-left:7px;">✓</span>':''}</strong></div>
+    <div class="trainer-billing-actions">
+      <button type="button" class="gt-trainer-pdf-btn" data-trainer="${String(trainerName).replace(/"/g,'&quot;')}" data-month="${month}" data-year="${year}" title="Uložiť mesačné vyúčtovanie trénera do PDF">PDF</button>
+      <button type="button" class="gt-trainer-share-btn" data-trainer="${String(trainerName).replace(/"/g,'&quot;')}" data-month="${month}" data-year="${year}" title="Zdieľať mesačné vyúčtovanie trénera ako PDF">ZDIEĽAŤ</button>
+    </div>
+    <button class="membership-paid-report-btn" onclick="showMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
+    <div class="billing-info">ⓘ &nbsp; Vyúčtovanie trénera ${trainerName} za ${mName} ${year}</div>
+  </main>
+  ${standardBottomNav('billing', true)}`;
+}
+window.renderHeadTrainerDetail=renderHeadTrainerDetail;
+window.openHeadTrainerMonthly=function(name,month,year){
+  try{
+    const trainerName=String(name||'').trim();
+    const mm=Number(month)||appToday().month;
+    const yy=Number(year)||appToday().year;
+    // Samostatná história pre detail mesačného vyúčtovania hlavného trénera.
+    // Späť sa tak vždy vráti presne na zoznam vyúčtovania trénerov.
+    history.pushState({gtRoute:'head-trainer-detail',trainerName:trainerName,month:mm,year:yy},'',location.pathname+location.search+'#head-trainer-detail');
+    window.renderHeadTrainerDetail(trainerName,mm,yy);
+  }catch(e){
+    console.error('Otvorenie mesačného vyúčtovania trénera:',e);
+  }
+  return false;
+};
+function showHeadTrainerDetailSummary(trainerName,month=appToday().month,year=appToday().year){
+  const rows=getTrainerMonthlyRecords(trainerName,month,year), app=document.querySelector('.app');
+  const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const mName=monthNames[Number(month)-1]||'';
+  const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
+  app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <main class="content monthly-billing-page"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
+  <div class="section-title monthly-title">▣ &nbsp; SÚHRN – <b>${mName} ${year}</b></div>
+  <div class="head-detail-summary">
+   <div><span>Tréningy</span><b>${sum('trainingSum')} €</b></div><div><span>Členské</span><b>${sum('membershipSum')} €</b></div><div><span>Registračné</span><b>${sum('registrationSum')} €</b></div><div><span>Spolu príjmy</span><b>${sum('gross')} €</b></div><div><span>Odmena trénera</span><b>− ${sum('trainerReward')} €</b></div><div class="final"><span>Odovzdať klubu</span><b>${sum('clubAmount')} €</b></div>
+  </div></main>`;
+}
+
+function getHeadTrainerAnnualReportData(trainerName,year){
+  const months=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const body=[];
+  let total=0;
+  months.forEach((name,i)=>{
+    const rows=getTrainerMonthlyRecords(trainerName,i+1,year);
+    const amount=rows.reduce((a,r)=>a+Number(r.clubAmount||0),0);
+    total+=amount;
+    body.push([name,`${amount} €`]);
+  });
+  return {
+    headers:['MESIAC','ODOVZDAŤ KLUBU'],
+    body,
+    total:['SPOLU ZA ROK',`${total} €`]
+  };
+}
+function saveHeadTrainerAnnualPDF(trainerName,year){
+  try{
+    const x=getHeadTrainerAnnualReportData(trainerName,year);
+    const title=`ROČNÉ VYÚČTOVANIE - ${trainerName} - ${year}`;
+    const blob=buildGuardTrainerVectorPDF(title,'Ročný prehľad odovzdaných súm klubu podľa trénera',x.headers,x.body,x.total,[]);
+    saveGuardTrainerPDF(blob,`Guard-Trainer-${String(trainerName).replace(/\s+/g,'-')}-rok-${year}.pdf`);
+  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+  return false;
+}
+async function shareHeadTrainerAnnualPDF(trainerName,year){
+  try{
+    const x=getHeadTrainerAnnualReportData(trainerName,year);
+    const title=`ROČNÉ VYÚČTOVANIE - ${trainerName} - ${year}`;
+    const blob=buildGuardTrainerVectorPDF(title,'Ročný prehľad odovzdaných súm klubu podľa trénera',x.headers,x.body,x.total,[]);
+    await shareGuardTrainerPDF(blob,`Guard-Trainer-${String(trainerName).replace(/\s+/g,'-')}-rok-${year}.pdf`,title,`Ročné vyúčtovanie trénera ${trainerName}`);
+  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+  return false;
+}
+
+function renderHeadTrainerYearFor(trainerName){
+  const app=document.querySelector('.app');
+  const months=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const currentMonth=appToday().month, year=appToday().year;
+  let total=0;
+  const rows=months.map((name,i)=>{
+    const rs=getTrainerMonthlyRecords(trainerName,i+1,year);
+    const amount=rs.reduce((a,r)=>a+Number(r.clubAmount||0),0); total+=amount;
+    const unfinished=i===currentMonth-1;
+    return `<tr class="${unfinished?'year-unfinished':''}"><td>${name}</td><td>${amount} €</td></tr>`;
+  }).join('');
+  app.innerHTML=`<header class="topbar"><button type="button" class="menu" onclick="window.renderHeadTrainerBilling(); return false;" aria-label="Späť na ročné vyúčtovanie">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <main class="content monthly-billing-page annual-trainer-compact"><div class="monthly-trainer-card"><div class="trainer-avatar">${String(trainerName).charAt(0)}</div><div><b>TRÉNER</b><span>${trainerName}</span></div></div>
+  <div class="section-title monthly-title">📊 ROČNÉ VYÚČTOVANIE – <b>${year}</b></div>
+  <div class="year-trainer-name">${trainerName}</div>
+  <div class="monthly-table-wrap"><table class="monthly-table year-table"><thead><tr><th>MESIAC</th><th>ODOVZDAŤ KLUBU</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><th>SPOLU</th><th>${total} €</th></tr></tfoot></table></div>
+  <div class="trainer-billing-actions">
+    <button type="button" class="gt-annual-pdf-btn" data-trainer="${String(trainerName).replace(/"/g,'&quot;')}" data-year="${year}" title="Uložiť ročné vyúčtovanie trénera do PDF">PDF</button>
+    <button type="button" class="gt-annual-share-btn" data-trainer="${String(trainerName).replace(/"/g,'&quot;')}" data-year="${year}" title="Zdieľať ročné vyúčtovanie trénera ako PDF">ZDIEĽAŤ</button>
+  </div>
+  <div class="year-note">Aktuálny mesiac, ktorý ešte nie je ukončený, je označený odlišnou farbou.</div></main>`;
+}
+
+
+// Robust handlers for the annual trainer PDF/share buttons.
+// Delegation keeps them working after renderHeadTrainerYearFor() replaces .app HTML.
+document.addEventListener('click', function(e){
+  const pdf=e.target.closest && e.target.closest('.gt-annual-pdf-btn');
+  if(pdf){
+    e.preventDefault(); e.stopImmediatePropagation();
+    const trainer=String(pdf.getAttribute('data-trainer')||'').trim();
+    const year=Number(pdf.getAttribute('data-year'))||appToday().year;
+    if(trainer && typeof saveHeadTrainerAnnualPDF==='function') saveHeadTrainerAnnualPDF(trainer,year);
+    return false;
+  }
+  const share=e.target.closest && e.target.closest('.gt-annual-share-btn');
+  if(share){
+    e.preventDefault(); e.stopImmediatePropagation();
+    const trainer=String(share.getAttribute('data-trainer')||'').trim();
+    const year=Number(share.getAttribute('data-year'))||appToday().year;
+    if(trainer && typeof shareHeadTrainerAnnualPDF==='function') shareHeadTrainerAnnualPDF(trainer,year);
+    return false;
+  }
+}, true);
+
+function getHeadTrainerRowsForMonth(month=appToday().month,year=appToday().year){
+  // ZDROJ PRAVDY PRE HLAVNÉHO TRÉNERA:
+  // Použi presne tie isté mesačné záznamy, ktoré vidí detail „Moje vyúčtovanie“
+  // konkrétneho trénera. Tým sa čísla (vrátane REGISTRÁCIE) nemôžu rozísť.
+  // HLAVNÝ TRÉNER je v aplikácii samostatná funkcia, nie reálny tréner.
+  // Preto sa jeho profil NESMIE objaviť medzi riadkami vyúčtovania trénerov.
+  const headProfile=(typeof getMainTrainerProfile==='function') ? getMainTrainerProfile() : null;
+  const headId=headProfile && headProfile.id!=null ? String(headProfile.id) : '';
+  const headNames=new Set([
+    String(headProfile?.full||'').trim().replace(/\s+/g,' ').toUpperCase(),
+    String(headProfile?.name||'').trim().replace(/\s+/g,' ').toUpperCase(),
+    'HLAVNÝ TRÉNER','HLAVNY TRENER'
+  ].filter(Boolean));
+  const trainers=(trainersData||[]).filter(t=>{
+    const role=String(t.role||'').trim().toUpperCase();
+    const id=t&&t.id!=null?String(t.id):'';
+    const names=[String(t?.full||'').trim().replace(/\s+/g,' ').toUpperCase(),String(t?.name||'').trim().replace(/\s+/g,' ').toUpperCase()];
+    if(role==='HLAVNÝ TRÉNER' || role==='HLAVNY TRENER') return false;
+    if(headId && id===headId) return false;
+    if(names.some(n=>n && headNames.has(n))) return false;
+    return !isTestTrainerAccount(t) && !t.isTemplate;
+  });
+  const normName=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
+  return trainers.map(t=>{
+    const name=String(t.full||t.name||'').trim();
+    let rows=[];
+    try{ rows=getTrainerMonthlyRecords(name,Number(month),Number(year))||[]; }
+    catch(e){
+      rows=(monthlyBillingRecords||[]).filter(r=>{
+        const d=parsePaymentDate(r.date);
+        return normName(r.trainer||r.name)===normName(name) && d&&d.month===Number(month)&&d.year===Number(year);
+      });
+    }
+    // „Moje vyúčtovanie“ zobrazuje aj informačné záznamy, ale finančné sumy
+    // sa rátajú z rovnakých riadkov. Referencie zástupov majú nulové finančné
+    // hodnoty, preto ich zahrnutie nemení sumy.
+    const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
+    return {
+      name,
+      role:String(t.role||'TRÉNER'),
+      groups:Array.isArray(t.groups)?[...t.groups]:[],
+      trainings:rows.length,
+      present:sum('paying'),
+      training:sum('trainingSum'),
+      membership:sum('membershipSum'),
+      registration:sum('registrationSum'),
+      plus:sum('otherPlus'),
+      minus:-sum('otherMinus'),
+      gross:sum('gross'),
+      reward:-sum('trainerReward'),
+      club:sum('clubAmount')
+    };
+  });
+}
+
+// Mesiac zobrazený v prehľade hlavného trénera. Mení sa iba tlačidlami ← / →.
+let headTrainerBillingMonth = null;
+let headTrainerBillingYear = null;
+function getHeadTrainerBillingPeriod(){
+  const now=appToday();
+  if(headTrainerBillingMonth==null){ headTrainerBillingMonth=now.month; headTrainerBillingYear=now.year; }
+  return {month:Number(headTrainerBillingMonth),year:Number(headTrainerBillingYear)};
+}
+function shiftHeadTrainerBillingMonth(delta){
+  const p=getHeadTrainerBillingPeriod();
+  let d=new Date(p.year,p.month-1+Number(delta),1);
+  const min=new Date(2026,4,1); // aplikácia začína v máji 2026
+  const now=appTodayDate();
+  if(d<min)d=min;
+  if(d>new Date(now.getFullYear(),now.getMonth(),1))d=new Date(now.getFullYear(),now.getMonth(),1);
+  headTrainerBillingMonth=d.getMonth()+1;
+  headTrainerBillingYear=d.getFullYear();
+  renderHeadTrainerBilling();
+}
+function resetHeadTrainerBillingMonth(){
+  const now=appToday(); headTrainerBillingMonth=now.month; headTrainerBillingYear=now.year; renderHeadTrainerBilling();
+}
+
+function standardBottomNav(active='billing', forceAttendance=false){
+  const showAttendance = forceAttendance || !isHeadTrainer();
+  const navClass = forceAttendance && isHeadTrainer() ? 'bottom head-billing-nav' : 'bottom';
+  return `<nav class="${navClass}">
+    <a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
+    <a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
+    ${showAttendance ? `<a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>` : ''}
+    <a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
+    <a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
+    <a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
+  </nav>`;
+}
+
+function enforceFixedRoleBottomNav(){
+  try{
+    const head = typeof isHeadTrainer==='function' && isHeadTrainer();
+    document.querySelectorAll('nav.bottom').forEach(navEl=>{
+      if(!navEl || navEl.dataset.roleFixed==='1') return;
+      const attendance=navEl.querySelector('a[href="#attendance"]');
+      if(!head && !attendance){
+        const members=navEl.querySelector('a[href="#members"]');
+        if(members){
+          const a=document.createElement('a'); a.className='nav nav-attendance'; a.href='#attendance'; a.onclick=()=>nav('attendance');
+          a.innerHTML='<span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span>';
+          members.parentNode.insertBefore(a,members);
+        }
+      } else if(head && attendance){
+        attendance.remove();
+      }
+      navEl.dataset.roleFixed='1';
+    });
+  }catch(e){console.warn('Fixed role navigation:',e)}
+}
+const _roleNavObserver=new MutationObserver(()=>enforceFixedRoleBottomNav());
+_roleNavObserver.observe(document.body,{childList:true,subtree:true});
+setTimeout(enforceFixedRoleBottomNav,0);
+
+window.renderTrainerMonthlyFor = function(trainerName, month=null, year=null){
+  const p=getHeadTrainerBillingPeriod();
+  const targetMonth=Number(month)||p.month;
+  const targetYear=Number(year)||p.year;
+  renderHeadTrainerDetail(String(trainerName||'').trim(),targetMonth,targetYear);
+};
+
+function isExplicitAnatoliiTrainer(t){ return false; }
+function isMainTrainerProfile(t){
+  if(!t) return false;
+  const role=String(t.role||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+  return role==='HLAVNY TRENER';
+}
+function getMainTrainerProfile(){
+  const list=Array.isArray(trainersData)?trainersData:[];
+  // Hlavný tréner je samostatný profil s rolou HLAVNÝ TRÉNER.
+  // Najprv vždy hľadaj profil podľa aktuálne prihláseného trainer_id.
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const id=Number(account?.trainer_id);
+    if(Number.isFinite(id)){
+      const own=list.find(t=>Number(t.id)===id);
+      if(own && isMainTrainerProfile(own)) return own;
+    }
+  }catch(e){}
+  // Ak účet ešte nemá ID, použi výhradne profil s rolou HLAVNÝ TRÉNER.
+  // Nikdy nepouži Anatoliiho ani prvého trénera ako náhradu.
+  return list.find(t=>isMainTrainerProfile(t)) || null;
+}
+function getMainTrainerDisplayName(){
+  const t=getMainTrainerProfile();
+  return String(t?.full||t?.name||'HLAVNÝ TRÉNER');
+}
+
+function buildGuardTrainerVectorPDF(title,subtitle,headers,bodyRows,totalRow,detailRows=[]){
+  const W=842,H=595,M=28;
+  const widths=[82,58,88,86,72,60,60,60,78,70];
+  let ws=widths.slice(0,headers.length);
+  if(ws.length<headers.length) ws=Array(headers.length).fill(Math.floor((W-2*M)/headers.length));
+  const scale=(W-2*M)/ws.reduce((a,b)=>a+b,0);
+  ws=ws.map(x=>x*scale);
+
+  const ascii=s=>String(s??'')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/€/g,' EUR ').replace(/[–—]/g,'-').replace(/×/g,'x')
+    .replace(/[^\x20-\x7E]/g,' ')
+    .replace(/\?+/g,' ')
+    .replace(/\s+/g,' ').trim();
+  const esc=s=>ascii(s).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+  const txt=(s,x,y,size,bold=false)=>`BT /F${bold?2:1} ${size} Tf ${x.toFixed(1)} ${y.toFixed(1)} Td (${esc(s)}) Tj ET`;
+  const txtCenter=(s,cx,y,size,bold=false)=>{const clean=ascii(s); const approx=clean.length*size*0.50; return txt(clean,cx-approx/2,y,size,bold);};
+  const rect=(x,y,w,h,fill=0)=>`${fill?'q 0.93 0.93 0.93 rg ':''}${x.toFixed(1)} ${y.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re ${fill?'f':'S'}${fill?' Q':''}`;
+
+  const ops=[];
+  ops.push(txtCenter(title,W/2,H-30,14,true));
+  if(subtitle) ops.push(txtCenter(subtitle,W/2,H-47,9,false));
+
+  let y=H-65, headerH=32, rowH=26;
+  let x=M;
+  headers.forEach((v,i)=>{ops.push(rect(x,y-headerH,ws[i],headerH,1));x+=ws[i];});
+  x=M;
+  headers.forEach((v,i)=>{ops.push(rect(x,y-headerH,ws[i],headerH,0));ops.push(txtCenter(v,x+ws[i]/2,y-18,7,true));x+=ws[i];});
+  y-=headerH;
+
+  const drawRow=(row,h,fill=false)=>{
+    let x=M;
+    if(fill){let xx=M;ws.forEach(w=>{ops.push(rect(xx,y-h,w,h,1));xx+=w;});}
+    row.forEach((v,i)=>{
+      ops.push(rect(x,y-h,ws[i],h,0));
+      let s=ascii(v), max=Math.max(5,Math.floor(ws[i]/4.1));
+      if(s.length>max) s=s.slice(0,max-1)+'...';
+      ops.push(txtCenter(s,x+ws[i]/2,y-16,7,false));
+      x+=ws[i];
+    });
+    y-=h;
+  };
+
+  (bodyRows||[]).slice(0,18).forEach((r,i)=>drawRow(r,rowH,i%2===1));
+  if(totalRow && totalRow.length) drawRow(totalRow,rowH,true);
+
+  if(detailRows && detailRows.length){
+    let dy=Math.max(125,y-18);
+    ops.push(txtCenter('INE PLATBY - PODROBNOSTI',W/2,dy,9,true));
+    dy-=16;
+    detailRows.slice(0,24).forEach(d=>{
+      if(dy<42)return;
+      // Keep the reason and amount together directly after the description.
+      ops.push(txtCenter(`${d[0]} | ${d[1]} - ${d[2]} ${d[3]}`,W/2,dy,7,false));
+      dy-=13;
+    });
+  }
+
+  ops.push(txtCenter('Udaje zodpovedaju aktualne zobrazenemu mesacnemu vyuctovaniu.',W/2,30,6,false));
+
+  const stream=ops.join('\n');
+  const objs=[
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+  ];
+  let pdf='%PDF-1.4\n', offsets=[0];
+  objs.forEach((o,i)=>{offsets.push(pdf.length);pdf+=(i+1)+' 0 obj\n'+o+'\nendobj\n';});
+  const xref=pdf.length;
+  pdf+='xref\n0 7\n0000000000 65535 f \n';
+  for(let i=1;i<=6;i++) pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  pdf+='trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF';
+  return new Blob([pdf],{type:'application/pdf'});
+}
+
+function saveGuardTrainerPDF(blob,filename){
+  try{
+    const url=URL.createObjectURL(blob);
+    // Open synchronously while the user is still inside the click event.
+    // This avoids Android/Chrome popup blocking on content:// pages.
+    let pdfWindow=null;
+    try{ pdfWindow=window.open('about:blank','_blank'); }catch(_){}
+    if(pdfWindow){
+      try{ pdfWindow.location.href=url; }catch(_){}
+    }
+
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=filename;
+    a.rel='noopener';
+    a.style.position='fixed';
+    a.style.left='-9999px';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ if(document.body.contains(a)) a.remove(); },1000);
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    if(typeof toast==='function')toast(pdfWindow ? 'PDF bolo vytvorené' : 'PDF bolo vytvorené – otvorte ho v prehliadači');
+    return true;
+  }catch(e){
+    console.error('PDF:',e);
+    if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');
+    return false;
+  }
+}
+
+async function shareGuardTrainerPDF(blob,filename,title,text){
+  try{
+    const file=new File([blob],filename,{type:'application/pdf'});
+    if(navigator.share){
+      if(!navigator.canShare || navigator.canShare({files:[file]})){
+        await navigator.share({
+          title:title||'Guard Trainer',
+          text:text||'',
+          files:[file]
+        });
+        return true;
+      }
+    }
+  }catch(e){
+    if(e && e.name==='AbortError') return true;
+    console.error('ZDIEĽANIE PDF:',e);
+  }
+
+  // Fallback: open the real PDF so Android's PDF viewer provides its
+  // native share button instead of silently doing nothing.
+  try{
+    const url=URL.createObjectURL(blob);
+    const w=window.open(url,'_blank');
+    if(!w){
+      const a=document.createElement('a');
+      a.href=url;a.target='_blank';a.rel='noopener';
+      document.body.appendChild(a);a.click();a.remove();
+    }
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    if(typeof toast==='function')toast('PDF bolo vytvorené – môžete ho zdieľať z PDF');
+  }catch(e){
+    console.error('PDF SHARE FALLBACK:',e);
+    if(typeof toast==='function')toast('PDF sa nepodarilo zdieľať');
+  }
+  return false;
+}
+
+function headTrainerMonthlyReportData(){
+  const period=getHeadTrainerBillingPeriod();
+  const d=getHeadTrainerRowsForMonth(period.month,period.year);
+  const sum=k=>d.reduce((a,r)=>a+Number(r[k]||0),0);
+  const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const mName=monthNames[period.month-1]||'';
+  const headers=['TRÉNER','TRÉNINGY','PRÍTOMNÍ','TRÉNINGOVÉ','ČLENSKÉ','REGISTRÁCIA','INÉ +/-','SPOLU PRÍJMY','ODMENA','ODOVZDAŤ KLUBU'];
+  const body=d.map(r=>[
+    r.name,r.trainings,r.present,`${r.training} €`,`${r.membership} €`,`${r.registration} €`,
+    `${r.plus+r.minus} €`,`${r.gross} €`,`${r.reward} €`,`${r.club} €`
+  ]);
+  const total=[
+    `SPOLU ${mName}`,sum('trainings'),sum('present'),`${sum('training')} €`,`${sum('membership')} €`,
+    `${sum('registration')} €`,`${sum('plus')+sum('minus')} €`,`${sum('gross')} €`,
+    `${sum('reward')} €`,`${sum('club')} €`
+  ];
+  return {period,d,headers,body,total,mName};
+}
+
+function saveHeadTrainerMonthlyPDF(){
+  try{
+    const x=headTrainerMonthlyReportData();
+    const title=`VYÚČTOVANIE - ZOZNAM TRÉNEROV - ${x.mName} ${x.period.year}`;
+    const blob=buildGuardTrainerVectorPDF(title,`Hlavny trener: ${getMainTrainerDisplayName()}`,x.headers,x.body,x.total,[]);
+    saveGuardTrainerPDF(blob,`Guard-Trainer-zoznam-trenerov-${x.mName}-${x.period.year}.pdf`);
+  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+  return false;
+}
+
+async function shareHeadTrainerMonthlyPDF(){
+  try{
+    const x=headTrainerMonthlyReportData();
+    const title=`VYÚČTOVANIE - ZOZNAM TRÉNEROV - ${x.mName} ${x.period.year}`;
+    const blob=buildGuardTrainerVectorPDF(title,`Hlavny trener: ${getMainTrainerDisplayName()}`,x.headers,x.body,x.total,[]);
+    await shareGuardTrainerPDF(blob,`Guard-Trainer-zoznam-trenerov-${x.mName}-${x.period.year}.pdf`,title,'Mesačný zoznam vyúčtovaní trénerov');
+  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+  return false;
+}
+
+function getHeadTrainerDetailReportData(trainerName,month,year){
+  const rows=getTrainerMonthlyRecords(trainerName,month,year);
+  // Main PDF table contains training records only. Standalone/legacy records
+  // such as a flyer expense are kept in the financial totals and shown only
+  // in INE PLATBY - PODROBNOSTI.
+  const trainingGroups=new Set(['A','B','C','D','D+','H','T']);
+  const tableRows=rows.filter(r=>trainingGroups.has(String(r.group||'').trim().toUpperCase()));
+  const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
+  const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const mName=monthNames[Number(month)-1]||'';
+  const headers=['DÁTUM','SKUPINA','TRÉNINGY','ČLENSKÉ','REG.','INÉ +','INÉ -','SPOLU','ODMENA','ODOVZDAŤ KLUBU'];
+  const body=tableRows.map(r=>[
+    r.date,r.group,`${r.trainingSum} € (${r.paying})`,`${r.membershipSum} €`,`${r.registrationSum} €`,
+    `${r.otherPlus} €`,`-${r.otherMinus} €`,`${r.gross} €`,`-${r.trainerReward} €`,`${r.clubAmount} €`
+  ]);
+  const total=[
+    `SPOLU ${mName}`,`${tableRows.length} dní`,`${sum('trainingSum')} €`,`${sum('membershipSum')} €`,
+    `${sum('registrationSum')} €`,`${sum('otherPlus')} €`,`-${sum('otherMinus')} €`,
+    `${sum('gross')} €`,`-${sum('trainerReward')} €`,`${sum('clubAmount')} €`
+  ];
+  const details=[];
+  rows.forEach(r=>{
+    if(Number(r.otherPlus||0)>0)details.push([r.date,'Iné +',String(r.otherPlusReason||r.otherPlusFor||r.otherPlusDescription||'').trim()||'Neuvedené',`+${Number(r.otherPlus)} €`]);
+    if(Number(r.otherMinus||0)>0)details.push([r.date,'Iné -',String(r.otherMinusReason||r.otherMinusFor||r.otherMinusDescription||'').trim()||'Neuvedené',`-${Number(r.otherMinus)} €`]);
+  });
+  return {rows,headers,body,total,details,mName};
+}
+
+function saveHeadTrainerDetailPDF(trainerName,month,year){
+  try{
+    const x=getHeadTrainerDetailReportData(trainerName,month,year);
+    const title=`VYÚČTOVANIE - ${trainerName} - ${x.mName} ${year}`;
+    const blob=buildGuardTrainerVectorPDF(title,'Denný výpis vyúčtovania trénera',x.headers,x.body,x.total,x.details);
+    saveGuardTrainerPDF(blob,`Guard-Trainer-${String(trainerName).replace(/\s+/g,'-')}-${x.mName}-${year}.pdf`);
+  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+  return false;
+}
+window.saveHeadTrainerDetailPDF=saveHeadTrainerDetailPDF;
+
+async function shareHeadTrainerDetailPDF(trainerName,month,year){
+  try{
+    const x=getHeadTrainerDetailReportData(trainerName,month,year);
+    const title=`VYÚČTOVANIE - ${trainerName} - ${x.mName} ${year}`;
+    const blob=buildGuardTrainerVectorPDF(title,'Denný výpis vyúčtovania trénera',x.headers,x.body,x.total,x.details);
+    await shareGuardTrainerPDF(blob,`Guard-Trainer-${String(trainerName).replace(/\s+/g,'-')}-${x.mName}-${year}.pdf`,title,`Mesačné vyúčtovanie trénera ${trainerName}`);
+  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+  return false;
+}
+window.shareHeadTrainerDetailPDF=shareHeadTrainerDetailPDF;
+if(!window.__guardTrainerDetailPdfHandlers){
+  window.__guardTrainerDetailPdfHandlers=true;
+  document.addEventListener('click',function(ev){
+    const pdf=ev.target.closest && ev.target.closest('.gt-trainer-pdf-btn');
+    const share=ev.target.closest && ev.target.closest('.gt-trainer-share-btn');
+    const btn=pdf||share;
+    if(!btn)return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const trainer=btn.getAttribute('data-trainer')||'';
+    const month=Number(btn.getAttribute('data-month'));
+    const year=Number(btn.getAttribute('data-year'));
+    if(pdf) window.saveHeadTrainerDetailPDF(trainer,month,year);
+    else window.shareHeadTrainerDetailPDF(trainer,month,year);
+    return false;
+  },true);
+}
+
+
+function renderHeadTrainerBilling(){
+  const app=document.querySelector('.app');
+  // Hlavný tréner číta rovnaké shared-db vyúčtovanie ako ostatní. Najprv
+  // načítaj najnovší spoločný zoznam a až potom vykresli tabuľku.
+  if(db && cloudEnabled && !window.__gtHeadBillingRefreshInFlight){
+    window.__gtHeadBillingRefreshInFlight=true;
+    refreshBillingFromSharedCloud(false).finally(()=>{
+      window.__gtHeadBillingRefreshInFlight=false;
+      if(location.hash==='#trainer-month') renderHeadTrainerBilling();
+    });
+  }
+  const period=getHeadTrainerBillingPeriod();
+  const month=period.month, year=period.year;
+  const d=getHeadTrainerRowsForMonth(month,year);
+  const sum=k=>d.reduce((a,r)=>a+Number(r[k]||0),0);
+  const headName=getMainTrainerDisplayName();
+  const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const mName=monthNames[month-1]||'';
+  app.innerHTML=`
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <main class="content head-billing">
+    <section class="head-profile head-profile-main"><div class="head-avatar">${headName.charAt(0)}</div><div class="head-trainer-title"><b>HLAVNÝ TRÉNER</b><span>${headName}</span></div><button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button></section>
+    <div class="head-title-row"><h2>▣ &nbsp; VYÚČTOVANIE – <b>${mName} ${year}</b></h2><div class="head-month-nav"><button onclick="shiftHeadTrainerBillingMonth(-1)" aria-label="Predchádzajúci mesiac">‹</button><button onclick="resetHeadTrainerBillingMonth()" aria-label="Aktuálny mesiac">▣</button><button onclick="shiftHeadTrainerBillingMonth(1)" aria-label="Nasledujúci mesiac">›</button></div></div>
+    <div class="head-tabs"><button class="active">MESAČNÉ VYÚČTOVANIE</button><button onclick="renderHeadTrainerYear()">PREHĽAD TRÉNEROV / ROK</button></div>
+    <div class="head-table-wrap"><table class="head-table approved-monthly-table"><thead><tr><th>TRÉNER</th><th>TRÉNINGY<br>(spolu)</th><th>PRÍTOMNÍ<br>(platiaci)</th><th>TRÉNINGOVÉ<br>(5 € / 6 €)</th><th>ČLENSKÉ</th><th>REGISTRÁCIA</th><th>INÉ +/-</th><th>SPOLU<br>PRÍJMY</th><th>ODMENA<br>TRÉNERA</th><th>ODOVZDAŤ<br>KLUBU</th></tr></tr></thead><tbody>
+    ${d.length?d.map(r=>`<tr><td><button class="head-trainer-name" data-trainer="${String(r.name).replace(/"/g,'&quot;')}" onclick="return window.openHeadTrainerMonthly(${JSON.stringify(r.name)},${month},${year});"><b>${r.name}</b><small>${r.role}</small></button></td><td>${r.trainings}</td><td>${r.present}</td><td>${r.training} €</td><td>${r.membership} €</td><td>${r.registration} €</td><td class="${r.plus+r.minus>=0?'plus':'minus'}">${r.plus+r.minus} €</td><td>${r.gross} €</td><td class="minus">${r.reward} €</td><td class="club-amount">${r.club} €${getClubHandoverStatus(r.name,month,year)?' <span style="color:#4ade80;font-weight:900;font-size:22px;vertical-align:middle;margin-left:6px;">✓</span>':' ›'}</td></tr>`).join(''):`<tr><td colspan="10" class="empty-monthly">Zatiaľ nie sú vytvorené žiadni tréneri.</td></tr>`}
+    <tr class="sum-row"><th>SPOLU<br><small>${mName} ${year}</small></th><th>${sum('trainings')}</th><th>${sum('present')}</th><th>${sum('training')} €</th><th>${sum('membership')} €</th><th>${sum('registration')} €</th><th>${sum('plus')+sum('minus')} €</th><th>${sum('gross')} €</th><th class="minus">${sum('reward')} €</th><th class="club-amount">${sum('club')} €</th></tr>
+    </tbody></table></div>
+    <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${mName} ${year}</small></span><strong>${sum('club')} €</strong></div>
+    <div class="head-billing-actions">
+      <button type="button" title="Uložiť mesačný zoznam trénerov do PDF" onclick="return saveHeadTrainerMonthlyPDF()">PDF</button>
+      <button type="button" title="Zdieľať mesačný zoznam trénerov ako PDF" onclick="return shareHeadTrainerMonthlyPDF()">ZDIEĽAŤ</button>
+    </div>
+  </main>${standardBottomNav('billing', true)}`;
+}
+
+function showHeadTrainerMembershipReport(){
+  const paid=membershipPayments.slice();
+  const modal=document.createElement('div');
+  modal.className='membership-paid-modal';
+  modal.innerHTML=`<div class="membership-paid-card head-membership-report">
+    <div class="membership-paid-head">
+      <div><h3>← &nbsp; ZAPLATENÉ ČLENSKÉ</h3><small>Zoznam členov, ktorí uhradili členské v zvolenom období.</small></div>
+      <button type="button" onclick="this.closest('.membership-paid-modal').remove()">×</button>
+    </div>
+
+    <div class="membership-report-filters">
+      <div class="membership-report-date">
+        <label>OBDOBIE<br><span>OD</span></label>
+        <button type="button" class="date-choice" id="reportFromDate" onclick="window.pickMembershipReportDate('from')">01.08.2026</button>
+      </div>
+      <div class="membership-report-date">
+        <label>&nbsp;<br><span>DO</span></label>
+        <button type="button" class="date-choice" id="reportToDate" onclick="window.pickMembershipReportDate('to')">31.08.2026</button>
+      </div>
+      <div class="membership-report-group">
+        <label>SKUPINA</label>
+        <select id="membershipReportGroup">
+          <option value="">Všetky skupiny</option>
+          <option value="A">A – Top tím</option>
+          <option value="B">B – Nábor Budokan</option>
+          <option value="C">C – Nábor Grunt</option>
+          <option value="D">D – Deti</option>
+          <option value="D+">D+ – Top deti</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="membership-report-summary" id="membershipReportSummary"></div>
+    <div id="membershipReportBody"></div>
+    <div class="membership-report-actions">
+      <button type="button" title="Uložiť prehľad zaplateného členského do PDF" onclick="return window.saveHeadTrainerMembershipReportPDF()">PDF</button>
+      <button type="button" title="Zdieľať prehľad zaplateného členského ako PDF" onclick="return window.shareHeadTrainerMembershipReportPDF()">ZDIEĽAŤ</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+
+  const fmtDate=(value)=>{
+    const d=parsePaymentDate(value);
+    return d ? `${String(d.day).padStart(2,'0')}.${String(d.month).padStart(2,'0')}.${d.year}` : '—';
+  };
+  const groupBadge=(g)=>{
+    const cls=String(g||'').replace('+','plus');
+    return `<span class="membership-report-group-badge stats-group-${cls}">${g||'—'}</span>`;
+  };
+
+  window.pickMembershipReportDate=function(which){
+    const btn=document.getElementById(which==='from'?'reportFromDate':'reportToDate');
+    const current=btn.dataset.value || (which==='from'?'2026-08-01':'2026-08-31');
+    window.openUnifiedDatePicker(current,function(value){
+      const [y,m,d]=value.split('-');
+      btn.dataset.value=value;
+      btn.textContent=`${String(d).padStart(2,'0')}.${String(m).padStart(2,'0')}.${y}`;
+      window.renderMembershipReport();
+    }, which==='from'?'OD DÁTUM':'DO DÁTUM');
+  };
+
+  window.renderMembershipReport=function(){
+    const fromBtn=document.getElementById('reportFromDate');
+    const toBtn=document.getElementById('reportToDate');
+    const from=fromBtn.dataset.value || '2026-08-01';
+    const to=toBtn.dataset.value || '2026-08-31';
+    const lo=Math.min(Date.parse(from),Date.parse(to)), hi=Math.max(Date.parse(from),Date.parse(to));
+    const selectedGroup=document.getElementById('membershipReportGroup').value;
+
+    const filtered=paid.filter(p=>{
+      const d=parsePaymentDate(p.date); if(!d)return false;
+      const key=new Date(d.year,d.month-1,d.day).getTime();
+      const g=p.paidGroup||'';
+      return key>=lo && key<=hi && (!selectedGroup || g===selectedGroup);
+    });
+
+    // One row per member, with the payment for each half-year shown separately.
+    const byMember={};
+    filtered.forEach(p=>{
+      const key=`${p.surname||''}|${p.name||''}|${p.paidGroup||''}`;
+      if(!byMember[key]) byMember[key]={surname:p.surname||'',name:p.name||'',group:p.paidGroup||'',first:null,second:null};
+      const d=parsePaymentDate(p.date);
+      if(!d)return;
+      const item={date:fmtDate(p.date),amount:Number(p.amount||0)};
+      if(Number(p.period)===1 || d.month<=6) byMember[key].first=item;
+      else byMember[key].second=item;
+    });
+    const rows=Object.values(byMember).sort((a,b)=>
+      a.surname.localeCompare(b.surname,'sk',{sensitivity:'base'}) ||
+      a.name.localeCompare(b.name,'sk',{sensitivity:'base'})
+    );
+    const total=filtered.reduce((a,p)=>a+Number(p.amount||0),0);
+    const distinct=rows.length;
+
+    document.getElementById('membershipReportSummary').innerHTML=
+      `<div>▣ <span>Obdobie: <b>${fmtDate(from)} – ${fmtDate(to)}</b></span></div>
+       <div>Počet členov: <b>${distinct}</b><br>Celková suma: <b>${total} €</b></div>`;
+
+    document.getElementById('membershipReportBody').innerHTML=`
+      <div class="membership-report-table">
+        <div class="membership-report-row membership-report-head">
+          <span>MENO</span><span>SKUPINA</span>
+          <span class="half-year-head"><b>1. POLROK</b><small>DÁTUM</small></span>
+          <span>SUMA</span>
+          <span class="half-year-head"><b>2. POLROK</b><small>DÁTUM</small></span>
+          <span>SUMA</span>
+        </div>
+        ${rows.length ? rows.map(r=>`
+          <div class="membership-report-row">
+            <span><b>${r.surname}</b>&nbsp;${r.name}</span>
+            <span>${groupBadge(r.group)}</span>
+            <span>${r.first?r.first.date:'–'}</span>
+            <strong>${r.first?r.first.amount+' €':'–'}</strong>
+            <span>${r.second?r.second.date:'–'}</span>
+            <strong>${r.second?r.second.amount+' €':'–'}</strong>
+          </div>`).join('') :
+          `<div class="membership-paid-empty">V zvolenom období nie je evidovaná žiadna platba členského.</div>`}
+      </div>
+      <div class="membership-report-total"><span>SPOLU</span><b>${total} €</b></div>`;
+  };
+
+  function buildHeadTrainerMembershipReportPDFBlob(){
+    const body=document.getElementById('membershipReportBody');
+    const summary=document.getElementById('membershipReportSummary');
+    if(!body) throw new Error('Prehľad platieb nie je dostupný');
+    const from=document.getElementById('reportFromDate')?.textContent || '';
+    const to=document.getElementById('reportToDate')?.textContent || '';
+    const group=document.getElementById('membershipReportGroup')?.selectedOptions?.[0]?.textContent || 'Všetky skupiny';
+    const rows=[...body.querySelectorAll('.membership-report-row:not(.membership-report-head)')];
+    const parsed=rows.map(row=>{
+      const c=[...row.children].map(x=>x.innerText.trim());
+      if(c.length<6) return null;
+      return [c[0],c[1],c[2],c[3],c[4],c[5]];
+    }).filter(Boolean);
+    const total=body.querySelector('.membership-report-total b')?.innerText || '0 €';
+    const title='ZAPLATENÉ ČLENSKÉ';
+    const subtitle=`Obdobie: ${from} – ${to} | Skupina: ${group}`;
+    const headers=['MENO','SKUPINA','1. POLROK','SUMA','2. POLROK','SUMA'];
+    const blob=buildGuardTrainerVectorPDF(title,subtitle,headers,parsed,[],[]);
+    return {blob,filename:`Guard-Trainer-zaplatene-clenske-${from.replace(/\./g,'-')}.pdf`,title,shareText:`Prehľad zaplateného členského ${from} – ${to}`};
+  }
+
+  window.saveHeadTrainerMembershipReportPDF=function(){
+    try{
+      const x=buildHeadTrainerMembershipReportPDFBlob();
+      saveGuardTrainerPDF(x.blob,x.filename);
+      return false;
+    }catch(e){console.error('PDF ZAPLATENE CLENSKE:',e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');return false;}
+  };
+
+  window.shareHeadTrainerMembershipReportPDF=async function(){
+    try{
+      const x=buildHeadTrainerMembershipReportPDFBlob();
+      await shareGuardTrainerPDF(x.blob,x.filename,x.title,x.shareText);
+      return false;
+    }catch(e){console.error('ZDIELANIE ZAPLATENE CLENSKE:',e);if(typeof toast==='function')toast('PDF sa nepodarilo zdieľať');return false;}
+  };
+
+  window.printMembershipReport=function(){
+    const body=document.getElementById('membershipReportBody');
+    const summary=document.getElementById('membershipReportSummary');
+    const rows=[...body.querySelectorAll('.membership-report-row:not(.membership-report-head)')];
+    const total=body.querySelector('.membership-report-total')?.innerText||'';
+    const w=window.open('','_blank'); if(!w)return;
+    const items=rows.map((row,i)=>{
+      const c=[...row.children].map(x=>x.innerText.trim());
+      if(c.length<6)return '';
+      return `<tr>
+        <td class="num">${i+1}.</td>
+        <td class="name">${c[0]}</td>
+        <td class="group">${c[1]}</td>
+        <td>${c[2]}</td><td class="sum">${c[3]}</td>
+        <td>${c[4]}</td><td class="sum">${c[5]}</td>
+      </tr>`;
+    }).join('');
+    w.document.write(`<html><head><meta charset="utf-8"><title>Zaplatené členské</title><style>
+      *{box-sizing:border-box}
+      @page{size:A4 portrait;margin:6mm}
+      body{font-family:Arial,sans-serif;color:#111;margin:0;font-size:8px}
+      h1{font-size:14px;margin:0 0 3px}
+      .meta{font-size:7px;color:#555;margin-bottom:7px;white-space:pre-line}
+      table{width:100%;border-collapse:collapse;table-layout:fixed}
+      th,td{border:0.5px solid #aaa;padding:2px 3px;height:13px;line-height:1.05;white-space:nowrap;text-align:center}
+      th{font-size:6.5px;background:#eee;text-align:left}
+      th.center,td.center{text-align:center}
+       .num{width:4%!important;max-width:4%!important;text-align:center}
+      .name{width:31%!important;max-width:31%!important;text-align:left!important;padding-left:5px!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;font-size:8.5px!important}
+      .group{width:4%!important;max-width:4%!important;text-align:center}
+      th.half{width:26%!important;text-align:center;font-size:6px}
+      td.sum{width:9%!important;max-width:9%!important;text-align:center;font-size:6.5px}
+      td:nth-child(4),td:nth-child(6){width:17%!important;max-width:17%!important;font-size:6.5px}
+      .name b{font-size:8.5px}
+      .halfhead{font-size:7px}
+      .sub{display:block;font-size:5.5px;font-weight:normal;margin-top:1px}
+      .total{font-size:9px;font-weight:bold;border-top:1px solid #111;padding-top:4px;margin-top:5px;text-align:right}
+      @media print{body{padding:0}}
+    </style>
+<style id="v491-final-navigation">
+/* v491: trainer/admin always have 6; head always 5 */
+body:not(.head-readonly) .bottom .nav-attendance{display:block!important;}
+body:not(.head-readonly) .bottom{grid-template-columns:repeat(6,minmax(0,1fr))!important;}
+body.head-readonly .bottom .nav-attendance{display:none!important;}
+body.head-readonly .bottom{grid-template-columns:repeat(5,minmax(0,1fr))!important;}
+</style>
+
+<style id="v495-fixed-role-navigation">
+/* v495: pevná spodná navigácia podľa role na všetkých obrazovkách */
+body:not(.head-readonly) .bottom { grid-template-columns: repeat(6,minmax(0,1fr)) !important; }
+body:not(.head-readonly) .bottom .nav-attendance { display:block !important; }
+body.head-readonly .bottom { grid-template-columns: repeat(5,minmax(0,1fr)) !important; }
+body.head-readonly .bottom .nav-attendance { display:none !important; }
+</style>
+
+<style id="v576-billing-lock">
+.pay-btn.billing-locked{opacity:.82!important;filter:saturate(.7)!important;cursor:not-allowed!important;}
+</style>
+
+<style id="gt-v640-inline-dark-fix">
+html,body{color-scheme:dark!important;}
+.member-month-history-row.member-month-click{background:#0a0a0a!important;background-color:#0a0a0a!important;color:#eee!important;}
+</style>
+<style id="no-login-fix"> #gtLoginOverlayV329{display:none!important;} </style>
+<style id="head-other-details-fix">
+.head-other-detail-head{display:grid;grid-template-columns:1.15fr .9fr 1.5fr .8fr;gap:8px;padding:0 8px 8px;border-bottom:1px solid rgba(212,160,23,.45);font-size:11px;font-weight:800;color:#aaa;text-transform:uppercase}
+.head-other-detail-row{display:grid;grid-template-columns:1.15fr .9fr 1.5fr .8fr;gap:8px;align-items:center;padding:10px 8px;border-bottom:1px solid rgba(212,160,23,.22)}
+.head-other-detail-row:last-child{border-bottom:0}
+.head-other-date,.head-other-type,.head-other-desc,.head-other-detail-row strong{min-width:0}
+.head-other-detail-row strong{text-align:right}
+.head-other-empty{padding:12px 8px;color:#999}
+</style>
+</head><body>
+      <h1>ZAPLATENÉ ČLENSKÉ</h1>
+      <div class="meta">${summary?.innerText||''}</div>
+      <table class="pdf-membership-table">
+        <colgroup>
+          <col class="col-num" style="width:4%">
+          <col class="col-name" style="width:31%">
+          <col class="col-group" style="width:4%">
+          <col class="col-date" style="width:17%">
+          <col class="col-sum" style="width:9%">
+          <col class="col-date" style="width:17%">
+          <col class="col-sum" style="width:9%">
+        </colgroup>
+        <thead><tr>
+          <th class="center">#</th>
+          <th>MENO</th>
+          <th class="center">SKUPINA</th>
+          <th colspan="2" class="half">1. POLROK<span class="sub">DÁTUM &nbsp;&nbsp; SUMA</span></th>
+          <th colspan="2" class="half">2. POLROK<span class="sub">DÁTUM &nbsp;&nbsp; SUMA</span></th>
+        </tr></thead>
+        <tbody>${items||'<tr><td colspan="7">V zvolenom období nie je evidovaná žiadna platba členského.</td></tr>'}</tbody>
+      </table>
+      <div class="total">${total}</div>
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<style id="gtGroupOptionsFinalV378">
+/* Clean group action modal */
+#groupOptionsModal{
+  position:fixed!important;
+  inset:0!important;
+  z-index:99999!important;
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  padding:20px!important;
+  box-sizing:border-box!important;
+  background:rgba(0,0,0,.78)!important;
+}
+#groupOptionsModal .group-options-modal{
+  position:relative!important;
+  width:100%!important;
+  max-width:620px!important;
+  box-sizing:border-box!important;
+  padding:20px!important;
+  margin:0!important;
+  overflow:visible!important;
+  border:1px solid #8d6b17!important;
+  border-radius:22px!important;
+  background:rgba(12,12,12,.98)!important;
+  box-shadow:0 18px 55px rgba(0,0,0,.75)!important;
+}
+#groupOptionsModal .group-options-highlight{
+  position:relative!important;
+  width:100%!important;
+  height:78px!important;
+  min-height:78px!important;
+  margin:0 0 18px!important;
+  padding:0 70px 0 14px!important;
+  box-sizing:border-box!important;
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:center!important;
+  gap:14px!important;
+  border-radius:14px!important;
+  overflow:hidden!important;
+  color:#fff!important;
+  background-image:none!important;
+}
+#groupOptionsModal .group-options-highlight .group-options-code{
+  flex:0 0 52px!important;
+  width:52px!important;
+  height:52px!important;
+  min-width:52px!important;
+  border-radius:11px!important;
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  background:rgba(0,0,0,.16)!important;
+  color:#fff!important;
+  font-size:28px!important;
+  font-weight:900!important;
+  line-height:1!important;
+}
+#groupOptionsModal .group-options-highlight strong{
+  display:block!important;
+  flex:1 1 auto!important;
+  min-width:0!important;
+  margin:0!important;
+  padding:0!important;
+  color:#fff!important;
+  font-size:24px!important;
+  font-weight:900!important;
+  line-height:1.1!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+}
+#groupOptionsModal .group-options-close{
+  position:absolute!important;
+  top:10px!important;
+  right:10px!important;
+  z-index:20!important;
+  width:48px!important;
+  height:48px!important;
+  min-width:48px!important;
+  max-width:48px!important;
+  min-height:48px!important;
+  max-height:48px!important;
+  margin:0!important;
+  padding:0!important;
+  border:1px solid rgba(255,255,255,.35)!important;
+  border-radius:10px!important;
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  background:#e52b2b!important;
+  color:#fff!important;
+  font-size:30px!important;
+  font-weight:400!important;
+  line-height:1!important;
+  box-shadow:none!important;
+}
+#groupOptionsModal .debt-title{
+  display:none!important;
+}
+#groupOptionsModal .danger-option,
+#groupOptionsModal .sub-option,
+#groupOptionsModal .restore-option{
+  display:block!important;
+  width:100%!important;
+  height:58px!important;
+  min-height:58px!important;
+  margin:10px 0 0!important;
+  padding:0 18px!important;
+  box-sizing:border-box!important;
+  border-radius:12px!important;
+  font-size:18px!important;
+  font-weight:900!important;
+  line-height:58px!important;
+}
+#groupOptionsModal .danger-option{
+  background:#c52b2b!important;
+  border:1px solid #e44a4a!important;
+  color:#fff!important;
+}
+#groupOptionsModal .sub-option{
+  background:#d59a00!important;
+  border:1px solid #f0b82c!important;
+  color:#fff!important;
+}
+#groupOptionsModal .restore-option{
+  background:#222!important;
+  border:1px solid #555!important;
+  color:#fff!important;
+}
+#groupOptionsModal .restore-modal-label{
+  position:absolute!important;
+  left:82px!important;
+  bottom:7px!important;
+  margin:0!important;
+  color:#fff!important;
+  font-size:11px!important;
+  font-weight:900!important;
+  line-height:1!important;
+}
+@media(max-width:480px){
+  #groupOptionsModal{padding:16px!important;}
+  #groupOptionsModal .group-options-modal{max-width:none!important;padding:16px!important;border-radius:20px!important;}
+  #groupOptionsModal .group-options-highlight{height:76px!important;min-height:76px!important;padding-left:12px!important;gap:12px!important;}
+  #groupOptionsModal .group-options-code{width:50px!important;height:50px!important;min-width:50px!important;font-size:27px!important;}
+  #groupOptionsModal .group-options-highlight strong{font-size:22px!important;}
+  #groupOptionsModal .group-options-close{top:10px!important;right:10px!important;}
+}
+</style>
+<style id="gtGroupOptionsV379Final">
+#groupOptionsModal .group-options-close{all:unset!important;position:absolute!important;top:10px!important;right:10px!important;width:48px!important;height:48px!important;min-width:48px!important;max-width:48px!important;min-height:48px!important;max-height:48px!important;box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:center!important;padding:0!important;margin:0!important;border:1px solid rgba(255,255,255,.35)!important;border-radius:10px!important;background:#e52b2b!important;color:#fff!important;font:400 30px/1 Arial,sans-serif!important;z-index:9999!important;}
+#groupOptionsModal .group-options-modal button.group-options-close{width:48px!important;height:48px!important;}
+#groupOptionsModal .group-options-modal .group-options-highlight{width:100%!important;height:78px!important;min-height:78px!important;display:flex!important;flex-direction:row!important;align-items:center!important;}
+</style>
+<style id="gtMemberProfileStatsV633">
+@media(max-width:700px){
+  .member-detail-page{padding-left:10px!important;padding-right:10px!important}
+  .member-hero{grid-template-columns:72px minmax(0,1fr) 132px!important;gap:8px!important;padding:10px!important;align-items:start!important}
+  .member-photo-wrap{width:72px!important}
+  .member-photo-wrap .member-big-avatar{width:66px!important;height:66px!important;font-size:30px!important}
+  .member-identity h1{font-size:24px!important;line-height:1.05!important}
+  .member-identity h2{font-size:18px!important;margin:2px 0 7px!important}
+  .hero-groups{gap:4px!important;flex-wrap:wrap!important}
+  .hero-groups .profile-group-fixed .member-group{width:34px!important;height:34px!important;font-size:14px!important}
+  .hero-training{height:92px!important;min-width:0!important}
+  .hero-training b{font-size:29px!important}
+  .hero-training span{font-size:12px!important}
+  .member-stats-btn{font-size:inherit!important;padding:5px 3px!important;gap:2px!important;width:100%!important}.member-stats-btn .member-stats-label{font-size:11px!important}.member-stats-btn strong{font-size:29px!important}.member-stats-btn .member-stats-title{font-size:10px!important;padding-top:5px!important}
+  .member-meta{grid-column:1/-1!important;grid-template-columns:1fr!important;padding:8px!important}
+  .member-meta>div{padding:5px 7px!important;border-right:0!important;border-bottom:1px solid #594400!important}
+  .member-meta>div:last-child{border-bottom:0!important}
+  .member-meta span{font-size:18px!important;margin-right:8px!important}
+  .member-meta b{font-size:14px!important}
+  .member-training-stats-panel{max-height:91vh!important;padding:12px!important}
+  .member-training-stats-total{gap:6px!important}
+  .member-month-card{min-height:78px!important}
+  .member-month-history-row{grid-template-columns:78px 1fr 24px!important}
+}
+@media(max-width:420px){
+  .member-hero{grid-template-columns:60px minmax(0,1fr) 112px!important;gap:6px!important}
+  .member-photo-wrap{width:60px!important}
+  .member-photo-wrap .member-big-avatar{width:56px!important;height:56px!important}
+  .member-identity h1{font-size:20px!important}
+  .member-identity h2{font-size:16px!important}
+  .hero-training{height:100px!important}
+  .hero-training b{font-size:25px!important}
+  .member-stats-btn .member-stats-label{font-size:10px!important}.member-stats-btn strong{font-size:25px!important}.member-stats-btn .member-stats-title{font-size:9px!important}
+  .member-month-card strong{font-size:13px!important;padding:0 35px!important}
+}
+</style>
+
+<style id="gtMemberStatsV634">
+.member-month-history-row.member-month-click{width:100%;font:inherit;text-align:left;color:inherit;background:transparent;cursor:pointer;border:1px solid #352a0a;}
+.member-month-history-row.member-month-click:hover{border-color:#d8a515;background:#111;}
+.member-stats-hint{margin-top:12px;border:1px solid #352a0a;border-radius:6px;padding:11px;text-align:center;color:#ffd12b;font-size:11px;}
+.member-stats-back-months{width:100%;margin-top:12px;background:#0b0b0b;border:1px solid #d8a515;color:#ffd12b;border-radius:7px;padding:11px;font-weight:800;font-size:11px;cursor:pointer;}
+.member-detail-top .top-more{display:none!important;}
+</style>
+
+<style id="gtMemberStatsFinalV637">
+/* Final visual correction for member training statistics */
+.member-training-stats-panel{background:#080808!important;color:#eee!important;}
+.member-month-history{background:transparent!important;}
+.member-month-history-row.member-month-click{
+  appearance:none!important;-webkit-appearance:none!important;
+  display:grid!important;grid-template-columns:88px minmax(0,1fr) 26px!important;
+  align-items:center!important;gap:8px!important;
+  width:100%!important;min-height:42px!important;box-sizing:border-box!important;
+  padding:6px 9px!important;margin:0!important;
+  background:#0a0a0a!important;background-image:none!important;
+  border:1px solid #594400!important;border-radius:6px!important;
+  color:#eee!important;text-align:left!important;
+  box-shadow:none!important;
+}
+.member-month-history-row.member-month-click .month-name{color:#eee!important;font-size:11px!important;font-weight:500!important;}
+.member-month-history-row.member-month-click .bar{height:8px!important;background:#171717!important;border:1px solid #302600!important;border-radius:5px!important;}
+.member-month-history-row.member-month-click .bar i{background:#ffd12b!important;}
+.member-month-history-row.member-month-click strong{color:#ffd12b!important;}
+.member-stats-date{background:#0a0a0a!important;background-image:none!important;}
+.member-stats-group-badge{display:flex!important;visibility:visible!important;opacity:1!important;width:34px!important;height:34px!important;min-width:34px!important;border-radius:6px!important;color:#fff!important;background-image:none!important;border:0!important;align-items:center!important;justify-content:center!important;font-weight:900!important;font-style:normal!important;line-height:1!important;}
+.profile-meta-icon{float:left!important;width:32px!important;height:32px!important;margin-right:8px!important;font-size:23px!important;line-height:32px!important;text-align:center!important;color:#ffd12b!important;}
+.profile-meta-icon::first-letter{font-size:23px;}
+@media(max-width:700px){
+ .member-month-history-row.member-month-click{grid-template-columns:76px minmax(0,1fr) 22px!important;min-height:36px!important;padding:4px 7px!important;}
+ .member-month-history-row.member-month-click .bar{height:7px!important;}
+ .member-stats-group-badge{width:30px!important;height:30px!important;min-width:30px!important;font-size:10px!important;}
+ .profile-meta-icon{width:25px!important;height:25px!important;margin-right:5px!important;font-size:18px!important;line-height:25px!important;}
+}
+<style id="gtMemberStatsV638">
+/* v638: force dark monthly cards and visible group badges */
+.member-training-stats-panel{background:#080808!important;color:#eee!important;}
+.member-month-history{display:flex!important;flex-direction:column!important;gap:5px!important;background:#080808!important;}
+.member-month-history-row.member-month-click{
+  appearance:none!important;-webkit-appearance:none!important;-moz-appearance:none!important;
+  display:grid!important;grid-template-columns:82px minmax(0,1fr) 24px!important;
+  align-items:center!important;gap:7px!important;width:100%!important;min-height:36px!important;
+  box-sizing:border-box!important;padding:4px 7px!important;margin:0!important;
+  background:#0a0a0a!important;background-color:#0a0a0a!important;background-image:none!important;
+  border:1px solid #594400!important;border-radius:6px!important;color:#eee!important;
+  box-shadow:none!important;text-align:left!important;
+  -webkit-tap-highlight-color:transparent!important;
+}
+.member-month-history-row.member-month-click .month-name{color:#eee!important;font-size:11px!important;font-weight:500!important;}
+.member-month-history-row.member-month-click .bar{height:7px!important;background:#171717!important;background-color:#171717!important;border:1px solid #302600!important;border-radius:5px!important;overflow:hidden!important;}
+.member-month-history-row.member-month-click .bar i{display:block!important;height:100%!important;background:#ffd12b!important;border-radius:5px!important;}
+.member-month-history-row.member-month-click strong{color:#ffd12b!important;font-size:12px!important;}
+.member-stats-date{display:grid!important;grid-template-columns:68px minmax(0,1fr) 34px!important;align-items:center!important;gap:6px!important;min-height:34px!important;padding:4px 6px!important;background:#0a0a0a!important;background-color:#0a0a0a!important;background-image:none!important;border:1px solid #352a0a!important;border-radius:5px!important;box-sizing:border-box!important;}
+.member-stats-group-badge{display:flex!important;visibility:visible!important;opacity:1!important;width:30px!important;height:30px!important;min-width:30px!important;border-radius:6px!important;align-items:center!important;justify-content:center!important;color:#fff!important;background-image:none!important;border:0!important;font-weight:900!important;font-style:normal!important;line-height:1!important;font-size:10px!important;justify-self:end!important;box-shadow:inset 0 1px 2px rgba(255,255,255,.2)!important;}
+.member-stats-back-months{background:#0a0a0a!important;background-color:#0a0a0a!important;color:#ffd12b!important;border:1px solid #d8a515!important;}
+</style>
+</style>
+
+<style id="gt-v639-statistics-final-fix">
+/* v639 FINAL: force dark statistics rows; neutralize browser button defaults */
+.member-training-stats-overlay{background:rgba(0,0,0,.78)!important;}
+.member-training-stats-panel{background:#080808!important;background-color:#080808!important;color:#eee!important;}
+.member-month-history{background:#080808!important;background-color:#080808!important;}
+.member-month-history-row.member-month-click{
+  appearance:none!important;-webkit-appearance:none!important;
+  width:100%!important;box-sizing:border-box!important;
+  background:#0a0a0a!important;background-color:#0a0a0a!important;background-image:none!important;
+  color:#eee!important;border:1px solid #352a0a!important;
+  border-radius:7px!important;
+  min-height:38px!important;padding:6px 8px!important;
+}
+.member-month-history-row.member-month-click .month-name{color:#eee!important;background:transparent!important;}
+.member-month-history-row.member-month-click .bar{background:#171717!important;background-color:#171717!important;background-image:none!important;}
+.member-month-history-row.member-month-click .bar i{background:#ffd12b!important;background-color:#ffd12b!important;}
+.member-month-history-row.member-month-click strong{color:#ffd12b!important;}
+.member-stats-date{
+  background:#0a0a0a!important;background-color:#0a0a0a!important;background-image:none!important;
+  color:#eee!important;
+}
+.member-stats-date b{color:#ffd12b!important;}
+.member-stats-date .member-stats-group-badge{
+  opacity:1!important;filter:none!important;background-image:none!important;
+  color:#fff!important;border:0!important;
+}
+/* profile top icons: fixed compact symbols, never overlapping */
+.member-meta{overflow:hidden!important;}
+.member-meta>div{min-width:0!important;box-sizing:border-box!important;}
+.profile-meta-icon{float:left!important;width:24px!important;height:24px!important;margin:0 7px 2px 0!important;font-size:18px!important;line-height:24px!important;}
+.member-meta small{line-height:1.15!important;}
+.member-meta b{line-height:1.2!important;word-break:break-word!important;}
+@media(max-width:700px){
+ .member-month-history-row.member-month-click{min-height:36px!important;padding:5px 7px!important;}
+ .member-month-history-row.member-month-click .month-name{font-size:11px!important;}
+ .member-month-history-row.member-month-click .bar{height:7px!important;}
+ .member-stats-date{grid-template-columns:68px minmax(0,1fr) 34px!important;min-height:34px!important;padding:4px 6px!important;}
+ .member-stats-group-badge{width:30px!important;height:30px!important;font-size:11px!important;}
+}
+</style>
+
+
+<style id="gtMemberPhotoLayoutV669">
+@media(max-width:700px){
+  .member-hero{grid-template-columns:66px minmax(0,1fr) 112px!important;gap:7px!important;overflow:hidden!important;box-sizing:border-box!important}
+  .member-photo-wrap{width:66px!important;min-width:66px!important;position:relative!important;z-index:2!important}
+  .member-photo-wrap .member-big-avatar{width:60px!important;height:60px!important;max-width:60px!important;max-height:60px!important}
+  .member-identity{min-width:0!important;max-width:100%!important;overflow:hidden!important;position:relative!important;z-index:3!important}
+  .member-identity h1,.member-identity h2{max-width:100%!important;overflow-wrap:anywhere!important;word-break:break-word!important}
+  .member-identity h1{font-size:21px!important;line-height:1.05!important}
+  .member-identity h2{font-size:17px!important;line-height:1.1!important}
+  .hero-groups{max-width:100%!important;overflow:hidden!important}
+  .hero-training{min-width:0!important;max-width:112px!important;overflow:hidden!important}
+}
+@media(max-width:380px){
+  .member-hero{grid-template-columns:60px minmax(0,1fr) 104px!important;gap:6px!important}
+  .member-photo-wrap{width:60px!important;min-width:60px!important}
+  .member-photo-wrap .member-big-avatar{width:54px!important;height:54px!important}
+  .hero-training{max-width:104px!important}
+}
+.photo-btn{cursor:pointer!important;z-index:20!important;touch-action:manipulation!important}
+</style>
+
+</body>
+<style id="v650-statistika-fit-final">
+/* v650: statistics tile stays fully inside its profile slot; no transform clipping */
+.member-profile-training-count{
+  width:150px!important;
+  height:155px!important;
+  min-width:150px!important;
+  min-height:155px!important;
+  max-width:150px!important;
+  max-height:155px!important;
+  overflow:hidden!important;
+  box-sizing:border-box!important;
+}
+.member-profile-training-count .member-stats-btn{
+  width:100%!important;
+  height:100%!important;
+  min-height:0!important;
+  max-height:none!important;
+  transform:none!important;
+  overflow:hidden!important;
+  box-sizing:border-box!important;
+  padding:7px 5px!important;
+  gap:2px!important;
+}
+.member-profile-training-count .member-stats-btn .member-stats-label{
+  font-size:15px!important;
+  line-height:1.05!important;
+  white-space:nowrap!important;
+}
+.member-profile-training-count .member-stats-btn strong{
+  font-size:38px!important;
+  line-height:1!important;
+}
+.member-profile-training-count .member-stats-btn .member-stats-title{
+  font-size:13px!important;
+  line-height:1.05!important;
+  padding-top:6px!important;
+  width:88%!important;
+  white-space:nowrap!important;
+}
+</style>
+
+<style id="v651-statistika-name-row">
+/* v651: statistics tile stays only in the same top row as the member name. */
+.member-profile-training-count{
+  position:static!important;
+  width:150px!important;
+  height:120px!important;
+  min-width:150px!important;
+  min-height:120px!important;
+  max-width:150px!important;
+  max-height:120px!important;
+  transform:none!important;
+  overflow:hidden!important;
+  box-sizing:border-box!important;
+  margin:0!important;
+}
+.member-profile-training-count .member-stats-btn{
+  width:100%!important; height:100%!important;
+  transform:none!important;
+  padding:6px 5px!important; gap:2px!important;
+  box-sizing:border-box!important;
+}
+.member-profile-training-count .member-stats-btn .member-stats-label{font-size:15px!important;line-height:1.05!important;white-space:nowrap!important;}
+.member-profile-training-count .member-stats-btn strong{font-size:38px!important;line-height:1!important;}
+.member-profile-training-count .member-stats-btn .member-stats-title{font-size:13px!important;line-height:1.05!important;padding-top:6px!important;width:88%!important;white-space:nowrap!important;}
+@media(max-width:700px){
+  .member-hero{grid-template-columns:60px minmax(0,1fr) 112px!important;gap:6px!important;align-items:start!important;}
+  .member-profile-training-count{grid-column:3!important;grid-row:1!important;width:112px!important;height:92px!important;min-width:112px!important;min-height:92px!important;max-width:112px!important;max-height:92px!important;}
+  .member-profile-training-count .member-stats-btn{padding:5px 3px!important;}
+  .member-profile-training-count .member-stats-btn .member-stats-label{font-size:11px!important;}
+  .member-profile-training-count .member-stats-btn strong{font-size:29px!important;}
+  .member-profile-training-count .member-stats-btn .member-stats-title{font-size:10px!important;padding-top:5px!important;}
+  .member-meta{grid-column:1/-1!important;}
+}
+@media(max-width:420px){
+  .member-hero{grid-template-columns:60px minmax(0,1fr) 112px!important;gap:6px!important;}
+  .member-profile-training-count{grid-column:3!important;grid-row:1!important;width:112px!important;height:92px!important;}
+}
+</style>
+</html>`);
+    w.document.close();w.focus();setTimeout(()=>w.print(),250);
+  };
+  window.renderMembershipReport();
+}
+window.showHeadTrainerMembershipReport=showHeadTrainerMembershipReport;
+
+
+function getAnnualPeriod(){
+  return [[9,2025],[10,2025],[11,2025],[12,2025],[1,2026],[2,2026],[3,2026],[4,2026],[5,2026],[6,2026],[7,2026],[8,2026]];
+}
+function getAnnualTrainerData(){
+  const pairs=getAnnualPeriod();
+  const names=[...new Set([
+    ...(trainersData||[]).map(t=>String(t.full||t.name||'').toUpperCase()).filter(Boolean),
+    ...monthlyBillingRecords.map(r=>String(r.trainer||'').toUpperCase()).filter(Boolean)
+  ])];
+  return names.map(name=>{
+    const vals=pairs.map(([month,year])=>monthlyBillingRecords
+      .filter(r=>(r.trainer||'')===name)
+      .filter(r=>{const d=parsePaymentDate(r.date);return d&&d.month===month&&d.year===year;})
+      .reduce((sum,r)=>sum+Number(r.clubAmount||0),0));
+    return {name,vals,total:vals.reduce((a,v)=>a+v,0)};
+  });
+}
+
+
+function renderTrainerYearDetail(trainerName){
+  const app=document.querySelector('.app');
+  const months=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const approved={};
+  const vals=approved[trainerName]||[];
+  const total=vals.reduce((a,v)=>a+v,0);
+  app.innerHTML=`
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <main class="content trainer-year-approved">
+    <section class="head-profile"><div class="head-avatar">T</div><div><b>${trainerName}</b><span>TRÉNER</span></div><div class="head-groups"><small>SKUPINY</small><div><i>B</i><i>D</i></div></div></section>
+    <div class="section-title monthly-title">▣ &nbsp; ROČNÉ VYÚČTOVANIE – 2026</div>
+    <div class="trainer-year-table-wrap"><table class="trainer-year-table"><thead><tr><th>MESIAC</th><th>TRÉNINGOV</th><th>TRÉNINGOVÉ PRÍJMY</th><th>ČLENSKÉ</th><th>REGISTRÁCIA</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU PRÍJMY</th><th>ODMENA TRÉNERA</th><th>ODOVZDAŤ KLUBU</th></tr></thead><tbody>
+    ${months.map((m,i)=>`<tr><td>${m}</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="club-amount">${vals[i]||0} €</td></tr>`).join('')}
+    </tbody><tfoot><tr><th>SPOLU<br>ZA ROK 2026</th><th colspan="8"></th><th class="club-amount">${total} €</th></tr></tfoot></table></div>
+    <div class="year-chart">${vals.map((v,i)=>`<div class="chart-col"><span>${v} €</span><i style="height:${Math.max(8,Math.round(v/3))}px"></i><small>${months[i].slice(0,3)}</small></div>`).join('')}</div>
+  </main>${standardBottomNav('billing', true)}`;
+}
+function formatPaymentDate(value){
+  const d=parsePaymentDate(value);
+  if(!d)return String(value||'');
+  return `${String(d.day).padStart(2,'0')}.${String(d.month).padStart(2,'0')}.${d.year}`;
+}
+function parsePaymentDate(value){
+  const v=String(value||'');
+  let m=v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if(m) return {year:Number(m[1]),month:Number(m[2]),day:Number(m[3])};
+  m=v.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+  if(m) return {year:Number(m[3]),month:Number(m[2]),day:Number(m[1])};
+  return null;
+}
+function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
+  const now=appToday();
+  const pad=n=>String(n).padStart(2,'0');
+  const iso=(y,m,d)=>`${y}-${pad(m)}-${pad(d)}`;
+  const first=iso(now.year,now.month,1);
+  const lastDay=new Date(now.year,now.month,0).getDate();
+  const last=iso(now.year,now.month,lastDay);
+  const from=fromValue||first, to=toValue||last;
+  const paid=membershipPayments
+    .filter(p=>{
+      if(!p || p.memberId==null || Number(p.amount||0)<=0)return false;
+      const d=parsePaymentDate(p.date); if(!d)return false;
+      const key=iso(d.year,d.month,d.day);
+      return key>=from && key<=to;
+    })
+    .sort((a,b)=>{
+      const da=parsePaymentDate(a.date),db=parsePaymentDate(b.date);
+      if(da&&db){
+        const xa=new Date(da.year,da.month-1,da.day).getTime();
+        const xb=new Date(db.year,db.month-1,db.day).getTime();
+        if(xa!==xb)return xb-xa;
+      }
+      return (a.surname||'').localeCompare(b.surname||'');
+    });
+  const total=paid.reduce((sum,p)=>sum+Number(p.amount||0),0);
+  const rows=paid.length
+    ?paid.map(p=>`<div class="membership-paid-row"><b>${p.surname||''} ${p.name||''}</b><span>${p.paidGroup||''}</span><span>${formatPaymentDate(p.date)}</span><strong>${Number(p.amount||0)} €</strong></div>`).join('')
+    :`<div class="membership-paid-empty">V zvolenom období nie je evidovaná žiadna platba členského.</div>`;
+  const modal=document.createElement('div');
+  modal.className='membership-paid-modal';
+  modal.innerHTML=`<div class="membership-paid-card">
+    <div class="membership-paid-head"><div><h3>ZAPLATENÉ ČLENSKÉ</h3><small>PREHĽAD PLATIEB</small></div><button type="button" onclick="this.closest('.membership-paid-modal').remove()">×</button></div>
+    <div class="membership-range">
+      <label>OD<input id="membershipFrom" type="date" value="${from}"></label>
+      <label>DO<input id="membershipTo" type="date" value="${to}"></label>
+      <button type="button" onclick="showTrainerMonthlyMembershipPayments(document.getElementById('membershipFrom').value,document.getElementById('membershipTo').value)">ZOBRAZIŤ OBDOBIE</button>
+    </div>
+    <div class="membership-paid-table-head"><span>MENO</span><span>SKUPINA</span><span>DÁTUM</span><span>SUMA</span></div>
+    <div class="membership-paid-list">${rows}</div>
+    <div class="membership-paid-total"><span>SPOLU</span><b>${total} €</b><small>${paid.length} platieb</small></div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+window.showTrainerMonthlyMembershipPayments=showTrainerMonthlyMembershipPayments;
+function showMonthlyMembershipPayments(){
+  const current=parsePaymentDate(attendanceState.date) || {year:2026,month:8};
+  const month=current.month, year=current.year;
+  const paid=membershipPayments.filter(p=>{
+    const d=parsePaymentDate(p.date);
+    return d && d.month===month && d.year===year;
+  }).sort((a,b)=>(a.surname||'').localeCompare(b.surname||''));
+  const total=paid.reduce((sum,p)=>sum+Number(p.amount||0),0);
+  const rows=paid.length
+    ?paid.map(p=>`<div class="membership-paid-row"><b>${p.surname} ${p.name}</b><span>${p.paidGroup||''}</span><span>${p.date}</span><strong>${Number(p.amount||0)} €</strong></div>`).join('')
+    :`<div class="membership-paid-empty">V tomto mesiaci zatiaľ nie je evidovaná žiadna platba členského.</div>`;
+  const modal=document.createElement('div');
+  modal.className='membership-paid-modal';
+  modal.innerHTML=`<div class="membership-paid-card"><div class="membership-paid-head"><div><h3>ZAPLATENÉ ČLENSKÉ</h3><small>${month}/${year}</small></div><button type="button" onclick="this.closest('.membership-paid-modal').remove()">×</button></div><div class="membership-paid-list">${rows}</div><div class="membership-paid-total"><span>SPOLU</span><b>${total} €</b><small>${paid.length} platieb</small></div><div class="membership-report-actions"><button type="button" title="Uložiť prehľad zaplateného členského do PDF" onclick="return window.saveTrainerMembershipReportPDF()">PDF</button><button type="button" title="Zdieľať prehľad zaplateného členského ako PDF" onclick="return window.shareTrainerMembershipReportPDF()">ZDIEĽAŤ</button></div></div>`;
+  document.body.appendChild(modal);
+
+  window.buildTrainerMembershipReportPDFBlob=function(){
+    const title='ZAPLATENÉ ČLENSKÉ';
+    const subtitle=`Prehľad platieb - ${String(month).padStart(2,'0')}/${year}`;
+    const headers=['MENO','SKUPINA','DÁTUM','SUMA'];
+    const bodyRows=paid.map(p=>[`${p.surname||''} ${p.name||''}`.trim(),p.paidGroup||'',p.date||'',`${Number(p.amount||0)} €`]);
+    const blob=buildGuardTrainerVectorPDF(title,subtitle,headers,bodyRows,[],[]);
+    return {blob,filename:`Guard-Trainer-zaplatene-clenske-${String(month).padStart(2,'0')}-${year}.pdf`,title,shareText:`Prehľad zaplateného členského ${String(month).padStart(2,'0')}/${year}`};
+  };
+  window.saveTrainerMembershipReportPDF=function(){
+    try{const x=window.buildTrainerMembershipReportPDFBlob();saveGuardTrainerPDF(x.blob,x.filename);return false;}
+    catch(e){console.error('PDF ZAPLATENE CLENSKE TRENER:',e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');return false;}
+  };
+  window.shareTrainerMembershipReportPDF=async function(){
+    try{const x=window.buildTrainerMembershipReportPDFBlob();await shareGuardTrainerPDF(x.blob,x.filename,x.title,x.shareText);return false;}
+    catch(e){console.error('ZDIELANIE ZAPLATENE CLENSKE TRENER:',e);if(typeof toast==='function')toast('PDF sa nepodarilo zdieľať');return false;}
+  };
+}
+window.showMonthlyMembershipPayments=showMonthlyMembershipPayments;
+
+
+
+function renderHeadTrainerYear(view='trainers'){
+  const app=document.querySelector('.app');
+  const months=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
+  const money=v=>Number(v||0).toLocaleString('sk-SK')+' €';
+  const realTrainers=(trainersData||[]).filter(t=>String(t.role||'').toUpperCase()!=='HLAVNÝ TRÉNER');
+  const trainers=realTrainers.length?realTrainers:(trainersData||[]);
+  const selectedYear=getHeadTrainerBillingPeriod().year;
+  const rows=trainers.map(t=>{
+    const name=String(t.full||t.name||'').trim();
+    const monthAmounts=months.map((_,i)=>{
+      const rs=monthlyBillingRecords.filter(r=>String(r.trainer||r.name||'').trim()===name)
+        .filter(r=>{const d=parsePaymentDate(r.date);return d&&d.year===selectedYear&&d.month===i+1&&!r.substituteReference;});
+      return rs.reduce((a,r)=>a+Number(r.clubAmount||0),0);
+    });
+    return {name:name.toUpperCase(),months:monthAmounts};
+  });
+
+
+  const sums=months.map((_,i)=>rows.reduce((a,r)=>a+r.months[i],0));
+  const grand=sums.reduce((a,v)=>a+v,0);
+  const tab=view==='all'?'all':'trainers';
+
+  const trainerRows=rows.map(r=>{
+    const name=r.name, total=r.months.reduce((a,x)=>a+x,0);
+    const esc=String(name).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    const trainerJson=JSON.stringify(name).replace(/</g,'\u003c');
+    const currentPeriod=getHeadTrainerBillingPeriod();
+    return `<tr data-annual-trainer="${esc}" data-annual-year="${selectedYear}">
+      <td class="annual-name"><button type="button" class="annual-trainer-link" onclick='window.renderHeadTrainerDetail(${trainerJson},${currentPeriod.month},${currentPeriod.year}); return false;'><b>${name}</b></button></td>
+      ${r.months.map((x,i)=>{ const mj=i+1; return `<td><button type="button" class="annual-cell-link" onclick='window.renderHeadTrainerDetail(${trainerJson},${mj},${selectedYear}); return false;'>${money(x)}</button></td>`; }).join('')}
+      <td class="club-amount"><button type="button" class="annual-cell-link" onclick='window.renderHeadTrainerDetail(${trainerJson},${currentPeriod.month},${currentPeriod.year}); return false;'>${money(total)}</button></td>
+    </tr>`;
+  }).join('');
+
+  const allRows=months.map((m,i)=>`<tr><td>${m}</td><td class="club-amount">${money(sums[i])}</td></tr>`).join('');
+
+  app.innerHTML=`
+  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
+  <main class="content head-billing annual-screen">
+    <section class="head-profile head-profile-main">
+      <div class="head-avatar">${String(getMainTrainerDisplayName()||'H').trim().charAt(0).toUpperCase()}</div>
+      <div class="head-trainer-title"><b>${getMainTrainerDisplayName().toUpperCase()}</b><span>HLAVNÝ TRÉNER</span></div>
+      <button class="head-paid" onclick="showHeadTrainerMembershipReport()">👥<b>ZAPLATENÉ<br>ČLENSKÉ</b></button>
+    </section>
+    <div class="head-title-row"><h2>▣ &nbsp; ROČNÉ VYÚČTOVANIE – <b>${selectedYear}</b></h2></div>
+    <div class="annual-view-tabs">
+      <button class="${tab==='trainers'?'active':''}" onclick="renderHeadTrainerYear('trainers')">📊 ROK PODĽA TRÉNEROV</button>
+      <button class="${tab==='all'?'active':''}" onclick="renderHeadTrainerYear('all')">Σ VŠETCI TRÉNERI SPOLU</button>
+    </div>
+    ${tab==='trainers'?`
+      <div class="approved-section-title">ROČNÉ VYÚČTOVANIE PODĽA TRÉNEROV</div>
+      <div class="annual-hint">Klikni na meno alebo na mesačnú sumu trénera → otvorí sa jeho „Moje vyúčtovanie“.</div>
+      <div class="year-table-scroll"><table class="approved-year-table annual-trainers-table">
+        <thead><tr><th>TRÉNER</th>${months.map(m=>`<th>${m}</th>`).join('')}<th>SPOLU</th></tr></thead>
+        <tbody>${trainerRows}
+          <tr class="sum-row"><th>SPOLU KLUB</th>${sums.map(x=>`<th>${money(x)}</th>`).join('')}<th>${money(grand)}</th></tr>
+        </tbody>
+      </table></div>
+    `:`
+      <div class="annual-page-two">
+        <div class="approved-section-title">ROČNÉ VYÚČTOVANIE – VŠETCI TRÉNERI SPOLU PODĽA MESIACOV</div>
+        <div class="annual-total-strip"><span>SPOLU ZA ROK ${selectedYear}</span><b>${money(grand)}</b></div>
+        <table class="approved-year-table annual-all-table">
+          <thead><tr><th>MESIAC</th><th>ODOVZDAŤ KLUBU</th></tr></thead>
+          <tbody>${allRows}</tbody>
+          <tfoot><tr><th>SPOLU ZA ROK</th><th class="club-amount">${money(grand)}</th></tr></tfoot>
+        </table>
+      </div>
+    `}
+    <div class="annual-monthly-action">
+      <button type="button" class="membership-paid-report-btn annual-monthly-btn" onclick="return renderHeadTrainerBilling()">MESAČNÉ VYÚČTOVANIE</button>
+    </div>
+  </main>${standardBottomNav('billing', true)}`;
+}
+
+let selectedBillingYear=null, selectedBillingMonth=null;
+
+function getMyBillingRowsForCurrentTrainer(rows, shownYear, shownMonth){
+  const privileged = typeof isAdmin==='function' &&
+    (isAdmin() || (typeof isHeadTrainer==='function' && isHeadTrainer()));
+  if(privileged) return rows;
+
+  const me=String(getCurrentTrainerDisplayName()||'').trim();
+  const norm=s=>String(s||'').trim().toUpperCase();
+
+  const accepted=substitutionOffers.filter(o=>{
+    if(!o.acceptedBy) return false;
+    const d=parsePaymentDate(formatBillingDate(o.date));
+    return d && d.year===Number(shownYear) && d.month===Number(shownMonth);
+  });
+
+  const offeredByMe=accepted.filter(o=>norm(o.from)===norm(me));
+  const acceptedByMe=accepted.filter(o=>norm(o.acceptedBy)===norm(me));
+
+  const sameDateGroup=(r,o)=>{
+    const rd=parsePaymentDate(r.date);
+    const od=parsePaymentDate(formatBillingDate(o.date));
+    if(!rd||!od) return false;
+    return rd.year===od.year && rd.month===od.month && rd.day===od.day &&
+           norm(r.group)===norm(o.code);
+  };
+
+  let result=[];
+
+  rows.forEach(r=>{
+    // Informational row: ownership is determined by the accepted offer,
+    // not by a possibly stale trainer field in an old stored row.
+    if(r.substituteReference){
+      // The accepted substitute must NEVER see the informational zero row.
+      // This row belongs only to the trainer who originally offered it.
+      const isAcceptedByMe=acceptedByMe.some(o=>sameDateGroup(r,o));
+      if(isAcceptedByMe) return;
+
+      const offerForRef=accepted.find(o=>sameDateGroup(r,o));
+      if(offerForRef){
+        if(norm(offerForRef.from)===norm(me)) result.push(r);
+      }else if(norm(r.trainer)===norm(me)){
+        result.push(r);
+      }
+      return;
+    }
+
+    // Financial substitute row: ONLY the trainer who accepted and actually
+    // trained the session sees it.
+    if(r.substitute && r.substituteAcceptedBy){
+      if(norm(r.substituteAcceptedBy)===norm(me)) result.push(r);
+      return;
+    }
+
+    // Once a substitution is accepted, that date+group belongs exclusively
+    // to the accepted substitute for financial purposes. Nobody else gets
+    // the ordinary financial row, including stale test rows.
+    const acceptedForRow=accepted.filter(o=>sameDateGroup(r,o));
+    if(acceptedForRow.length){
+      const mine=acceptedForRow.some(o=>norm(o.acceptedBy)===norm(me));
+      const offered=acceptedForRow.some(o=>norm(o.from)===norm(me));
+      if(mine){
+        // A correctly tagged substitute financial row was already handled
+        // above. If an old ordinary row remains, hide it here.
+        return;
+      }
+      if(offered){
+        return;
+      }
+      return;
+    }
+
+    // Normal training unrelated to substitution.
+    if(norm(r.trainer)===norm(me)) result.push(r);
+  });
+
+  // If the original trainer's informational row is missing, create exactly
+  // one. This is only a display fallback; it does not create financial data.
+  offeredByMe.forEach(o=>{
+    if(result.some(r=>r.substituteReference && sameDateGroup(r,o))) return;
+    result.push({
+      key:`${o.date}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from}`,
+      trainer:me,
+      date:formatBillingDate(o.date),
+      group:o.code||'',
+      name:o.groupName||'',
+      paying:0,trainingSum:0,membershipSum:0,registrationSum:0,
+      otherPlus:0,otherMinus:0,gross:0,trainerReward:0,clubAmount:0,
+      trainingFee:0,trainerRewardPerMember:0,
+      substitute:true,substituteReference:true,
+      substituteBy:o.acceptedBy,
+      substituteLabel:'TRÉNING ZASTUPOVANÝ'
+    });
+  });
+
+  // The trainer who OFFERED the accepted substitution must see ONLY
+  // the zero-value informational substitution row for that date/group.
+  // His original financial/payment row is hidden from his personal view.
+  // The accepted trainer keeps the real financial row.
+  const offeredDateGroupKeys=new Set(
+    offeredByMe.map(o=>{
+      const d=parsePaymentDate(formatBillingDate(o.date));
+      return `${d?`${d.year}-${d.month}-${d.day}`:formatBillingDate(o.date)}|${norm(o.code)}`;
+    })
+  );
+  result=result.filter(r=>{
+    if(r.substituteReference) return true;
+    const d=parsePaymentDate(r.date);
+    const key=`${d?`${d.year}-${d.month}-${d.day}`:r.date}|${norm(r.group)}`;
+    return !offeredDateGroupKeys.has(key);
+  });
+
+  // A trainer who actually owns the financial record for a date+group
+  // must NEVER see the zero-information reference row for that same
+  // training. This also handles older test records which were saved before
+  // the substitute flags were added.
+  const ownFinancialKeys=new Set(
+    result.filter(r=>!r.substituteReference && (
+      norm(r.trainer)===norm(me) ||
+      (r.substituteAcceptedBy && norm(r.substituteAcceptedBy)===norm(me))
+    )).map(r=>{
+      const d=parsePaymentDate(r.date);
+      return `${d?`${d.year}-${d.month}-${d.day}`:r.date}|${norm(r.group)}`;
+    })
+  );
+  const filteredResult=result.filter(r=>{
+    // The substitute trainer sees ONLY the real financial row.
+    // The zero-value "ZASTUPOVANÝ" reference belongs exclusively to
+    // the original trainer who offered the training.
+    if(r.substituteReference){
+      if(norm(r.substituteBy)===norm(me)) return false;
+      if(norm(r.substituteAcceptedBy)===norm(me)) return false;
+    }
+    if(!r.substituteReference) return true;
+    const d=parsePaymentDate(r.date);
+    const key=`${d?`${d.year}-${d.month}-${d.day}`:r.date}|${norm(r.group)}`;
+    return !ownFinancialKeys.has(key);
+  });
+
+  // Remove duplicate rows for the same date/group in the current trainer's
+  // view. A substitution reference or financial substitute row has priority.
+  const seen=new Set(), finalRows=[];
+  filteredResult.forEach(r=>{
+    const d=parsePaymentDate(r.date);
+    const key=`${d?`${d.year}-${d.month}-${d.day}`:r.date}|${norm(r.group)}`;
+    if(seen.has(key)){
+      const i=finalRows.findIndex(x=>{
+        const xd=parsePaymentDate(x.date);
+        return `${xd?`${xd.year}-${xd.month}-${xd.day}`:x.date}|${norm(x.group)}`===key;
+      });
+      // Prefer the real financial row. Informational substitution rows
+      // belong only to the original trainer.
+      if(i>=0){
+        if(finalRows[i].substituteReference && !r.substituteReference) finalRows[i]=r;
+        else if(r.substitute && !r.substituteReference && !finalRows[i].substituteReference) finalRows[i]=r;
+      }
+      return;
+    }
+    seen.add(key);
+    finalRows.push(r);
+  });
+  return finalRows;
+}
+
+function getMonthlyOtherDetails(rows){
+  const out=[];
+  (rows||[]).forEach(r=>{
+    if(r.cancelled || r.substituteReference) return;
+    const d=r.date||'';
+    const plus=Number(r.otherPlus||0);
+    const minus=Number(r.otherMinus||0);
+    if(plus>0){
+      out.push({date:r.otherPlusDate?formatBillingDate(r.otherPlusDate):d,type:'Iné +',reason:String(r.otherPlusReason||r.otherPlusFor||r.otherPlusDescription||'').trim()||'Neuvedené',amount:plus});
+    }
+    if(minus>0){
+      out.push({date:r.otherMinusDate?formatBillingDate(r.otherMinusDate):d,type:'Iné −',reason:String(r.otherMinusReason||r.otherMinusFor||r.otherMinusDescription||'').trim()||'Neuvedené',amount:-minus});
+    }
+  });
+  return out;
+}
+
+function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
+  try{
+    const parsed=parsePaymentDate(String(dateLabel||''));
+    if(!parsed){ toast('Neplatný dátum dochádzky'); return false; }
+    const iso=`${parsed.year}-${String(parsed.month).padStart(2,'0')}-${String(parsed.day).padStart(2,'0')}`;
+    const code=String(groupCode||'').trim().toUpperCase();
+    const name=String(groupName||getAdminGroupName(code)||code).trim();
+    const items=(typeof scheduleItemsForDate==='function'?scheduleItemsForDate(iso):[])||[];
+    const match=items.find(x=>String(x.code||'').trim().toUpperCase()===code &&
+      (!name || String(x.name||'').trim()===name));
+    attendanceState.date=iso;
+    attendanceState.group=code;
+    attendanceState.name=name;
+    attendanceState.trainingTime=String(match?.time||'');
+    attendanceState.trainingScheduleId=match?.scheduleId||null;
+    applyTrainingSettingsForAttendance();
+
+    // The billing row is the financial source of truth for this exact saved
+    // training. Keep its per-member payment snapshot so opening the row from
+    // "Moje vyúčtovanie" shows exactly the same membership/registration sums
+    // that were saved in the billing record, even if the member-level display
+    // has subsequently changed or an older record has incomplete history.
+    attendanceState.billingPaymentSnapshot=null;
+    attendanceState.billingAttendanceSnapshot=null;
+    attendanceState.billingRecordSnapshot=null;
+    try{
+      const trainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+      const allCandidates=(getBillingRecords()||[]).filter(r=>{
+        const rd=parsePaymentDate(r.date);
+        return rd && rd.year===parsed.year && rd.month===parsed.month && rd.day===parsed.day &&
+          String(r.group||'').trim().toUpperCase()===code &&
+          !r.substituteReference;
+      });
+      // Prefer the current trainer's record, but do not let a display-name
+      // mismatch make the saved payment snapshot disappear.  When there is
+      // only one financial record for the exact date/group it is unambiguous.
+      const trainerCandidates=allCandidates.filter(r=>String(r.trainer||'').trim().toUpperCase()===trainer.toUpperCase());
+      const candidates=trainerCandidates.length?trainerCandidates:allCandidates;
+      const br=candidates.find(r=>Array.isArray(r.paymentSnapshot)) || candidates[0];
+      if(br){
+        // Ak vyúčtovanie obsahuje kompletný snapshot, obnovíme z neho aj NOVÝ.
+        // Tým sa návrat z vyúčtovania neopiera o neúplný attendanceSnapshot.
+        if(Array.isArray(br.attendanceStateSnapshot)){
+          const full=new Map(br.attendanceStateSnapshot.map(x=>[String(x.surname||'').trim()+'|'+String(x.name||'').trim(),x]));
+          (attendanceState.members||[]).forEach(a=>{
+            const x=full.get(a.surname+'|'+a.name);
+            if(!x) return;
+            a.training=!!x.training;
+            a.trainingAccount=!!x.trainingAccount;
+            a.newMember=!!x.newMember;
+            a.newMemberDate=a.newMember ? (x.newMemberDate||attendanceState.date) : '';
+            a.membershipAccountAmount=Number(x.membershipAccountAmount||0);
+            a.membershipAccountDate=x.membershipAccountDate||'';
+            a.registrationAccountAmount=Number(x.registrationAccountAmount||0);
+            a.registrationAccountDate=x.registrationAccountDate||'';
+          });
+        }
+        if(Array.isArray(br.paymentSnapshot)){
+          attendanceState.billingPaymentSnapshot={};
+          br.paymentSnapshot.forEach(x=>{
+            attendanceState.billingPaymentSnapshot[String(x.surname||'').trim()+'|'+String(x.name||'').trim()]=x;
+          });
+        }
+        attendanceState.billingAttendanceSnapshot=Array.isArray(br.attendanceSnapshot)?br.attendanceSnapshot.slice():[];
+        attendanceState.billingRecordSnapshot=br;
+      }
+    }catch(e){ console.warn('Billing payment snapshot load failed',e); }
+
+    window.__attendanceOpenedFromCalendar=false;
+    history.pushState({gtRoute:'attendance',fromBilling:true},'',location.pathname+location.search+'#attendance');
+    attendance();
+  }catch(err){
+    console.error('OPEN ATTENDANCE FROM BILLING:',err);
+    toast('Dochádzku sa nepodarilo otvoriť');
+  }
+  return false;
+}
+window.openAttendanceFromBillingRow=openAttendanceFromBillingRow;
+
+
+function repairLegacyTrainer1BillingOwnership(){
+  try{
+    if(isAdmin() || isHeadTrainer()) return;
+    const me=String(getCurrentTrainerDisplayName()||'').trim();
+    if(!me || /^TRÉNER\s*1$/i.test(me)) return;
+    let changed=false;
+    monthlyBillingRecords=(monthlyBillingRecords||[]).map(r=>{
+      const d=parsePaymentDate(r?.date);
+      const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:'';
+      if(iso>=TRAINING_DATA_START_DATE && String(r?.trainer||'').trim().toUpperCase()==='TRÉNER 1'){
+        changed=true;
+        return {...r,trainer:me};
+      }
+      return r;
+    });
+    if(changed) persistMonthlyBillingRecords();
+  }catch(e){ console.warn('Oprava starého mena trénera vo vyúčtovaní:',e); }
+}
+repairLegacyTrainer1BillingOwnership();
+
+function billingDeleteCanonicalKey(record){
+  const d=parsePaymentDate(record?.date);
+  const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record?.date||'');
+  return `${String(record?.trainer||'').trim().toUpperCase()}|${dk}|${String(record?.group||'').trim().toUpperCase()}`;
+}
+function getBillingDeleteOrders(){
+  try{ const x=JSON.parse(originalGetItem('gt-billing-delete-order-v1')||'{}'); return x&&typeof x==='object'?x:{}; }catch(e){ return {}; }
+}
+function persistBillingDeleteOrders(obj){
+  try{ originalSetItem('gt-billing-delete-order-v1',JSON.stringify(obj||{})); }catch(e){}
+}
+function deleteMyBillingTraining(recordKey,date,groupCode){
+  if(isAdmin() || isHeadTrainer()){ toast('Túto funkciu má v Moje vyúčtovanie iba bežný tréner.'); return false; }
+  const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+  const key=String(recordKey||'');
+  const dd=parsePaymentDate(String(date||''));
+  const gc=String(groupCode||'').trim().toUpperCase();
+  if(!me || !key || !dd || !gc){ toast('Tréning nemá platné údaje.'); return false; }
+  const canonical=`${me.toUpperCase()}|${dd.year}-${String(dd.month).padStart(2,'0')}-${String(dd.day).padStart(2,'0')}|${gc}`;
+  const owned=(monthlyBillingRecords||[]).filter(r=>billingDeleteCanonicalKey(r)===canonical);
+  if(!owned.length){ toast('Tento tréning už neexistuje vo vyúčtovaní.'); return false; }
+  if(!confirm(`Naozaj vymazať tento tréning z „Moje vyúčtovanie“?\n\n${date||''} – ${groupCode||''}\n\nDochádzka zostane uložená a môžeš ju znovu upraviť a uložiť.`)) return false;
+  const deletedAt=Date.now();
+  const dels=getBillingDeleteOrders();
+  dels[canonical]=Math.max(Number(dels[canonical]||0),deletedAt);
+  persistBillingDeleteOrders(dels);
+  monthlyBillingRecords=(monthlyBillingRecords||[]).filter(r=>billingDeleteCanonicalKey(r)!==canonical);
+  persistMonthlyBillingRecords();
+  try{ if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(false),100); }catch(e){}
+  toast('Tréning bol vymazaný z vyúčtovania. Dochádzka zostala zachovaná.');
+  renderMonthlyBilling(selectedBillingYear,selectedBillingMonth);
+  return false;
+}
+window.deleteMyBillingTraining=deleteMyBillingTraining;
 
 function renderMonthlyBilling(year=null,targetMonth=null){
   const app=document.querySelector('.app');

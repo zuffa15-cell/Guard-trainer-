@@ -171,6 +171,81 @@ const GT_LOCAL_AUTH_KEYS = new Set([
 function isGTLocalAuthKey(key){ return GT_LOCAL_AUTH_KEYS.has(String(key||'')); }
 
 
+function applyMembersFromCloudSnapshot(data){
+  // Členovia sa spracujú HNEĎ pri prijatí Firestore snapshotu. Tento blok
+  // je zámerne nezávislý od globálneho _updatedAt a _lastUpdateBy, aby sa
+  // zmena člena zobrazila na druhom zariadení okamžite aj vtedy, keď snapshot
+  // obsahuje zároveň inú zmenu (dochádzka, vyúčtovanie a pod.).
+  try{
+    if(!data || !data[MEMBERS_STORAGE_KEY]) return false;
+    let remoteMembers=[], remoteOrder={}, remoteDelete={};
+    try{ const x=JSON.parse(data[MEMBERS_STORAGE_KEY]||'[]'); if(Array.isArray(x)) remoteMembers=x; }catch(e){}
+    try{ const x=JSON.parse(data[MEMBER_SAVE_ORDER_KEY]||'{}'); if(x&&typeof x==='object') remoteOrder=x; }catch(e){}
+    try{ const x=JSON.parse(data['gt-member-delete-order-v1']||'{}'); if(x&&typeof x==='object') remoteDelete=x; }catch(e){}
+
+    let localMembers=[];
+    try{ const x=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]'); if(Array.isArray(x)) localMembers=x; }catch(e){}
+    let localOrder={}, localDelete={};
+    try{ const x=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}'); if(x&&typeof x==='object') localOrder=x; }catch(e){}
+    try{ const x=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}'); if(x&&typeof x==='object') localDelete=x; }catch(e){}
+
+    const clean=m=>{ const x={...m}; delete x.applicationFile; delete x.applicationFileName; return x; };
+    const byId=new Map();
+    localMembers.forEach(m=>{ if(m&&m.id!=null) byId.set(String(m.id),m); });
+    let changed=false;
+
+    // Remote člen nahradí lokálny iba ak je novší. Nový remote člen sa
+    // pridá okamžite, aj keď na tomto zariadení ešte vôbec neexistuje.
+    remoteMembers.forEach(m=>{
+      if(!m||m.id==null) return;
+      const id=String(m.id), local=byId.get(id);
+      const rt=Number(remoteOrder[id]||0), lt=Number(localOrder[id]||0);
+      if(!local || rt>=lt){
+        const next=clean(m);
+        if(!local || JSON.stringify(clean(local))!==JSON.stringify(next)) changed=true;
+        byId.set(id,next);
+      }
+    });
+
+    // Prijmi aj vzdialené zmazanie iba vtedy, keď je novšie než posledné
+    // uloženie člena na tomto zariadení.
+    Object.keys(remoteDelete).forEach(id=>{
+      const dt=Number(remoteDelete[id]||0), lt=Number(localOrder[id]||0);
+      if(dt>0 && dt>=lt && byId.has(String(id))){ byId.delete(String(id)); changed=true; }
+    });
+
+    const merged=Array.from(byId.values());
+    merged.sort((a,b)=>{
+      const s=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});
+      return s || (a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});
+    });
+    const mergedOrder={...localOrder};
+    Object.keys(remoteOrder).forEach(id=>mergedOrder[id]=Math.max(Number(mergedOrder[id]||0),Number(remoteOrder[id]||0)));
+    const mergedDelete={...localDelete};
+    Object.keys(remoteDelete).forEach(id=>mergedDelete[id]=Math.max(Number(mergedDelete[id]||0),Number(remoteDelete[id]||0)));
+
+    const membersRaw=JSON.stringify(merged);
+    if(membersRaw!==originalGetItem(MEMBERS_STORAGE_KEY)){ originalSetItem(MEMBERS_STORAGE_KEY,membersRaw); changed=true; }
+    originalSetItem(MEMBER_SAVE_ORDER_KEY,JSON.stringify(mergedOrder));
+    originalSetItem('gt-member-delete-order-v1',JSON.stringify(mergedDelete));
+
+    if(changed){
+      isApplyingRemote=true;
+      try{
+        membersData.splice(0,membersData.length,...merged.map(m=>({...m})));
+        try{normalizeAllMembers();}catch(e){}
+        try{applyMemberApplicationFiles();}catch(e){}
+      }finally{ isApplyingRemote=false; }
+      try{ if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers(); }catch(e){}
+      console.log('📥 Členovia prijatí okamžite zo servera:',merged.length);
+    }
+    return changed;
+  }catch(e){
+    console.warn('Guard Trainer: okamžitý sync členov z cloudu zlyhal',e);
+    return false;
+  }
+}
+
 function initCloudSync(){
   if(!db) return;
   
@@ -179,6 +254,11 @@ function initCloudSync(){
     if(!doc.exists) return;
     const data = doc.data();
     const myUid = firebase.auth().currentUser?.uid;
+    // Členovia sa spracujú okamžite ešte pred globálnymi kontrolami snapshotu.
+    // Vlastný zápis je možné ignorovať nižšie, ale prijatý stav sa už teraz
+    // porovnal podľa per-ID timestampov.
+    applyMembersFromCloudSnapshot(data);
+
     // Cloud snapshot iba prijmi a lokálne zjednoť. Ďalší zápis do cloudu sa
     // robí iba pri skutočnom lokálnom uložení člena, aby nevznikala race slučka.
     if(!data) return;

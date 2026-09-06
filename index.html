@@ -8492,11 +8492,12 @@ function isAttendanceTodayForTrainer(){
   }catch(e){ return false; }
 }
 function isAnatoliiAttendanceEditor(){
-  // Anatolii Kuhal je reálny tréner, nie hlavný tréner. Staré uložené
-  // účty mohli mať nesprávnu rolu, preto jeho identitu určujeme aj podľa mena.
+  // Anatolii Kuhal a Peter Onuščák používajú rovnaký reálny-tréner režim.
+  // Peter nesmie mať vlastnú špeciálnu logiku správania, ktorá by sa líšila
+  // od Anatoliiho. Identita sa určuje iba podľa aktuálne prihláseného trénera.
   try{
     const n=String(getCurrentTrainerDisplayName()||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
-    return n==='ANATOLII KUHAL';
+    return n==='ANATOLII KUHAL' || n==='PETER ONUSCAK';
   }catch(e){ return false; }
 }
 function isRealTrainerAttendanceEditor(){
@@ -10399,60 +10400,46 @@ function isPeterOnuscakName(v){
   return n==='PETER ONUSCAK';
 }
 function repairPeterOnuscakIdentity(){
-  // Bezpečná migrácia starého účtu Petra. DÔLEŽITÉ:
-  // nikdy nemení účet ADMIN ani HLAVNÝ TRÉNER na TRÉNERA.
+  // Peter je obyčajný tréner rovnako ako Anatolii. Táto funkcia iba opraví
+  // starý účet „Tréner 1“ na stabilnú identitu Petra. NIKDY už nepresúva
+  // ľubovoľné vyúčtovania podľa starého trainerId – to spôsobovalo chaos,
+  // keď sa ID účtu časom zmenilo alebo bolo znovu použité.
   try{
     let account=null;
     try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
-    if(!account) return;
-    const accountRole=String(account.role||'').toLowerCase();
-    if(accountRole!=='trainer') return;
+    if(!account || String(account.role||'').toLowerCase()!=='trainer') return;
+
+    const display=String(account.display_name||account.name||'').trim();
+    const legacyName=/^TRÉNER\s*1$/i.test(display) || /^TRENER\s*1$/i.test(display);
+    const isPeter= isPeterOnuscakName(display);
+    if(!isPeter && !legacyName) return;
 
     let peter=(trainersData||[]).find(t=>isPeterOnuscakName(t.full||t.name));
-    const accountId=Number(account.trainer_id);
-    let legacyPeter=isPeterOnuscakName(account.display_name)||isPeterOnuscakName(account.name);
-    try{
-      const pw=JSON.parse(localStorage.getItem('gt-trainer-login-passwords')||'{}');
-      const e=pw[String(accountId)];
-      if(e && isPeterOnuscakName(e.name)) legacyPeter=true;
-    }catch(e){}
-    if(!legacyPeter) return;
-
-    if(!peter && Number.isFinite(accountId)){
-      const legacy=(trainersData||[]).find(t=>Number(t.id)===accountId && /^TRÉNER\s*1$/i.test(String(t.full||t.name||'').trim()));
-      if(legacy){
-        legacy.full='Peter Onuščák'; legacy.name='Peter Onuščák'; legacy.role='TRÉNER'; legacy.isTemplate=false;
-        peter=legacy;
-        try{ persistTrainersData(); }catch(e){}
-      }
-    }
+    if(!peter) peter=(trainersData||[]).find(t=>/^TRÉNER\s*1$/i.test(String(t.full||t.name||'').trim()));
     if(!peter) return;
 
-    if(Number(account.trainer_id)!==Number(peter.id) || String(account.display_name||'').trim()!=='Peter Onuščák'){
-      account.trainer_id=Number(peter.id);
-      account.display_name='Peter Onuščák';
-      account.role='trainer';
-      account.groups=Array.isArray(peter.groups)?[...peter.groups]:Array.isArray(account.groups)?[...account.groups]:[];
-      localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
-    }
+    account.trainer_id=Number(peter.id);
+    account.display_name='Peter Onuščák';
+    account.role='trainer';
+    account.groups=Array.isArray(peter.groups)?[...peter.groups]:Array.isArray(account.groups)?account.groups:[];
+    localStorage.setItem('gt-simple-login-account',JSON.stringify(account));
     localStorage.setItem('gt-current-trainer-id',String(peter.id));
 
-    // Historické záznamy Petra: premapuj iba záznamy, ktoré sú jednoznačne
-    // viazané na jeho ID alebo sú stará značka TRÉNER 1.
+    // Jednorazovo premapuj iba starú explicitnú značku TRÉNER 1.
+    // Nikdy neprepisuj záznamy len preto, že majú rovnaké staré ID.
     if(Array.isArray(monthlyBillingRecords)){
       let changed=false;
       monthlyBillingRecords=monthlyBillingRecords.map(r=>{
         const rn=normalizeTrainerIdentityText(r?.trainer||r?.name);
-        const rid=Number(r?.trainerId);
-        if(rn==='TRENER 1' || (Number.isFinite(accountId) && rid===accountId)){
+        if(rn==='TRENER 1'){
           changed=true;
-          return {...r,trainer:'Peter Onuščák',trainerId:Number(peter.id),savedBy:isPeterOnuscakName(r?.savedBy)?r.savedBy:'Peter Onuščák'};
+          return {...r,trainer:'Peter Onuščák',trainerId:Number(peter.id),savedBy:'Peter Onuščák'};
         }
         return r;
       });
       if(changed) persistMonthlyBillingRecords();
     }
-  }catch(e){ console.warn('Bezpečná migrácia identity Petra:',e); }
+  }catch(e){ console.warn('Oprava identity Petra:',e); }
 }
 try{
   Object.keys(localStorage).forEach(k=>{
@@ -11621,19 +11608,6 @@ const headTrainerYearData=[
 
 
 
-function cleanupPeterOnuscakBillingX(){
-  try{
-    const target='PETER ONUŠČÁK';
-    const before=monthlyBillingRecords.length;
-    monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
-      const trainer=String(r?.trainer||r?.name||'').trim().toUpperCase();
-      const group=String(r?.group||r?.groupCode||'').trim().toUpperCase();
-      return !(trainer===target && group==='X');
-    });
-    if(monthlyBillingRecords.length!==before) persistMonthlyBillingRecords();
-  }catch(e){ console.warn('Čistenie skupiny X z vyúčtovania Petra sa nepodarilo',e); }
-}
-cleanupPeterOnuscakBillingX();
 
 
 /* v669 – nový štart tréningov od 31.08.2026.

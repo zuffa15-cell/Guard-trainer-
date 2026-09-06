@@ -49,8 +49,9 @@ try {
 
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-deleted-members-2026','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-authoritative-v1','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-billing-delete-order-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-deleted-members-2026','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-authoritative-v1','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-owner-v1','gt-attendance-admin-edits-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-billing-delete-order-v1'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
+const ATTENDANCE_OWNER_KEY = 'gt-attendance-owner-v1';
 
 // Zachovaj originál pred prepisom
 const originalSetItem = localStorage.setItem.bind(localStorage);
@@ -8307,8 +8308,47 @@ function saveAdminAttendanceDirectCloud(key, history, savedAt){
   }catch(e){ console.warn('Priamy cloud zápis admin dochádzky zlyhal',e); }
 }
 
+function attendanceOwnerKey(date=attendanceState.date,group=attendanceState.group){
+  const d=String(date||'').trim();
+  const g=String(group||'').trim().toUpperCase();
+  return `${d}|${g}`;
+}
+function getCurrentTrainerIdentityForAttendance(){
+  try{
+    const id=currentTrainerAccountId();
+    const t=id!=null ? (trainersData||[]).find(x=>Number(x.id)===Number(id)) : null;
+    const name=String(t?.full||t?.name||getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+    return {id:id!=null?Number(id):null,name};
+  }catch(e){ return {id:null,name:String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim()}; }
+}
+function markAttendanceOwner(date=attendanceState.date,group=attendanceState.group){
+  const ident=getCurrentTrainerIdentityForAttendance();
+  if(!ident.name) return ident;
+  try{
+    const raw=originalGetItem(ATTENDANCE_OWNER_KEY); const map=raw?JSON.parse(raw):{};
+    map[attendanceOwnerKey(date,group)]={trainerId:ident.id,trainer:ident.name,savedAt:Date.now()};
+    originalSetItem(ATTENDANCE_OWNER_KEY,JSON.stringify(map));
+  }catch(e){}
+  attendanceState._attendanceOwner={trainerId:ident.id,trainer:ident.name};
+  return ident;
+}
+function getAttendanceOwner(date=attendanceState.date,group=attendanceState.group){
+  if(attendanceState && attendanceState._attendanceOwner && attendanceState._attendanceOwner.trainer){
+    return attendanceState._attendanceOwner;
+  }
+  try{
+    const raw=originalGetItem(ATTENDANCE_OWNER_KEY); const map=raw?JSON.parse(raw):{};
+    const x=map[attendanceOwnerKey(date,group)];
+    if(x && x.trainer) return x;
+  }catch(e){}
+  return getCurrentTrainerIdentityForAttendance();
+}
+
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
+  // Vlastníkom vyúčtovania je vždy tréner, ktorý práve túto dochádzku zapísal
+  // a uložil. Neurčujeme ho podľa skupiny ani podľa trénera uvedeného v rozvrhu.
+  markAttendanceOwner(attendanceState.date,attendanceState.group);
   const before=trainingAttendanceByGroup[key]||null;
   // Vždy vytvoríme nový kompletný snapshot a až potom ho priradíme ku kľúču.
   // Starý kód zapisoval do trainingAttendanceByGroup[key] a následne tento
@@ -10208,10 +10248,12 @@ function upsertBillingRecordFromAttendance(){
   const gross=trainingSum+membershipSum+registrationSum+otherPlus-otherMinus;
   const trainerReward=paying*trainerRewardPerMember();
   const clubAmount=gross-trainerReward;
-  const activeTrainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+  const attendanceOwner=getAttendanceOwner(attendanceState.date,attendanceState.group);
+  const activeTrainer=String(attendanceOwner?.trainer||getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+  const activeTrainerId=attendanceOwner?.trainerId!=null?Number(attendanceOwner.trainerId):currentTrainerAccountId();
   const key=`${dateKey}|${group}|${activeTrainer}`;
   const record={
-    key,trainer:activeTrainer,trainerId:currentTrainerAccountId(),date:formatBillingDate(dateKey),group,
+    key,trainer:activeTrainer,trainerId:activeTrainerId,date:formatBillingDate(dateKey),group,
     name:attendanceState.name,paying,trainingPaid,trainingSum,membershipSum,registrationSum,
     trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,
     otherPlus,otherMinus,
@@ -10401,12 +10443,14 @@ function saveTrainingBilling(saveButton){
   const trainerReward=paying*rewardRate;
   const clubAmount=trainingSum+membershipSum+registrationSum+otherPlus-otherMinus-trainerReward;
   const date=formatBillingDate(attendanceState.date);
-  const activeTrainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+  const attendanceOwner=getAttendanceOwner(attendanceState.date,attendanceState.group);
+  const activeTrainer=String(attendanceOwner?.trainer||getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim();
+  const activeTrainerId=attendanceOwner?.trainerId!=null?Number(attendanceOwner.trainerId):currentTrainerAccountId();
   const trainingKey = `${attendanceState.date}|${attendanceState.group}|${activeTrainer}`;
   const record = {
     key:trainingKey,
     trainer:activeTrainer,
-    trainerId:currentTrainerAccountId(),
+    trainerId:activeTrainerId,
     date, group:attendanceState.group, name:attendanceState.name,
     paying, trainingPaid, trainingSum, membershipSum, registrationSum, otherPlus, otherMinus,
     trainingAccountCount:attendanceState.members.filter(m=>m.training&&!m.newMember&&m.trainingAccount).length,

@@ -4985,6 +4985,13 @@ function getCurrentTestTrainerProfile(){
       return {id,full:String(account.display_name||''),name:String(account.display_name||''),role:'TRÉNER',groups:Array.isArray(account.groups)?account.groups:[]};
     }
   }catch(e){}
+  // Ak je uložený reálny účet trénera, nikdy nespadni na testovacieho
+  // Trénera 1/2 len preto, že cloudový profil ešte nebol načítaný.
+  try{
+    const account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null');
+    const ar=String(account?.role||'').trim().toLowerCase();
+    if(account && account.trainer_id!=null && (ar==='trainer'||ar==='tréner'||ar==='trener')) return null;
+  }catch(e){}
   if(!window.GT_TEST_ROLE || window.GT_TEST_ROLE==='admin' || window.GT_TEST_ROLE==='head') return null;
   const target=window.GT_TEST_ROLE==='trainer2'?'Tréner 2':(window.GT_TEST_ROLE==='trainer1'?'Tréner 1':CURRENT_TRAINER_NAME);
   return (trainersData||[]).find(t=>String(t.full||t.name||'').trim()===target)||null;
@@ -5004,6 +5011,10 @@ function getCurrentTrainerDisplayName(){
     if(display){
       const byName=(trainersData||[]).find(t=>norm(t.full||t.name)===norm(display));
       if(byName) return String(byName.full||byName.name||display).trim();
+      // Reálny prihlásený účet je autoritatívny aj v čase, keď trainersData
+      // ešte čaká na cloud. Nesmie sa preto zobraziť testovací „Tréner 1“.
+      const ar=String(account?.role||'').trim().toLowerCase();
+      if(account?.trainer_id!=null && (ar==='trainer'||ar==='tréner'||ar==='trener')) return display;
     }
     if(account && account.trainer_id!=null){
       const id=Number(account.trainer_id);

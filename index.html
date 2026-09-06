@@ -331,6 +331,23 @@ function initCloudSync(){
           const raw=JSON.stringify(merged); if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
           memberApplicationFiles=merged; applyMemberApplicationFiles(); return;
         }
+        if(k==='gt-members-real-2026-v847' && !data['gt-member-save-order-v1']){
+          // Staršie shared-db dokumenty môžu obsahovať zoznam členov bez
+          // pomocného save-order kľúča. V takom prípade nesmie starší cloudový
+          // zoznam vymazať nového člena, ktorého už toto zariadenie uložilo.
+          // Zlúčime zoznamy podľa ID a zachováme union oboch zariadení.
+          let localMembers=[], remoteMembers=[];
+          try{ const x=originalGetItem('gt-members-real-2026-v847'); const p=x?JSON.parse(x):[]; if(Array.isArray(p)) localMembers=p; }catch(e){}
+          try{ const p=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[]; if(Array.isArray(p)) remoteMembers=p; }catch(e){}
+          const byId=new Map();
+          localMembers.forEach(m=>{if(m&&m.id!=null)byId.set(String(m.id),m);});
+          remoteMembers.forEach(m=>{if(m&&m.id!=null&&!byId.has(String(m.id)))byId.set(String(m.id),m);});
+          const merged=Array.from(byId.values()).map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;});
+          const raw=JSON.stringify(merged);
+          if(raw!==originalGetItem('gt-members-real-2026-v847')){originalSetItem('gt-members-real-2026-v847',raw);changed=true;memberDataChanged=true;}
+          memberSyncHandled=true;
+          return;
+        }
         if(k==='gt-member-save-order-v1'){
           // Každý člen má vlastný čas poslednej zmeny. Zabránime tomu,
           // aby starší cloudový zoznam prepísal novšie údaje člena
@@ -450,10 +467,13 @@ function initCloudSync(){
           if(mm){
             const p=JSON.parse(mm);
             if(Array.isArray(p)){
-              if(typeof membersData!=='undefined') membersData=p;
-              else window.membersData=p;
-              try{applyMemberApplicationFiles();}catch(e){}
-              try{if(typeof normalizeAllMembers==='function') normalizeAllMembers();}catch(e){}
+              // membersData je const pole; meníme jeho obsah, nie samotnú
+              // referenciu. Starý priamy assignment tu spôsoboval tichú chybu.
+              if(typeof membersData!=='undefined' && Array.isArray(membersData)){
+                membersData.splice(0,membersData.length,...p);
+                try{applyMemberApplicationFiles();}catch(e){}
+                try{if(typeof normalizeAllMembers==='function') normalizeAllMembers();}catch(e){}
+              }
             }
           }
         }catch(e){}

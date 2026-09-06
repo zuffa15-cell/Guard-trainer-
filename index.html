@@ -6870,11 +6870,16 @@ function persistPaymentHistory(){
   try{localStorage.setItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:membershipPayments,registration:registrationPayments}));}catch(e){}
 }
 function recordMembershipPayment(member,amount,date,group,period=membershipPeriodForDate(date)){
+  const trainerName=String(getCurrentTrainerDisplayName?.()||'').trim();
+  const trainerId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
   membershipPayments.push({
     memberId:member.id,surname:member.surname,name:member.name,
     groups:[group||attendanceState.group],paidGroup:group||attendanceState.group,
     date,amount:Number(amount||0),period:Number(period||membershipPeriodForDate(date)||2),
-    year:Number(String(date||'').slice(0,4))||appToday().year
+    year:Number(String(date||'').slice(0,4))||appToday().year,
+    source:(activeUserRole==='admin'?'admin':'trainer'),
+    collectorTrainer:activeUserRole==='trainer'?trainerName:'',
+    collectorTrainerId:activeUserRole==='trainer'&&trainerId!=null?Number(trainerId):null
   });
   persistPaymentHistory();
 }
@@ -8730,12 +8735,16 @@ function commitMembershipDraftsForCurrentTraining(){
       if(idx>=0) membershipPayments.splice(idx,1);
     }else if(ch.action==='add'){
       if(idx<0){
+        const collectorName=String(getCurrentTrainerDisplayName?.()||'').trim();
+        const collectorId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
         membershipPayments.push({
           memberId:ch.memberId,surname:ch.surname,name:ch.name,
           groups:[ch.paidGroup],paidGroup:ch.paidGroup,date:ch.date,
           amount:Number(ch.amount||0),period:Number(ch.period),
           year:Number(String(ch.date||'').slice(0,4))||appToday().year,
-          source:(activeUserRole==='admin'?'admin':'trainer')
+          source:(activeUserRole==='admin'?'admin':'trainer'),
+          collectorTrainer:activeUserRole==='trainer'?collectorName:'',
+          collectorTrainerId:activeUserRole==='trainer'&&collectorId!=null?Number(collectorId):null
         });
         const savedMember=membersData.find(x=>Number(x.id)===Number(ch.memberId));
         if(savedMember && activeUserRole==='admin'){
@@ -13127,6 +13136,38 @@ function parsePaymentDate(value){
   if(m) return {year:Number(m[3]),month:Number(m[2]),day:Number(m[1])};
   return null;
 }
+function membershipPaymentBelongsToCurrentTrainer(p){
+  if(!p || activeUserRole!=='trainer') return false;
+  const me=String(getCurrentTrainerDisplayName?.()||'').trim();
+  const norm=s=>String(s||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+  const meNorm=norm(me);
+  const myId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
+  const collectorId=Number(p.collectorTrainerId);
+  if(Number.isFinite(collectorId) && collectorId>0 && myId!=null && Number(myId)===collectorId) return true;
+  const collector=String(p.collectorTrainer||p.collectedBy||p.paidByTrainer||'').trim();
+  if(collector && norm(collector)===meNorm) return true;
+  // Staršie platby ešte nemajú uloženého trénera. Ak sú priradené ku konkrétnemu
+  // tréningu, vlastníkom je tréner, ktorý uložil dané vyúčtovanie. Takto sa
+  // zachovajú staršie platby bez toho, aby sa zobrazili všetkým trénerom.
+  if(!collector && !Number.isFinite(collectorId)){
+    const pd=parsePaymentDate(p.date);
+    const pg=norm(p.paidGroup||'');
+    if(pd && pg && Array.isArray(monthlyBillingRecords)){
+      const ownerRows=monthlyBillingRecords.filter(r=>{
+        const rd=parsePaymentDate(r?.date);
+        return rd && rd.year===pd.year && rd.month===pd.month && rd.day===pd.day && norm(r?.group||'')===pg;
+      });
+      return ownerRows.some(r=>{
+        const rid=Number(r?.trainerId);
+        const author=norm(r?.savedBy||r?.trainer||'');
+        const byId=Number.isFinite(rid) && rid>0 && myId!=null && Number(myId)===rid;
+        return byId || (!!author && author===meNorm);
+      });
+    }
+  }
+  return false;
+}
+
 function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
   const now=appToday();
   const pad=n=>String(n).padStart(2,'0');
@@ -13136,6 +13177,7 @@ function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
   const last=iso(now.year,now.month,lastDay);
   const from=fromValue||first, to=toValue||last;
   const paid=membershipPayments
+    .filter(p=>membershipPaymentBelongsToCurrentTrainer(p))
     .filter(p=>{
       if(!p || p.memberId==null || Number(p.amount||0)<=0)return false;
       const d=parsePaymentDate(p.date); if(!d)return false;

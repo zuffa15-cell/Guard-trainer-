@@ -49,8 +49,8 @@ try {
     // že tréner uložil vyúčtovanie ešte pred dokončením auth; persist bol lokálny
     // a neskôr sa už do cloudu neposlal. Preto po pripojení vždy flushneme celý
     // lokálny billing snapshot a potom načítame priame billing záznamy.
-    setTimeout(()=>{try{pushToCloud(true);}catch(e){console.warn('Initial billing cloud flush failed',e);}},300);
-    setTimeout(()=>loadBillingDirectCloud(),1000);
+    setTimeout(async()=>{try{await syncAllLocalBillingToSharedCloud(); await refreshBillingFromSharedCloud(false); await pushToCloud(true);}catch(e){console.warn('Initial billing cloud flush failed',e);}},300);
+    setTimeout(()=>{try{loadBillingDirectCloud();}catch(e){}},1200);
   }).catch(e=>console.warn("Auth fail", e));
 } catch(e){ console.warn("Firebase init fail", e); }
 
@@ -562,6 +562,124 @@ function billingDirectDocId(record){
   const group=String(record?.group||'').trim().toUpperCase();
   return encodeURIComponent(`${trainer}|${dk}|${group}`).replace(/%/g,'_');
 }
+async function saveBillingRecordToSharedCloud(record){
+  try{
+    if(!db || !record) return false;
+    // Počkaj krátko na Firebase anonymné prihlásenie. Uloženie vyúčtovania
+    // nesmie závisieť od toho, či auth dobehlo o pár desiatok ms neskôr.
+    if(!cloudEnabled){
+      const until=Date.now()+7000;
+      while(!cloudEnabled && Date.now()<until) await new Promise(r=>setTimeout(r,100));
+    }
+    if(!cloudEnabled) return false;
+    const docRef=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    const snap=await docRef.get();
+    let remote=[];
+    try{
+      const raw=snap.exists?snap.data()?.['gt-monthly-billing-v221']:null;
+      const parsed=raw?JSON.parse(raw):[];
+      if(Array.isArray(parsed)) remote=parsed;
+    }catch(e){}
+    const local=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
+    const rows=[...remote,...local];
+    const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
+    const canon=r=>{
+      const d=parsePaymentDate(r?.date);
+      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+      return `${norm(r?.trainer||r?.name)}|${dk}|${norm(r?.group)}`;
+    };
+    const map=new Map();
+    rows.forEach(r=>{
+      if(!r || !r.trainer || !r.date || !r.group) return;
+      const k=canon(r), prev=map.get(k);
+      if(!prev || Number(r.savedAt||0)>=Number(prev.savedAt||0)) map.set(k,r);
+    });
+    // Aktuálne ukladaný záznam musí byť vždy v cloudovom zozname.
+    map.set(canon(record),record);
+    const billing=Array.from(map.values());
+    await docRef.set({
+      'gt-monthly-billing-v221':JSON.stringify(billing),
+      _updatedAt:Date.now()
+    },{merge:true});
+    return true;
+  }catch(e){
+    console.warn('Priamy zápis vyúčtovania do shared-db zlyhal',e);
+    return false;
+  }
+}
+
+async function syncAllLocalBillingToSharedCloud(){
+  try{
+    if(!db) return false;
+    if(!cloudEnabled){
+      const until=Date.now()+7000;
+      while(!cloudEnabled && Date.now()<until) await new Promise(r=>setTimeout(r,100));
+    }
+    if(!cloudEnabled) return false;
+    const local=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
+    if(!local.length) return true;
+    const docRef=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    const snap=await docRef.get();
+    let remote=[];
+    try{
+      const raw=snap.exists?snap.data()?.['gt-monthly-billing-v221']:null;
+      const parsed=raw?JSON.parse(raw):[];
+      if(Array.isArray(parsed)) remote=parsed;
+    }catch(e){}
+    const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
+    const canon=r=>{
+      const d=parsePaymentDate(r?.date);
+      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+      return `${norm(r?.trainer||r?.name)}|${dk}|${norm(r?.group)}`;
+    };
+    const map=new Map();
+    [...remote,...local].forEach(r=>{
+      if(!r || !r.trainer || !r.date || !r.group) return;
+      const k=canon(r), prev=map.get(k);
+      if(!prev || Number(r.savedAt||0)>=Number(prev.savedAt||0)) map.set(k,r);
+    });
+    await docRef.set({'gt-monthly-billing-v221':JSON.stringify(Array.from(map.values())),_updatedAt:Date.now()},{merge:true});
+    return true;
+  }catch(e){
+    console.warn('Synchronizácia lokálnych vyúčtovaní do shared-db zlyhala',e);
+    return false;
+  }
+}
+
+async function refreshBillingFromSharedCloud(shouldRender=false){
+  try{
+    if(!db || !cloudEnabled) return false;
+    const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
+    if(!snap.exists) return false;
+    let remote=[];
+    try{
+      const raw=snap.data()?.['gt-monthly-billing-v221'];
+      const parsed=raw?JSON.parse(raw):[];
+      if(Array.isArray(parsed)) remote=parsed;
+    }catch(e){ return false; }
+    const local=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
+    const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
+    const canon=r=>{
+      const d=parsePaymentDate(r?.date);
+      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+      return `${norm(r?.trainer||r?.name)}|${dk}|${norm(r?.group)}`;
+    };
+    const map=new Map();
+    [...local,...remote].forEach(r=>{
+      if(!r || !r.trainer || !r.date || !r.group) return;
+      const k=canon(r), prev=map.get(k);
+      if(!prev || Number(r.savedAt||0)>=Number(prev.savedAt||0)) map.set(k,r);
+    });
+    const merged=Array.from(map.values());
+    const changed=JSON.stringify(merged)!==JSON.stringify(local);
+    if(changed){ monthlyBillingRecords=merged; normalizeMonthlyBillingRecords(); persistMonthlyBillingRecords(); }
+    if(shouldRender && isHeadTrainer() && location.hash==='#trainer-month'){
+      renderHeadTrainerBilling();
+    }
+    return changed;
+  }catch(e){ console.warn('Načítanie shared-db vyúčtovania zlyhalo',e); return false; }
+}
+
 function saveBillingDirectCloud(record){
   try{
     if(!db || !cloudEnabled || !record) return;
@@ -10617,6 +10735,10 @@ function saveTrainingBilling(saveButton){
     monthlyBillingRecords.push(originalRecord);
   }
   persistMonthlyBillingRecords();
+  // Jediný spoločný zdroj pre všetkých trénerov: po uložení konkrétneho
+  // tréningu zapíš jeho záznam priamo do shared-db. Neurčuje sa podľa skupiny,
+  // ale podľa trénera uloženého v record.trainer.
+  try{ saveBillingRecordToSharedCloud(record); }catch(e){}
   // KRITICKÉ: samotné persistMonthlyBillingRecords() uloží vyúčtovanie iba lokálne.
   // Po uložení trénerom ho okamžite odošli do spoločného cloudu, aby ho
   // hlavný tréner na inom zariadení videl pod trénerom, ktorý dochádzku uložil.
@@ -11461,6 +11583,15 @@ if(!window.__guardTrainerDetailPdfHandlers){
 
 function renderHeadTrainerBilling(){
   const app=document.querySelector('.app');
+  // Hlavný tréner číta rovnaké shared-db vyúčtovanie ako ostatní. Najprv
+  // načítaj najnovší spoločný zoznam a až potom vykresli tabuľku.
+  if(db && cloudEnabled && !window.__gtHeadBillingRefreshInFlight){
+    window.__gtHeadBillingRefreshInFlight=true;
+    refreshBillingFromSharedCloud(false).finally(()=>{
+      window.__gtHeadBillingRefreshInFlight=false;
+      if(location.hash==='#trainer-month') renderHeadTrainerBilling();
+    });
+  }
   const period=getHeadTrainerBillingPeriod();
   const month=period.month, year=period.year;
   const d=getHeadTrainerRowsForMonth(month,year);

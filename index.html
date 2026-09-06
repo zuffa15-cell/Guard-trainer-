@@ -10804,11 +10804,18 @@ function initBillingDirectSync(){
             monthlyBillingRecords.splice(0, monthlyBillingRecords.length, ...merged);
           }
           try{
-            // Realtime serverová zmena sa musí okamžite premietnuť aj do práve
-            // otvorenej obrazovky hlavného trénera. Predtým sa kontroloval iba
-            // URL hash "billing", ale detail trénera používa #head-trainer-detail.
-            // Preto sa po príchode snapshotu mohla zmena po vymazaní ukázať až
-            // po veľkom refreshe. Stav otvoreného detailu si držíme explicitne.
+            // REALTIME OPRAVA: serverový snapshot musí prekresliť aj obrazovku
+            // "Moje vyúčtovanie" bežného trénera. Predtým sa UI po prijatí
+            // snapshotu prekresľovalo iba pre admina/hlavného trénera. To
+            // spôsobovalo, že Peter mal záznam už uložený na serveri, ale jeho
+            // otvorená obrazovka zostala na starom zozname.
+            const myBillingOpen=location.hash==='#trainer-month' || !!document.querySelector('.monthly-billing-page');
+            if(myBillingOpen && typeof renderMonthlyBilling==='function' &&
+               !(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer()))){
+              renderMonthlyBilling();
+            }
+
+            // Realtime serverová zmena pre admina/hlavného trénera.
             if(typeof isAdmin==='function' && (isAdmin()||isHeadTrainer())){
               const detail=window.__gtHeadTrainerDetail;
               const detailOpen=!!document.querySelector('.monthly-billing-page');
@@ -10819,10 +10826,6 @@ function initBillingDirectSync(){
               }else if(overviewOpen && typeof renderHeadTrainerBilling==='function'){
                 renderHeadTrainerBilling();
               }else if(headHomeOpen && typeof renderHeadHome==='function'){
-                // Domov hlavného trénera musí dostať rovnaký realtime update ako
-                // obrazovka vyúčtovania. Po pridaní tréningu na zariadení trénera
-                // sa preto okamžite prepočíta počet tréningov/účastí na Domove,
-                // bez veľkého refreshu.
                 renderHeadHome();
               }
             }
@@ -11434,14 +11437,35 @@ function saveTrainingBilling(saveButton){
   saveBillingRecordToServerNow(record).then(ok=>{
     billingSaveInFlight.delete(recordCanonical);
     if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
-    // Potvrdený záznam ponechaj v krátkej lokálnej cache. Následný snapshot
-    // ho môže potvrdiť alebo nahradiť, ale nikdy ho nesmie dočasne schovať.
-    try{ if(typeof renderMonthlyBilling==='function' && location.hash==='#trainer-month') renderMonthlyBilling(); }catch(e){}
+
+    // Po úspešnom zápise si bežný tréner okamžite načíta AUTORITATÍVNY
+    // záznam priamo zo servera a až potom prekreslí svoje vyúčtovanie.
+    // Týmto sa odstráni rozdiel medzi stavom "na serveri je" a "v Moje
+    // vyúčtovanie nie je". Platí rovnako pre Petra aj ostatných trénerov.
+    const refreshOwnBillingFromServer=()=>{
+      try{
+        if(typeof db==='undefined' || !db || typeof window.mergeBillingRecords!=='function') return;
+        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+          if(doc.exists){
+            const data=doc.data()||{};
+            if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
+            if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
+          }
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        }).catch(()=>{
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        });
+      }catch(e){
+        try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
+      }
+    };
+    if(ok) refreshOwnBillingFromServer();
+    else { try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){} }
     setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
   }).catch(err=>{
     billingSaveInFlight.delete(recordCanonical);
     console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
-    try{ if(typeof renderMonthlyBilling==='function' && location.hash==='#trainer-month') renderMonthlyBilling(); }catch(e){}
+    try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
     setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
   });
   lockAttendanceFully();

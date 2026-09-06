@@ -103,7 +103,17 @@ function initCloudSync(){
         const remoteMembers=data['gt-members-real-2026-v847']?JSON.parse(data['gt-members-real-2026-v847']):[];
         const remoteOrder=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};
         const localOrder=originalGetItem('gt-member-save-order-v1')?JSON.parse(originalGetItem('gt-member-save-order-v1')):{};
-        if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>m&&m.id!=null && Number(remoteOrder[String(m.id)]||0)>Number(localOrder[String(m.id)]||0));
+        if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>{
+          if(!m||m.id==null) return false;
+          const id=String(m.id);
+          // Ak člen na tomto zariadení vôbec neexistuje, vzdialený zoznam
+          // je pre toto zariadenie jednoznačne novší aj vtedy, keď starý
+          // cloudový záznam nemá uložený save-order timestamp.
+          let localMembers=[];
+          try{ const raw=originalGetItem('gt-members-real-2026-v847'); const x=raw?JSON.parse(raw):[]; if(Array.isArray(x)) localMembers=x; }catch(e){}
+          const exists=localMembers.some(x=>x&&x.id!=null&&String(x.id)===id);
+          return !exists || Number(remoteOrder[id]||0)>Number(localOrder[id]||0);
+        });
       }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};

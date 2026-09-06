@@ -9186,7 +9186,7 @@ function attendance(){
 
       <div class="members-list" id="attendanceList">${renderAttendanceRows()}</div>
       <button class="club-billing-button" ${isAttendanceFullyLocked()&&!isAdmin()?'disabled':''} onclick="return openTrainingBillingFromAttendance()">✓ POTVRDIŤ DOCHÁDZKU</button>
-      ${(!isAdmin() && (!isHeadTrainer() || isRealTrainerAttendanceEditor())) ? '<button type="button" class="delete-attendance-btn" onclick="return deleteCurrentTrainerAttendance()">🗑 VYMAZAŤ DOCHÁDZKU</button>' : ''}
+      
       <div class="attendance-pdf-actions">
         <button type="button" onclick="return saveAttendancePaymentsPDF()">PDF</button>
         <button type="button" onclick="return shareAttendancePaymentsPDF()">ZDIEĽAŤ</button>

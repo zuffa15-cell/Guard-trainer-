@@ -9076,17 +9076,37 @@ window.deleteCurrentTrainerAttendance=deleteCurrentTrainerAttendance;
 function attendance(){
   if(!isAdmin() && (!isHeadTrainer() || isRealTrainerAttendanceEditor())){
     const accountId=currentTrainerAccountId();
-    if(accountId==null){ toast('Tréner nie je správne prihlásený.'); return; }
+    if(accountId==null){ window.__attendanceOpenedFromBilling=false; toast('Tréner nie je správne prihlásený.'); return; }
     const wantedDate=attendanceState.date||appToday().iso;
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
+    const openedFromBilling=!!window.__attendanceOpenedFromBilling;
+    const billingCtx=window.__attendanceBillingContext||{};
+    const meNorm=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    let billingOwn=false;
+    if(openedFromBilling && String(billingCtx.date||'')===String(wantedDate) && String(billingCtx.group||'').toUpperCase()===wantedGroup){
+      try{
+        const source=(typeof getBillingRecords==='function'?getBillingRecords():monthlyBillingRecords)||[];
+        billingOwn=source.some(r=>{
+          if(r?.substituteReference) return false;
+          const d=parsePaymentDate(r?.date);
+          const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+          if(iso!==String(wantedDate) || String(r?.group||'').trim().toUpperCase()!==wantedGroup) return false;
+          const n=v=>String(v||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+          return n(r.trainer)===meNorm || n(r.savedBy)===meNorm || Number(r.trainerId)===Number(accountId) || (isPeterOnuscakName(meNorm) && (isPeterOnuscakName(r.trainer)||isPeterOnuscakName(r.savedBy)||Number(r.trainerId)===101));
+        });
+      }catch(e){}
+    }
     const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-    const own=acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
+    const own=billingOwn || acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
       groupRosterCodes(x.code||'').some(c=>c===wantedGroup) &&
       (!wantedTime || String(x.time||'')===wantedTime) &&
       trainerOwnsTraining(x)
     );
+    window.__attendanceOpenedFromBilling=false;
     if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
+  } else {
+    window.__attendanceOpenedFromBilling=false;
   }
 
   // DOMOV and KALENDÁR are intentionally independent entry points.
@@ -10555,9 +10575,26 @@ async function syncDeletedBillingRecordToCloud(canonical, deletedAt){
 }
 async function deleteMyBillingRecord(recordKey, btn){
   const me=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().toUpperCase();
-  const idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
-  if(idx<0) return false;
-  const r=monthlyBillingRecords[idx];
+  // V osobnom vyúčtovaní môže byť zobrazený záznam z autoritatívneho servera,
+  // ktorý ešte nemusí byť v staršom lokálnom poli monthlyBillingRecords.
+  // Preto hľadáme najprv lokálne, potom v aktuálnom zdroji vyúčtovaní.
+  let idx=monthlyBillingRecords.findIndex(r=>String(r.key||'')===String(recordKey||''));
+  let r=idx>=0 ? monthlyBillingRecords[idx] : null;
+  if(!r && typeof getBillingRecords==='function'){
+    try{
+      const all=getBillingRecords()||[];
+      r=all.find(x=>String(x?.key||'')===String(recordKey||''))||null;
+    }catch(e){}
+  }
+  if(!r){
+    // Posledná poistka pre práve uložený serverový záznam.
+    try{
+      for(const entry of billingJustSaved.values()){
+        if(entry?.record && String(entry.record.key||'')===String(recordKey||'')){ r=entry.record; break; }
+      }
+    }catch(e){}
+  }
+  if(!r) return false;
   const owner=String(r.trainer||'').trim();
   // Všetci reálni tréneri majú rovnaké oprávnenie: môžu zmazať iba svoje
   // vlastné vyúčtovanie. Identita sa overuje rovnakým spôsobom ako pri
@@ -10589,6 +10626,7 @@ async function deleteMyBillingRecord(recordKey, btn){
 
   // Najprv okamžite odstráň z lokálneho zoznamu, aby používateľ videl zmenu hneď.
   monthlyBillingRecords=monthlyBillingRecords.filter(x=>billingRecordCanonicalKey(x)!==canonical);
+  try{ billingJustSaved.delete(canonical); }catch(e){}
   // UI hlavného/trénera sa má zmeniť okamžite, bez čakania na Firestore.
   try{ renderMonthlyBilling(); }catch(e){}
   try{
@@ -13458,6 +13496,12 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
     const iso=`${parsed.year}-${String(parsed.month).padStart(2,'0')}-${String(parsed.day).padStart(2,'0')}`;
     const code=String(groupCode||'').trim().toUpperCase();
     const name=String(groupName||getAdminGroupName(code)||code).trim();
+    // Otvorenie z „Moje vyúčtovanie“ je autoritatívny odkaz na konkrétny
+    // uložený tréning. Nemá byť zablokované iba preto, že sa medzičasom
+    // zmenil tréner v rozvrhu. Toto platí rovnako pre všetkých reálnych
+    // trénerov, teda aj pre Petra.
+    window.__attendanceOpenedFromBilling=true;
+    window.__attendanceBillingContext={date:iso,group:code,trainer:String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim()};
     const items=(typeof scheduleItemsForDate==='function'?scheduleItemsForDate(iso):[])||[];
     const match=items.find(x=>String(x.code||'').trim().toUpperCase()===code &&
       (!name || String(x.name||'').trim()===name));
@@ -14373,7 +14417,9 @@ function nav(route){
     if(route==='home'){ if(location.hash!=='#home'){ history.pushState({gtRoute:'home'},'',location.pathname+location.search+'#home'); } renderHome(); return false; }
     if(route==='statistics'){ return openStatisticsScreen(); }
     if(route==='calendar'){ history.pushState({gtRoute:'calendar'},'',location.pathname+location.search+'#calendar'); renderCalendar(); return false; }
-    if(route==='attendance'){ if(isHeadTrainer()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
+    if(route==='attendance'){ if(isHeadTrainer() && !isRealTrainerAttendanceEditor()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
+      window.__attendanceOpenedFromBilling=false;
+      window.__attendanceBillingContext=null;
       // DOCHÁDZKA z Domova / hlavnej navigácie je vždy dnešný deň.
       // Dátum z Kalendára sa nesmie preniesť do tejto vstupnej cesty.
       window.__attendanceOpenedFromCalendar=false;

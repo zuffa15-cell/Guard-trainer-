@@ -13830,7 +13830,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const dailyMoney=Array.from({length:daysInMonth},()=>0);
   entries.forEach(e=>{
     const day=Number(String(e.date).slice(8,10));
-    if(day>=1 && day<=daysInMonth) dailyMoney[day-1]+=Number(e.billingRecord?.clubAmount||0);
+    if(day>=1 && day<=daysInMonth) dailyMoney[day-1]+=Number((e.billingRecord&&e.billingRecord.clubAmount)||0);
   });
   const monthlyMoney=Array.from({length:12},()=>0);
   const yearBillingByTraining=new Map();
@@ -13858,7 +13858,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   // štatistiky začínajú od nuly – nepoužívajú testovacie ani profilové údaje.
   const hasSavedStats=entries.length>0;
   const active=hasSavedStats
-    ? new Set(entries.flatMap(e=>e.people.concat(e.paymentSnapshot.filter(x=>x&&x.newMember).map(x=>String(x.surname||'').trim()+'|'+String(x.name||'').trim())))).size
+    ? new Set(entries.flatMap(e=>e.people.concat(e.newPeople||[]))).size
     : 0;
   // NOVÍ = označenie NOVÝ priamo v uloženej dochádzke.
   // Každý konkrétny nový člen sa za mesiac počíta iba raz.

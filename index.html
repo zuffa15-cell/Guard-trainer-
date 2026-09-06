@@ -10498,6 +10498,10 @@ const billingDeleteInFlight=new Set();
 // Vyúčtovania, ktoré práve ukladá tréner. Realtime snapshot nesmie dočasne
 // odstrániť lokálne uložený nový záznam, kým sa jeho transakcia nepotvrdí.
 const billingSaveInFlight=new Map();
+// Posledné lokálne uložené vyúčtovania držíme krátko aj po potvrdení serverom.
+// Realtime snapshot môže doraziť o zlomok sekundy neskôr; vlastná obrazovka
+// trénera preto nesmie čakať na snapshot ani na veľký refresh.
+const billingJustSaved=new Map();
 try{
   const x=JSON.parse(originalGetItem(BILLING_DELETE_ORDER_KEY)||'{}');
   if(x&&typeof x==='object') Object.assign(billingDeleteOrder,x);
@@ -11368,6 +11372,10 @@ function saveTrainingBilling(saveButton){
     return k!==trainingOwnerKey || !!r.substituteReference;
   });
   monthlyBillingRecords.push(record);
+  // Okamžitá lokálna kópia pre „Moje vyúčtovanie“. Uchováme ju aj po
+  // potvrdení servera, aby oneskorený Firestore snapshot nemohol dočasne
+  // schovať práve uložený tréning.
+  billingJustSaved.set(recordCanonical,{record, savedAt:Date.now()});
 
   if(substitution){
     const originalKey=trainingKey+'|ORIGINAL|'+substitution.from;
@@ -11419,12 +11427,15 @@ function saveTrainingBilling(saveButton){
   saveBillingRecordToServerNow(record).then(ok=>{
     billingSaveInFlight.delete(recordCanonical);
     if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
-    // Po potvrdení ešte raz prekresli aktuálny zoznam, ale bez zmeny obrazovky.
+    // Potvrdený záznam ponechaj v krátkej lokálnej cache. Následný snapshot
+    // ho môže potvrdiť alebo nahradiť, ale nikdy ho nesmie dočasne schovať.
     try{ if(typeof renderMonthlyBilling==='function' && location.hash==='#trainer-month') renderMonthlyBilling(); }catch(e){}
+    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
   }).catch(err=>{
     billingSaveInFlight.delete(recordCanonical);
     console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
     try{ if(typeof renderMonthlyBilling==='function' && location.hash==='#trainer-month') renderMonthlyBilling(); }catch(e){}
+    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
   });
   lockAttendanceFully();
   toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
@@ -13477,7 +13488,19 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   if(future){selectedBillingYear=now.year;selectedBillingMonth=now.month;}
   const shownYear=selectedBillingYear, shownMonth=selectedBillingMonth;
   const month=skMonths[shownMonth-1].toUpperCase()+' '+shownYear;
-  let rows=monthlyBillingRecords
+  // Zostav zdroj pre UI z aktuálneho lokálneho zoznamu + práve uložených
+  // záznamov. Toto je zámerne pred filtrovaním podľa trénera.
+  const billingUiMap=new Map();
+  (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
+    const k=billingRecordCanonicalKey(r);
+    billingUiMap.set(k,r);
+  });
+  billingJustSaved.forEach((entry,k)=>{
+    if(entry && entry.record && !Number(billingDeleteOrder[k]||0)){
+      billingUiMap.set(k,entry.record);
+    }
+  });
+  let rows=Array.from(billingUiMap.values())
     .filter(r=>{
       const d=parsePaymentDate(r.date);
       return d && d.month===shownMonth && d.year===shownYear;

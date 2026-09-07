@@ -8743,16 +8743,93 @@ function gtDownloadFullBackup(){
     toast('Kompletná záloha uložená do zariadenia');
   }catch(e){console.error('Full backup error',e);toast('Kompletnú zálohu sa nepodarilo vytvoriť');}
 }
-function gtRestoreApplyData(data, type){
+async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete){
+  if(!db || !cloudEnabled) return false;
+  const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+  const members=Array.isArray(backupMembers)?backupMembers:[];
+  const order=(backupOrder && typeof backupOrder==='object')?backupOrder:{};
+  const dels=(backupDelete && typeof backupDelete==='object')?backupDelete:{};
+  const wanted=new Map(members.filter(m=>m&&m.id!=null).map(m=>[String(m.id),m]));
+  // Obnova znamená NÁVRAT DO STAVU ZÁLOHY – nie zlúčenie s novšími členmi.
+  // Preto členov, ktorí vznikli po vytvorení zálohy, výslovne označíme ako zmazaných.
+  await db.runTransaction(async tx=>{
+    const snap=await tx.get(ref);
+    const cloudData=snap.exists?(snap.data()||{}):{};
+    let cloudMembers=[];
+    try{cloudMembers=JSON.parse(cloudData[MEMBERS_STORAGE_KEY]||'[]');if(!Array.isArray(cloudMembers))cloudMembers=[];}catch(e){}
+    const cloudIds=new Set(cloudMembers.filter(m=>m&&m.id!=null).map(m=>String(m.id)));
+    const now=Date.now();
+    const restoredOrder={...order};
+    const restoredDelete={...dels};
+    cloudIds.forEach(id=>{
+      if(!wanted.has(id)) restoredDelete[id]=Math.max(Number(restoredDelete[id]||0),now);
+    });
+    wanted.forEach((m,id)=>{
+      if(!restoredOrder[id]) restoredOrder[id]=now;
+      if(Number(restoredDelete[id]||0)>=Number(restoredOrder[id]||0)) delete restoredDelete[id];
+    });
+    const restored=Array.from(wanted.values()).map(memberDirectV2Clean).filter(Boolean);
+    restored.sort((a,b)=>{
+      const s=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});
+      return s || (a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});
+    });
+    tx.set(ref,{
+      [MEMBERS_STORAGE_KEY]:JSON.stringify(restored),
+      [MEMBER_SAVE_ORDER_KEY]:JSON.stringify(restoredOrder),
+      'gt-member-delete-order-v1':JSON.stringify(restoredDelete),
+      _lastUpdateBy:firebase.auth().currentUser?.uid||'unknown',
+      _updatedAt:now
+    },{merge:true});
+  });
+
+  // Rovnako nastavíme priamy realtime kanál. Nové členy, ktoré v zálohe neboli,
+  // dostanú tombstone, aby ich starý realtime snapshot nemohol znovu vytvoriť.
+  try{
+    const col=db.collection(MEMBER_DIRECT_CLOUD_COLLECTION_V2);
+    const snap=await col.get();
+    const wantedIds=new Set(members.filter(m=>m&&m.id!=null).map(m=>String(m.id)));
+    let batch=db.batch(), n=0;
+    const commit=async()=>{if(n){await batch.commit();batch=db.batch();n=0;}};
+    snap.forEach(d=>{
+      const id=String(d.id);
+      if(wantedIds.has(id)) return;
+      batch.set(col.doc(id),{memberId:id,updatedAt:Date.now(),deleted:true},{merge:true});
+      if(++n>=450){/* commit below outside foreach is not awaitable */}
+    });
+    await commit();
+    batch=db.batch(); n=0;
+    const now=Date.now();
+    members.forEach(m=>{
+      if(!m||m.id==null)return;
+      const id=String(m.id);
+      batch.set(col.doc(id),{memberId:id,member:memberDirectV2Clean(m),updatedAt:Number(order[id]||now),deleted:false},{merge:true});
+      if(++n>=450) n=450;
+    });
+    if(n) await batch.commit();
+  }catch(e){console.warn('Obnova priameho kanála členov',e);}
+  return true;
+}
+
+async function gtRestoreApplyData(data, type){
   if(!data || typeof data!=='object') throw new Error('Neplatné dáta zálohy');
   const applySet=(setType,obj)=>{if(!obj||typeof obj!=='object')return;const set=GT_BACKUP_SETS[setType];if(!set)return;set.keys.forEach(k=>{if(Object.prototype.hasOwnProperty.call(obj,k))originalSetItem(k,String(obj[k]));});};
   if(type==='full'){applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
-  if(type==='members'||type==='full'){try{const arr=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]');if(Array.isArray(arr)){membersData.splice(0,membersData.length,...arr);normalizeAllMembers();applyMemberApplicationFiles();}}catch(e){console.warn('Obnova členov',e);}try{syncAllMembersToCloud();}catch(e){console.warn('Cloud sync členov',e);}}
+  if(type==='members'||type==='full'){
+    try{
+      const arr=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]');
+      if(Array.isArray(arr)){membersData.splice(0,membersData.length,...arr);normalizeAllMembers();applyMemberApplicationFiles();}
+    }catch(e){console.warn('Obnova členov',e);}
+    try{
+      const ord=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}')||{};
+      const dels=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
+      await gtRestoreMembersToCloud(membersData,ord,dels);
+    }catch(e){console.warn('Cloud obnova členov',e);}
+  }
   if(type==='attendance'||type==='full'){try{pushToCloud(true);}catch(e){console.warn('Cloud sync dochádzky',e);}}
   if(type==='billing'||type==='full'){try{if(typeof pushBillingToCloud==='function')pushBillingToCloud();else if(typeof syncBillingDirect==='function')syncBillingDirect();}catch(e){console.warn('Cloud sync vyúčtovania',e);}}
 }
 function gtOpenRestoreFile(){const i=document.getElementById('gtRestoreFileInput');if(i)i.click();}
-function gtHandleRestoreFile(input){const file=input?.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const p=JSON.parse(String(reader.result||''));if(p?.guardTrainerBackup!==true||!p.data)throw new Error('Neplatná záloha');const type=p.type;if(!['members','attendance','billing','full'].includes(type))throw new Error('Neznámy typ zálohy');const label=p.title||'Záloha';if(!confirm(`Naozaj obnoviť „${label}“? Údaje v tejto kategórii sa nahradia zálohou.`)){input.value='';return;}gtRestoreApplyData(p.data,type);input.value='';toast(`Záloha „${label}“ bola obnovená`);setTimeout(()=>{try{if(type==='members'||type==='full')renderMembers();else if(type==='attendance')nav('attendance');else if(type==='billing')openMyBilling();}catch(e){location.reload();}},400);}catch(e){console.error('Restore error',e);input.value='';toast('Zálohu sa nepodarilo obnoviť');}};reader.onerror=()=>{input.value='';toast('Zálohu sa nepodarilo načítať');};reader.readAsText(file);}
+function gtHandleRestoreFile(input){const file=input?.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=async()=>{try{const p=JSON.parse(String(reader.result||''));if(p?.guardTrainerBackup!==true||!p.data)throw new Error('Neplatná záloha');const type=p.type;if(!['members','attendance','billing','full'].includes(type))throw new Error('Neznámy typ zálohy');const label=p.title||'Záloha';if(!confirm(`Naozaj obnoviť „${label}“? Aktuálne údaje v tejto kategórii sa nahradia stavom zo zálohy.`)){input.value='';return;}await gtRestoreApplyData(p.data,type);input.value='';toast(`Záloha „${label}“ bola obnovená`);setTimeout(()=>{try{if(type==='members'||type==='full')renderMembers();else if(type==='attendance')nav('attendance');else if(type==='billing')openMyBilling();}catch(e){location.reload();}},400);}catch(e){console.error('Restore error',e);input.value='';toast('Zálohu sa nepodarilo obnoviť');}};reader.onerror=()=>{input.value='';toast('Zálohu sa nepodarilo načítať');};reader.readAsText(file);}
 
 function renderBackups(){
   const app=document.querySelector('.app');

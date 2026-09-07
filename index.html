@@ -5499,6 +5499,15 @@ function headHomeMonthAttendance(){
     });
 
     latest.forEach(r=>{
+      // Ak bolo vyúčtovanie neskôr vymazané, nesmie sa z neho vytvárať
+      // štatistika dochádzky. Štatistika musí rešpektovať rovnaký delete
+      // marker ako samotné vyúčtovanie.
+      const deleteKey = (typeof billingRecordCanonicalKey==='function')
+        ? billingRecordCanonicalKey(r) : '';
+      const deletedAt = deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+      const savedAt = Number(r?.savedAt||r?.updatedAt||r?.createdAt||0);
+      if(deletedAt>0 && deletedAt>=savedAt) return;
+
       const group=codeOf(r.group||r.groupCode||r.code);
       if(!group || !out[group]) return;
       const iso=dateIso(r);

@@ -184,9 +184,18 @@ async function memberDirectV2Write(id){
 
 async function memberDirectV2WriteDelete(id){
   try{
-    if(!db || !cloudEnabled || id==null) { memberDirectV2DeleteQueued.add(String(id)); return false; }
+    if(id==null) return false;
+    // Použi presne ten istý timestamp, ktorý bol uložený do lokálneho
+    // delete-order. Nikdy nevytváraj nový čas až pri cloudovom zápise.
+    let deleteAt=0;
+    try{
+      const dels=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
+      deleteAt=Number(dels[String(id)]||0);
+    }catch(e){}
+    if(!deleteAt) deleteAt=Date.now();
+    if(!db || !cloudEnabled) { memberDirectV2DeleteQueued.add(String(id)); return false; }
     await db.collection(MEMBER_DIRECT_CLOUD_COLLECTION_V2).doc(String(id)).set({
-      memberId:String(id), updatedAt:Date.now(), deleted:true
+      memberId:String(id), updatedAt:deleteAt, deleted:true
     },{merge:true});
     memberDirectV2DeleteQueued.delete(String(id));
     return true;
@@ -234,12 +243,25 @@ function applyDirectMemberSnapshotV2(doc){
     // novšie než cloudový dokument. Inak musí nový cloudový člen prísť hneď.
     let localUpdated=0;
     try{ const o=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}')||{}; localUpdated=Number(o[id]||0); }catch(e){}
-    if(localUpdated>remoteUpdated) return;
+    // Tombstone má vyššiu prioritu: ak ide o vymazanie, neblokuj ho starším
+    // alebo takmer súčasným save-order z lokálneho zariadenia.
+    if(localUpdated>remoteUpdated && !remoteDeleted) return;
 
     memberDirectV2Applying=true;
     try{
       if(remoteDeleted){
         if(idx>=0) membersData.splice(idx,1);
+        // Vymazanie musí byť viditeľné okamžite aj vtedy, keď je tréner práve
+        // na karte Členovia. Nečakaj na navigáciu ani ďalší snapshot.
+        try{
+          originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+          const dels=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
+          dels[id]=Math.max(Number(dels[id]||0),remoteUpdated);
+          originalSetItem('gt-member-delete-order-v1',JSON.stringify(dels));
+        }catch(e){}
+        setTimeout(()=>{
+          try{ if(typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers(); }catch(e){}
+        },0);
         return;
       }
       if(!remoteMember) return;
@@ -350,8 +372,12 @@ function applyMembersFromCloudSnapshot(data){
     // Prijmi aj vzdialené zmazanie iba vtedy, keď je novšie než posledné
     // uloženie člena na tomto zariadení.
     Object.keys(remoteDelete).forEach(id=>{
-      const dt=Number(remoteDelete[id]||0), lt=Number(localOrder[id]||0);
-      if(dt>0 && dt>=lt && byId.has(String(id))){ byId.delete(String(id)); changed=true; }
+      const dt=Number(remoteDelete[id]||0), lt=Number(localOrder[id]||0), localDt=Number(localDelete[id]||0);
+      // Vzdialené vymazanie má prednosť pred starším uložením člena.
+      // Ak už máme lokálne starší tombstone, prijmi aj novší vzdialený tombstone.
+      if(dt>0 && dt>=lt && dt>=localDt){
+        if(byId.has(String(id))){ byId.delete(String(id)); changed=true; }
+      }
     });
 
     const merged=Array.from(byId.values());

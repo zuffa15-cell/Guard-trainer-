@@ -274,7 +274,7 @@ function applyDirectMemberSnapshotV2(doc){
       originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
       try{applyMemberApplicationFiles();}catch(e){}
     }finally{memberDirectV2Applying=false;}
-    try{ if(typeof renderMembers==='function') renderMembers(); }catch(e){}
+    try{ if(location.hash==='#members' && typeof renderMembers==='function' && document.querySelector('.members-page')) renderMembers(); }catch(e){}
   }catch(e){console.warn('Guard Trainer: prijatie člena V2 zlyhalo',e);}
 }
 

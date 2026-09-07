@@ -9874,7 +9874,16 @@ function attendance(){
   if(window.__attendanceOpenSource==='home' || window.__attendanceHomeDate){
     attendanceState.date=String(window.__attendanceHomeDate||appToday().iso);
   }
+  // Pri otvorení konkrétneho tréningu z „Moje vyúčtovanie“ je dátum z riadku
+  // autoritatívny. Nesmie ho prepísať predvolený dnešný dátum ani iný vstupný
+  // stav dochádzky. Rovnaký dátum použijeme aj po refreshCurrentDateDefaults().
+  if(window.__attendanceOpenedFromBilling && window.__attendanceBillingContext?.date){
+    attendanceState.date=String(window.__attendanceBillingContext.date);
+  }
   refreshCurrentDateDefaults();
+  if(window.__attendanceOpenedFromBilling && (window.__attendanceBillingDateOverride || window.__attendanceBillingContext?.date)){
+    attendanceState.date=String(window.__attendanceBillingDateOverride || window.__attendanceBillingContext.date);
+  }
   applyTrainingSettingsForAttendance();
 
   // Dochádzka musí zobrazovať rovnaký čas ako Domov/Kalendár.
@@ -14317,6 +14326,8 @@ function openAttendanceFromBillingRow(dateLabel, groupCode, groupName){
     // trénerov, teda aj pre Petra.
     window.__attendanceOpenedFromBilling=true;
     window.__attendanceBillingContext={date:iso,group:code,trainer:String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim()};
+    // Explicitly preserve the clicked row date across every render in attendance().
+    window.__attendanceBillingDateOverride=iso;
     const items=(typeof scheduleItemsForDate==='function'?scheduleItemsForDate(iso):[])||[];
     const match=items.find(x=>String(x.code||'').trim().toUpperCase()===code &&
       (!name || String(x.name||'').trim()===name));

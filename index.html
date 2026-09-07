@@ -8853,6 +8853,54 @@ function gtSetBackupDate(type,iso){
   // starý kľúč ponecháme aj kvôli spätnej kompatibilite
   try{ localStorage.setItem(gtBackupLastKey(type),iso); }catch(e){}
   gtBackupButtonLabel(type);
+  // Posledný dátum zálohy uložíme aj do Firestore. Tým prežije refresh,
+  // nový deployment/Vercel build aj prípadnú stratu lokálneho úložiska.
+  try{
+    if(db && cloudEnabled){
+      const uid = firebase.auth().currentUser?.uid || 'unknown';
+      db.collection(CLOUD_COLLECTION).doc('backup-meta').set({[type]:iso,_updatedAt:Date.now(),_updatedBy:uid},{merge:true})
+        .catch(e=>console.warn('Backup meta cloud save failed',e));
+    }
+  }catch(e){console.warn('Backup meta cloud save failed',e)}
+}
+function gtLoadBackupMetaFromCloud(){
+  try{
+    if(!db || !cloudEnabled) return;
+    db.collection(CLOUD_COLLECTION).doc('backup-meta').get().then(snap=>{
+      if(!snap.exists) return;
+      const remote=snap.data()||{};
+      const meta=gtReadBackupMeta();
+      let changed=false;
+      ['members','attendance','billing','full'].forEach(type=>{
+        if(remote[type] && (!meta[type] || String(remote[type])>String(meta[type]))){
+          meta[type]=remote[type];
+          changed=true;
+        }
+      });
+      if(changed){ gtWriteBackupMeta(meta); }
+      gtRefreshBackupLabels();
+    }).catch(e=>console.warn('Backup meta cloud read failed',e));
+  }catch(e){console.warn('Backup meta cloud read failed',e)}
+}
+function gtStartBackupMetaCloudSync(){
+  try{
+    if(!db || !cloudEnabled) return;
+    if(window.__gtBackupMetaUnsub) return;
+    window.__gtBackupMetaUnsub=db.collection(CLOUD_COLLECTION).doc('backup-meta').onSnapshot(snap=>{
+      if(!snap.exists) return;
+      const remote=snap.data()||{};
+      const meta=gtReadBackupMeta();
+      let changed=false;
+      ['members','attendance','billing','full'].forEach(type=>{
+        if(remote[type] && (!meta[type] || String(remote[type])>String(meta[type]))){
+          meta[type]=remote[type];
+          changed=true;
+        }
+      });
+      if(changed) gtWriteBackupMeta(meta);
+      gtRefreshBackupLabels();
+    },e=>console.warn('Backup meta realtime sync failed',e));
+  }catch(e){console.warn('Backup meta realtime sync failed',e)}
 }
 function gtBackupButtonLabel(type){
   const el=document.getElementById('gtBackupLast-'+type);
@@ -9014,6 +9062,9 @@ function renderBackups(){
     </nav><div id="toast" class="toast"></div>`;
   applyThemeUI();
   gtRefreshBackupLabels();
+  // Po vykreslení načítaj posledné dátumy aj z cloudu.
+  gtLoadBackupMetaFromCloud();
+  gtStartBackupMetaCloudSync();
 }
 
 function renderMore(){

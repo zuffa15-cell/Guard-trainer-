@@ -7434,9 +7434,13 @@ function showMemberGroupFilter(){
 }
 function filterMembersGroup(group){
  currentMemberGroupFilter=group||'ALL';
- const list=currentMemberGroupFilter==='ALL'?membersData:membersData.filter(m=>(m.groups||[m.group]).includes(currentMemberGroupFilter));
+ const list=currentMemberGroupFilter==='ALL'?membersData:membersData.filter(m=>(m.groups||[m.group]).map(g=>String(g).trim()).includes(String(currentMemberGroupFilter).trim()));
  const el=document.getElementById('memberList');
  if(el)el.innerHTML=memberRows(list);
+ // Číslo pri nadpise ČLENOVIA musí vždy zodpovedať práve vybratej skupine.
+ // Pri zmene filtra sa predtým prekresľoval iba zoznam, takže nadpis ostával napr. na 38.
+ const countEl=document.querySelector('.member-count');
+ if(countEl)countEl.textContent=`(${list.length})`;
  const filters=document.querySelector('.member-filters');
  if(filters){
    const search=String(document.getElementById('memberSearchInput')?.value||'');

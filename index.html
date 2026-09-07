@@ -4762,6 +4762,12 @@ function getAdminCreatedGroups(){
    const name=String(x.name||'').trim() || `${code} – SKUPINA`;
    if(!map.has(code)) map.set(code,name);
  });
+ // B+C is a virtual combined member group: it contains everyone assigned to B OR C.
+ // It must be available in the member selector even when there is no separate
+ // B+C schedule record. It is not an extra assignment on the member profile.
+ const hasB=map.has('B');
+ const hasC=map.has('C');
+ if(hasB && hasC && !map.has('B+C')) map.set('B+C','B+C – SPOLOČNÁ SKUPINA');
  return [...map.entries()].sort((a,b)=>a[0].localeCompare(b[0],'sk',{numeric:true,sensitivity:'base'}));
 }
 function getAdminGroupCodes(){ return getAdminCreatedGroups().map(([c])=>c); }
@@ -7338,7 +7344,11 @@ function renderMembers(){
  const app=document.querySelector('.app');
  const visibleMembers=currentMemberGroupFilter==='ALL'
    ? membersData
-   : membersData.filter(m=>(m.groups||[m.group]).map(g=>String(g).trim()).includes(String(currentMemberGroupFilter).trim()));
+   : membersData.filter(m=>{
+       const wanted=new Set(groupMemberRosterCodes(currentMemberGroupFilter));
+       const groups=Array.isArray(m.groups)?m.groups:[m.group];
+       return groups.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
+     });
  const active=visibleMembers.length;
  const unpaidM=visibleMembers.filter(m=>!m.membership).length, unpaidR=visibleMembers.filter(m=>!m.registration).length, debts=visibleMembers.filter(m=>m.debt>0).length;
  app.innerHTML=`
@@ -7434,7 +7444,11 @@ function showMemberGroupFilter(){
 }
 function filterMembersGroup(group){
  currentMemberGroupFilter=group||'ALL';
- const list=currentMemberGroupFilter==='ALL'?membersData:membersData.filter(m=>(m.groups||[m.group]).map(g=>String(g).trim()).includes(String(currentMemberGroupFilter).trim()));
+ const list=currentMemberGroupFilter==='ALL'?membersData:membersData.filter(m=>{
+   const wanted=new Set(groupMemberRosterCodes(currentMemberGroupFilter));
+   const groups=Array.isArray(m.groups)?m.groups:[m.group];
+   return groups.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
+ });
  const el=document.getElementById('memberList');
  if(el)el.innerHTML=memberRows(list);
  // Číslo pri nadpise ČLENOVIA musí vždy zodpovedať práve vybratej skupine.
@@ -7451,7 +7465,11 @@ function groupAttendanceRegisterData(group){
  const t=appToday();
  const year=t.year, month=t.month;
  const daysInMonth=new Date(year,month,0).getDate();
- const members=membersData.filter(m=>(m.groups||[m.group]).map(x=>String(x).trim()).includes(String(group).trim()))
+ const wanted=new Set(groupMemberRosterCodes(group));
+ const members=membersData.filter(m=>{
+   const groups=Array.isArray(m.groups)?m.groups:[m.group];
+   return groups.some(x=>wanted.has(String(x||'').trim().toUpperCase()));
+ })
    .slice().sort((a,b)=>String(a.surname||'').localeCompare(String(b.surname||''),'sk',{sensitivity:'base'}) || String(a.name||'').localeCompare(String(b.name||''),'sk',{sensitivity:'base'}));
 
  // Only dates on which this group actually has a scheduled training.

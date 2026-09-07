@@ -7319,7 +7319,7 @@ function firstHalfMembershipVisual(m){
  return 'icon-no membership-first-half-unpaid';
 }
 function secondHalfMembershipVisual(m){
- return membershipPaidForPeriod(m,2)?'icon-ok':'icon-no';
+ return membershipProfilePaymentForPeriod(m,2)?'icon-ok':'icon-no';
 }
 let currentMemberGroupFilter='ALL';
 
@@ -10187,12 +10187,19 @@ function membershipPaidHereToday(m){
 }
 function memberHasRegistration(m){
   if(!m)return false;
-  // Registrácia je zaplatená, ak ju má člen označenú v profile ALEBO
-  // existuje uložený záznam o registračnej platbe. História platby má
-  // prednosť pred prípadným starým/neúplným booleanom zo synchronizácie.
+  // Zoznam členov musí používať rovnaký zdroj pravdy ako profil člena.
+  // Platba môže byť uložená ako boolean v profile, v histórii platieb,
+  // alebo ako platba na účet / v histórii účtu.
+  if(m.registration===true || !!m.registration) return true;
   const id=attendanceMemberId(m);
   const paidInHistory=registrationPayments.some(p=>Number(p.memberId)===Number(id) && Number(p.amount||30)>0);
-  return m.registration===true || paidInHistory;
+  if(paidInHistory) return true;
+  const amount=Number(m.registrationAccountAmount||0);
+  const date=String(m.registrationAccountDate||'');
+  if(amount>0 && date) return true;
+  try{
+    return ensureMemberAccountHistory(m).some(x=>x.type==='registration' && Number(x.amount)>0 && !!x.date);
+  }catch(e){ return false; }
 }
 function savedRegistrationForMember(m){
   if(!m)return null;

@@ -8673,6 +8673,120 @@ function saveSchedule(){
  }
  setTimeout(()=>{ openScheduleManager(); },650);
 }
+/* =========================================================
+   MOBILNÉ ZÁLOHY DÁT v1
+   - samostatná záloha členov, dochádzky a vyúčtovania
+   - všetko sa ukladá ako JSON súbor do zariadenia
+   - záloha nezasahuje do cloudovej synchronizácie
+   ========================================================= */
+const GT_BACKUP_SETS = {
+  members: {
+    title: 'Členovia',
+    keys: ['gt-members-real-2026-v847','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1']
+  },
+  attendance: {
+    title: 'Dochádzka',
+    keys: ['gt-attendance','gt-training-attendance','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-delete-order-v1']
+  },
+  billing: {
+    title: 'Vyúčtovanie',
+    keys: ['gt-finance','gt-monthly-billing-v221','gt-billing','gt-billing-delete-order-v1']
+  }
+};
+function gtBackupRead(key){
+  try{return localStorage.getItem(key);}catch(e){return null;}
+}
+function gtCreateBackupPayload(type){
+  const set=GT_BACKUP_SETS[type];
+  if(!set) throw new Error('Neznámy typ zálohy');
+  const data={};
+  set.keys.forEach(k=>{const raw=gtBackupRead(k); if(raw!==null) data[k]=raw;});
+  return {
+    guardTrainerBackup: true,
+    version: 1,
+    type,
+    title: set.title,
+    createdAt:new Date().toISOString(),
+    data
+  };
+}
+function gtDownloadBackup(type){
+  try{
+    const payload=gtCreateBackupPayload(type);
+    const stamp=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    const slug=type==='members'?'clenovia':type==='attendance'?'dochadzka':'vyuctovanie';
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=`Guard-Trainer-zaloha-${slug}-${stamp}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+    toast(`Záloha – ${payload.title} uložená do zariadenia`);
+  }catch(e){console.error('Backup error',e);toast('Zálohu sa nepodarilo vytvoriť');}
+}
+function gtDownloadFullBackup(){
+  try{
+    const payload={guardTrainerBackup:true,version:1,type:'full',title:'Všetky dáta',createdAt:new Date().toISOString(),data:{}};
+    Object.keys(GT_BACKUP_SETS).forEach(type=>{
+      const set=GT_BACKUP_SETS[type];
+      payload.data[type]={};
+      set.keys.forEach(k=>{const raw=gtBackupRead(k); if(raw!==null) payload.data[type][k]=raw;});
+    });
+    const stamp=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url;
+    a.download=`Guard-Trainer-zaloha-VSETKYCH-DAT-${stamp}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+    toast('Kompletná záloha uložená do zariadenia');
+  }catch(e){console.error('Full backup error',e);toast('Kompletnú zálohu sa nepodarilo vytvoriť');}
+}
+function gtRestoreApplyData(data, type){
+  if(!data || typeof data!=='object') throw new Error('Neplatné dáta zálohy');
+  const applySet=(setType,obj)=>{if(!obj||typeof obj!=='object')return;const set=GT_BACKUP_SETS[setType];if(!set)return;set.keys.forEach(k=>{if(Object.prototype.hasOwnProperty.call(obj,k))originalSetItem(k,String(obj[k]));});};
+  if(type==='full'){applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
+  if(type==='members'||type==='full'){try{const arr=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]');if(Array.isArray(arr)){membersData.splice(0,membersData.length,...arr);normalizeAllMembers();applyMemberApplicationFiles();}}catch(e){console.warn('Obnova členov',e);}try{syncAllMembersToCloud();}catch(e){console.warn('Cloud sync členov',e);}}
+  if(type==='attendance'||type==='full'){try{pushToCloud(true);}catch(e){console.warn('Cloud sync dochádzky',e);}}
+  if(type==='billing'||type==='full'){try{if(typeof pushBillingToCloud==='function')pushBillingToCloud();else if(typeof syncBillingDirect==='function')syncBillingDirect();}catch(e){console.warn('Cloud sync vyúčtovania',e);}}
+}
+function gtOpenRestoreFile(){const i=document.getElementById('gtRestoreFileInput');if(i)i.click();}
+function gtHandleRestoreFile(input){const file=input?.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const p=JSON.parse(String(reader.result||''));if(p?.guardTrainerBackup!==true||!p.data)throw new Error('Neplatná záloha');const type=p.type;if(!['members','attendance','billing','full'].includes(type))throw new Error('Neznámy typ zálohy');const label=p.title||'Záloha';if(!confirm(`Naozaj obnoviť „${label}“? Údaje v tejto kategórii sa nahradia zálohou.`)){input.value='';return;}gtRestoreApplyData(p.data,type);input.value='';toast(`Záloha „${label}“ bola obnovená`);setTimeout(()=>{try{if(type==='members'||type==='full')renderMembers();else if(type==='attendance')nav('attendance');else if(type==='billing')openMyBilling();}catch(e){location.reload();}},400);}catch(e){console.error('Restore error',e);input.value='';toast('Zálohu sa nepodarilo obnoviť');}};reader.onerror=()=>{input.value='';toast('Zálohu sa nepodarilo načítať');};reader.readAsText(file);}
+
+function renderBackups(){
+  const app=document.querySelector('.app');
+  if(!app)return;
+  app.innerHTML=`
+    <header class="topbar">
+      <button class="menu" onclick="appBack()" aria-label="Späť">‹</button>
+      <div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div>
+    </header>
+    <main class="content">
+      <div class="more-page-title">
+        <div class="section-title">💾 ZÁLOHY DÁT</div>
+        <small>Záloha sa stiahne ako súbor do mobilu.</small>
+      </div>
+      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('members')">👥 <span><b>ZÁLOHA ČLENOV</b><small>Členovia, zmeny a zmazania</small></span>⬇</button>
+      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('attendance')">☑️ <span><b>ZÁLOHA DOCHÁDZKY</b><small>Dochádzka a história tréningov</small></span>⬇</button>
+      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('billing')">▤ <span><b>ZÁLOHA VYÚČTOVANIA</b><small>Vyúčtovanie a finančné záznamy</small></span>⬇</button>
+      <button type="button" class="more-menu-item" onclick="gtDownloadFullBackup()">🛡️ <span><b>ZÁLOHA VŠETKÝCH DÁT</b><small>Členovia + dochádzka + vyúčtovanie</small></span>⬇</button>      <button type="button" class="more-menu-item" onclick="gtOpenRestoreFile()">♻️ <span><b>OBNOVIŤ ZÁLOHU</b><small>Načítať uloženú zálohu späť do Guard Trainer</small></span>›</button>
+      <input id="gtRestoreFileInput" type="file" accept=".json,application/json" style="display:none" onchange="gtHandleRestoreFile(this)">
+      <div style="margin-top:12px;padding:12px;border:1px solid #594400;border-radius:7px;background:#080808;color:#aaa;font-size:13px;line-height:1.45">
+        Zálohy sú uložené ako súbory <b style="color:#ffd12b">.json</b>. Odporúčam po vytvorení kompletnej zálohy skontrolovať v mobile priečinok <b style="color:#fff">Stiahnuté / Downloads</b>.
+      </div>
+    </main>
+    <nav class="bottom">
+      <a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
+      <a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
+      <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
+      <a class="nav active" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
+    </nav><div id="toast" class="toast"></div>`;
+  applyThemeUI();
+}
+
 function renderMore(){
  const app=document.querySelector('.app');
  app.innerHTML=`
@@ -8692,6 +8806,7 @@ function renderMore(){
      
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
+       <button class="more-menu-item" onclick="renderBackups()">💾 <span><b>ZÁLOHY DÁT</b><small>Zálohovať členov, dochádzku a vyúčtovanie do mobilu</small></span>›</button>
        <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
        <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
        <button type="button" class="more-menu-item gt-logout-button" onclick="return logoutGuardTrainer(this)">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>

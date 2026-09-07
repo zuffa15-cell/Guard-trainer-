@@ -8804,14 +8804,42 @@ function gtCreateBackupPayload(type){
     data
   };
 }
+// Dátumy záloh musia prežiť refresh aj cloudovú synchronizáciu.
+// Preto ich držíme v samostatnom meta-zázname, ktorý nie je prefixovaný gt-
+// a synchronizácia Guard Trainer ho nemôže prepísať ani odstrániť.
+const GT_BACKUP_META_KEY='guardTrainerBackupMeta-v1';
+function gtReadBackupMeta(){
+  try{
+    const raw=localStorage.getItem(GT_BACKUP_META_KEY);
+    const meta=raw?JSON.parse(raw):{};
+    return (meta && typeof meta==='object') ? meta : {};
+  }catch(e){ return {}; }
+}
+function gtWriteBackupMeta(meta){
+  try{ localStorage.setItem(GT_BACKUP_META_KEY,JSON.stringify(meta||{})); }catch(e){ console.warn('Backup meta save failed',e); }
+}
 function gtBackupLastKey(type){ return 'gt-backup-last-'+type; }
+function gtGetBackupDate(type){
+  const meta=gtReadBackupMeta();
+  if(meta[type]) return meta[type];
+  // spätná kompatibilita so staršou verziou
+  try{return localStorage.getItem(gtBackupLastKey(type))||'';}catch(e){return '';}
+}
 function gtBackupFormatDate(iso){
   if(!iso) return 'Zatiaľ nebola vytvorená';
   try{ const d=new Date(iso); return 'Posledná záloha: '+d.toLocaleDateString('sk-SK')+' '+d.toLocaleTimeString('sk-SK',{hour:'2-digit',minute:'2-digit'}); }catch(e){ return 'Posledná záloha: '+iso; }
 }
+function gtSetBackupDate(type,iso){
+  const meta=gtReadBackupMeta();
+  meta[type]=iso;
+  gtWriteBackupMeta(meta);
+  // starý kľúč ponecháme aj kvôli spätnej kompatibilite
+  try{ localStorage.setItem(gtBackupLastKey(type),iso); }catch(e){}
+  gtBackupButtonLabel(type);
+}
 function gtBackupButtonLabel(type){
   const el=document.getElementById('gtBackupLast-'+type);
-  if(el) el.textContent=gtBackupFormatDate(localStorage.getItem(gtBackupLastKey(type)));
+  if(el) el.textContent=gtBackupFormatDate(gtGetBackupDate(type));
 }
 function gtRefreshBackupLabels(){ ['members','attendance','billing','full'].forEach(gtBackupButtonLabel); }
 function gtDownloadBackup(type){
@@ -8826,8 +8854,7 @@ function gtDownloadBackup(type){
     a.download=`Guard-Trainer-zaloha-${slug}-${stamp}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),1500);
-    localStorage.setItem(gtBackupLastKey(type), payload.createdAt);
-    gtBackupButtonLabel(type);
+    gtSetBackupDate(type, payload.createdAt);
     toast(`Záloha – ${payload.title} uložená do zariadenia`);
   }catch(e){console.error('Backup error',e);toast('Zálohu sa nepodarilo vytvoriť');}
 }
@@ -8846,8 +8873,7 @@ function gtDownloadFullBackup(){
     a.download=`Guard-Trainer-zaloha-VSETKYCH-DAT-${stamp}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),1500);
-    localStorage.setItem(gtBackupLastKey('full'), payload.createdAt);
-    gtBackupButtonLabel('full');
+    gtSetBackupDate('full', payload.createdAt);
     toast('Kompletná záloha uložená do zariadenia');
   }catch(e){console.error('Full backup error',e);toast('Kompletnú zálohu sa nepodarilo vytvoriť');}
 }

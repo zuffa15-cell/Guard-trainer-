@@ -8809,20 +8809,37 @@ function gtCreateBackupPayload(type){
 // a synchronizácia Guard Trainer ho nemôže prepísať ani odstrániť.
 const GT_BACKUP_META_KEY='guardTrainerBackupMeta-v1';
 function gtReadBackupMeta(){
+  // Čítaj z localStorage aj z cookie. Cookie je záložná vrstva pre prípady,
+  // keď mobilný prehliadač po refreshe obnoví/obmedzí localStorage.
+  let meta={};
   try{
     const raw=localStorage.getItem(GT_BACKUP_META_KEY);
-    const meta=raw?JSON.parse(raw):{};
-    return (meta && typeof meta==='object') ? meta : {};
-  }catch(e){ return {}; }
+    const parsed=raw?JSON.parse(raw):{};
+    if(parsed && typeof parsed==='object') meta=parsed;
+  }catch(e){}
+  try{
+    const m=document.cookie.match(/(?:^|; )guardTrainerBackupMeta-v1=([^;]*)/);
+    if(m){
+      const parsed=JSON.parse(decodeURIComponent(m[1]));
+      if(parsed && typeof parsed==='object'){
+        Object.keys(parsed).forEach(k=>{ if(!meta[k] || String(parsed[k])>String(meta[k])) meta[k]=parsed[k]; });
+      }
+    }
+  }catch(e){}
+  return meta;
 }
 function gtWriteBackupMeta(meta){
-  try{ localStorage.setItem(GT_BACKUP_META_KEY,JSON.stringify(meta||{})); }catch(e){ console.warn('Backup meta save failed',e); }
+  const value=JSON.stringify(meta||{});
+  try{ localStorage.setItem(GT_BACKUP_META_KEY,value); }catch(e){ console.warn('Backup meta local save failed',e); }
+  try{
+    // 1 rok, rovnaký web/origin; bez Secure aby fungovalo aj v lokálnom teste.
+    document.cookie='guardTrainerBackupMeta-v1='+encodeURIComponent(value)+'; max-age=31536000; path=/; SameSite=Lax';
+  }catch(e){ console.warn('Backup meta cookie save failed',e); }
 }
 function gtBackupLastKey(type){ return 'gt-backup-last-'+type; }
 function gtGetBackupDate(type){
   const meta=gtReadBackupMeta();
   if(meta[type]) return meta[type];
-  // spätná kompatibilita so staršou verziou
   try{return localStorage.getItem(gtBackupLastKey(type))||'';}catch(e){return '';}
 }
 function gtBackupFormatDate(iso){

@@ -7843,13 +7843,15 @@ function getSavedMemberTrainingData(member){
     if(!d)return;
     const group=String(groupValue||'').trim();
     const groupKey=normGroup(group)||group;
-    // Pri dochádzke môže byť v jeden deň viac samostatných tréningov.
-    // Preto ako unikát používame aj názov/identifikátor zdroja, nie iba
-    // dátum + skupinu.
-    const unique=`${d.year}-${d.month}-${d.day}|${groupKey}|${String(source||'')}`;
+    // Jeden člen môže mať ten istý tréning uložený vo viacerých zdrojoch
+    // (história dochádzky + vyúčtovanie, prípadne viac cloudových snapshotov).
+    // Pre osobnú štatistiku je jeden tréning definovaný dátumom + skupinou.
+    // Tým sa rovnaký tréning nikdy nezapočíta dvakrát. Ak má člen v ten deň
+    // skutočne tréning v dvoch rôznych skupinách, B a C sa započítajú osobitne.
+    const unique=`${d.year}-${d.month}-${d.day}|${groupKey}`;
     if(seen.has(unique))return;
     seen.add(unique);
-    seenSlots.add(`${d.year}-${d.month}-${d.day}|${groupKey}`);
+    seenSlots.add(unique);
     rows.push({
       date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
       group:group||groupKey,

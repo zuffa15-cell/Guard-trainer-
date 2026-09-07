@@ -7336,15 +7336,18 @@ function renderMembers(){
  membersData.sort((a,b)=>{const x=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});return x||(a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});});
  normalizeAllMembers();
  const app=document.querySelector('.app');
- const active=membersData.length;
- const unpaidM=membersData.filter(m=>!m.membership).length, unpaidR=membersData.filter(m=>!m.registration).length, debts=membersData.filter(m=>m.debt>0).length;
+ const visibleMembers=currentMemberGroupFilter==='ALL'
+   ? membersData
+   : membersData.filter(m=>(m.groups||[m.group]).map(g=>String(g).trim()).includes(String(currentMemberGroupFilter).trim()));
+ const active=visibleMembers.length;
+ const unpaidM=visibleMembers.filter(m=>!m.membership).length, unpaidR=visibleMembers.filter(m=>!m.registration).length, debts=visibleMembers.filter(m=>m.debt>0).length;
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content members-page">
   <div class="members-head"><div><h2>ČLENOVIA <span class="member-count">(${active})</span></h2><small>Správa členov klubu</small></div><button onclick="createMemberFromMembers()">＋ NOVÝ ČLEN</button></div>
   <div class="member-filters"><input id="memberSearchInput" type="search" placeholder="🔎 Hľadať člena..." autocomplete="off" oninput="filterMembers(this.value)"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
   <div class="member-list-head"><span>ČLEN</span><span>SKUPINA</span><span>PRIHLÁŠKA</span><span>ČLENSKÉ</span><span>REGISTRÁCIA</span></div>
-  <div id="memberList">${memberRows(membersData)}</div>
+  <div id="memberList">${memberRows(visibleMembers)}</div>
  </main>
  <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav active" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
 }
@@ -7388,6 +7391,18 @@ function checkNewMemberNameBeforeSave(id,surname,name){
   const archived=findArchivedMemberByName(surname,name);
   if(archived)return {type:'archived',member:archived};
   return null;
+}
+
+function returnToAttendanceAfterNewMember(){
+ // Po pridaní nového člena z otvorenej dochádzky vždy zostaň v tej istej
+ // dochádzke. Nepresmeruj používateľa do spoločného zoznamu členov.
+ try{
+   window.__attendanceOpenSource='home';
+   if(location.hash!=='#attendance'){
+     history.replaceState({gtRoute:'attendance',source:'attendance',date:attendanceState?.date||appToday().iso},'',location.pathname+location.search+'#attendance');
+   }
+   setTimeout(()=>{try{refreshAttendance();}catch(e){try{attendance();}catch(e2){}}},0);
+ }catch(e){ try{refreshAttendance();}catch(e2){} }
 }
 
 function createMemberFromMembers(){
@@ -10877,6 +10892,7 @@ async function addNewMember(){
        });
        attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
        saveCurrentTrainingAttendance(); refreshAttendance();
+       returnToAttendanceAfterNewMember();
        toast('Člen bol obnovený a pridaný do dochádzky');
      }
      return;
@@ -10914,6 +10930,7 @@ async function addNewMember(){
      }
      attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
      saveCurrentTrainingAttendance(); refreshAttendance();
+     returnToAttendanceAfterNewMember();
      toast(`${existingMember.surname} ${existingMember.name} bol pridaný do skupiny ${attendanceState.group}`);
      return;
    }
@@ -10939,6 +10956,7 @@ async function addNewMember(){
  });
  attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
  saveCurrentTrainingAttendance(); refreshAttendance();
+ returnToAttendanceAfterNewMember();
  toast('Nový člen bol pridaný do skupiny '+attendanceState.group);
 }
 function goBackAttendance(){ location.hash='home'; renderHome(); }

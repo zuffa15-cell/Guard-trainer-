@@ -11308,6 +11308,12 @@ function initBillingDirectSync(){
         loadBillingDeleteOrderFromCloud(data);
         if(!data.records || !Array.isArray(data.records)) return;
         mergeBillingRecords(data.records, 'fetch');
+        // Aj samotné načítanie mazacích značiek môže zmeniť to, čo patrí do
+        // štatistiky. Preto po prvom cloud fetchi prekresli otvorené štatistiky.
+        try{
+          const statsOpen=location.hash==='#statistics' || !!document.querySelector('.stats-page');
+          if(statsOpen && typeof renderStatistics==='function') renderStatistics();
+        }catch(e){ console.warn('stats fetch redraw fail',e); }
       }).catch(e=>console.warn('billing fetch fail', e));
     };
     
@@ -11399,6 +11405,14 @@ function initBillingDirectSync(){
           if(typeof monthlyBillingRecords!=='undefined'){
             monthlyBillingRecords.splice(0, monthlyBillingRecords.length, ...merged);
           }
+          // REALTIME OPRAVA ŠTATISTÍK: ak je používateľ práve na obrazovke
+          // Štatistiky, musí sa graf prekresliť hneď po prijatí serverového
+          // vyúčtovania. Inak mohol v DOM zostať starý stĺpec (napr. A=3),
+          // aj keď už bol záznam na serveri vymazaný.
+          try{
+            const statsOpen=location.hash==='#statistics' || !!document.querySelector('.stats-page');
+            if(statsOpen && typeof renderStatistics==='function') renderStatistics();
+          }catch(e){ console.warn('stats realtime redraw fail',e); }
           try{
             // REALTIME OPRAVA: serverový snapshot musí prekresliť aj obrazovku
             // "Moje vyúčtovanie" bežného trénera. Predtým sa UI po prijatí

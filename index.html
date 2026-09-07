@@ -14626,6 +14626,12 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     (getBillingRecords()||[]).forEach(r=>{
       const d=parsePaymentDate(r.date);
       if(!d || d.month!==m || d.year!==y) return;
+      // Vymazané vyúčtovanie nesmie byť zdrojom štatistiky. Kontrolujeme
+      // rovnaký delete marker ako samotný zoznam vyúčtovaní.
+      const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
+      const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+      const savedAt=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+      if(deletedAt>0 && deletedAt>=savedAt) return;
       if(!Array.isArray(r.attendanceStateSnapshot)) return;
 
       const attendanceHistory={};
@@ -14733,6 +14739,10 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const dailyMoney=Array.from({length:daysInMonth},()=>0);
   (getBillingRecords()||[]).forEach(r=>{
     if(!Array.isArray(r.attendanceSnapshot)) return;
+    const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
+    const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+    const savedAt=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+    if(deletedAt>0 && deletedAt>=savedAt) return;
     const d=parsePaymentDate(r.date);
     if(!d) return;
     if(d.month===m && d.year===y && d.day>=1 && d.day<=daysInMonth) dailyMoney[d.day-1]+=Number(r.clubAmount||0);
@@ -14740,6 +14750,10 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const monthlyMoney=Array.from({length:12},()=>0);
   (getBillingRecords()||[]).forEach(r=>{
     if(!Array.isArray(r.attendanceSnapshot)) return;
+    const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
+    const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+    const savedAt=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+    if(deletedAt>0 && deletedAt>=savedAt) return;
     const d=parsePaymentDate(r.date);
     if(!d) return;
     if(d.year===y && d.month>=1 && d.month<=12) monthlyMoney[d.month-1]+=Number(r.clubAmount||0);
@@ -14786,15 +14800,19 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const billingChartMap=new Map();
   (getBillingRecords()||[]).forEach(r=>{
     if(r.substituteReference) return;
+    const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
+    const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+    const statsSavedAt=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+    if(deletedAt>0 && deletedAt>=statsSavedAt) return;
     const d=parsePaymentDate(r.date);
     if(!d || d.month!==m || d.year!==y || d.day<1 || d.day>daysInMonth) return;
     const group=quickGroupCode(r.group);
     if(!stackedAttendanceByGroup[group]) return;
     const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
     const uniqueKey=`${iso}|${group}`;
-    const savedAt=Number(r.savedAt||r.updatedAt||0);
+    const recordSavedAt=Number(r.savedAt||r.updatedAt||0);
     const prev=billingChartMap.get(uniqueKey);
-    if(prev && Number(prev.savedAt||0)>savedAt) return;
+    if(prev && Number(prev.savedAt||0)>recordSavedAt) return;
     // Vyúčtovanie eviduje počet platených tréningov v "paying" a počet NOVÝCH
     // samostatne. Tento súčet je presne údaj, ktorý má byť v štatistike.
     let count=Number(r.paying);
@@ -14802,7 +14820,7 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     const newCount=Number(r.newCount||0);
     count+=(Number.isFinite(newCount)&&newCount>0?newCount:0);
     if(!Number.isFinite(count) || count<0) count=0;
-    billingChartMap.set(uniqueKey,{day:d.day,group,count,savedAt});
+    billingChartMap.set(uniqueKey,{day:d.day,group,count,savedAt:recordSavedAt});
   });
   billingChartMap.forEach(item=>{
     stackedAttendanceByGroup[item.group][item.day-1]=item.count;

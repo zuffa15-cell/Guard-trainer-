@@ -8710,6 +8710,16 @@ function gtCreateBackupPayload(type){
     data
   };
 }
+function gtBackupLastKey(type){ return 'gt-backup-last-'+type; }
+function gtBackupFormatDate(iso){
+  if(!iso) return 'Zatiaľ nebola vytvorená';
+  try{ const d=new Date(iso); return 'Posledná záloha: '+d.toLocaleDateString('sk-SK')+' '+d.toLocaleTimeString('sk-SK',{hour:'2-digit',minute:'2-digit'}); }catch(e){ return 'Posledná záloha: '+iso; }
+}
+function gtBackupButtonLabel(type){
+  const el=document.getElementById('gtBackupLast-'+type);
+  if(el) el.textContent=gtBackupFormatDate(localStorage.getItem(gtBackupLastKey(type)));
+}
+function gtRefreshBackupLabels(){ ['members','attendance','billing','full'].forEach(gtBackupButtonLabel); }
 function gtDownloadBackup(type){
   try{
     const payload=gtCreateBackupPayload(type);
@@ -8722,6 +8732,8 @@ function gtDownloadBackup(type){
     a.download=`Guard-Trainer-zaloha-${slug}-${stamp}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),1500);
+    localStorage.setItem(gtBackupLastKey(type), payload.createdAt);
+    gtBackupButtonLabel(type);
     toast(`Záloha – ${payload.title} uložená do zariadenia`);
   }catch(e){console.error('Backup error',e);toast('Zálohu sa nepodarilo vytvoriť');}
 }
@@ -8740,6 +8752,8 @@ function gtDownloadFullBackup(){
     a.download=`Guard-Trainer-zaloha-VSETKYCH-DAT-${stamp}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),1500);
+    localStorage.setItem(gtBackupLastKey('full'), payload.createdAt);
+    gtBackupButtonLabel('full');
     toast('Kompletná záloha uložená do zariadenia');
   }catch(e){console.error('Full backup error',e);toast('Kompletnú zálohu sa nepodarilo vytvoriť');}
 }
@@ -8844,10 +8858,10 @@ function renderBackups(){
         <div class="section-title">💾 ZÁLOHY DÁT</div>
         <small>Záloha sa stiahne ako súbor do mobilu.</small>
       </div>
-      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('members')">👥 <span><b>ZÁLOHA ČLENOV</b><small>Členovia, zmeny a zmazania</small></span>⬇</button>
-      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('attendance')">☑️ <span><b>ZÁLOHA DOCHÁDZKY</b><small>Dochádzka a história tréningov</small></span>⬇</button>
-      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('billing')">▤ <span><b>ZÁLOHA VYÚČTOVANIA</b><small>Vyúčtovanie a finančné záznamy</small></span>⬇</button>
-      <button type="button" class="more-menu-item" onclick="gtDownloadFullBackup()">🛡️ <span><b>ZÁLOHA VŠETKÝCH DÁT</b><small>Členovia + dochádzka + vyúčtovanie</small></span>⬇</button>      <button type="button" class="more-menu-item" onclick="gtOpenRestoreFile()">♻️ <span><b>OBNOVIŤ ZÁLOHU</b><small>Načítať uloženú zálohu späť do Guard Trainer</small></span>›</button>
+      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('members')">👥 <span><b>ZÁLOHA ČLENOV</b><small id="gtBackupLast-members">Zatiaľ nebola vytvorená</small></span>⬇</button>
+      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('attendance')">☑️ <span><b>ZÁLOHA DOCHÁDZKY</b><small id="gtBackupLast-attendance">Zatiaľ nebola vytvorená</small></span>⬇</button>
+      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('billing')">▤ <span><b>ZÁLOHA VYÚČTOVANIA</b><small id="gtBackupLast-billing">Zatiaľ nebola vytvorená</small></span>⬇</button>
+      <button type="button" class="more-menu-item" onclick="gtDownloadFullBackup()">🛡️ <span><b>ZÁLOHA VŠETKÝCH DÁT</b><small id="gtBackupLast-full">Zatiaľ nebola vytvorená</small></span>⬇</button>      <button type="button" class="more-menu-item" onclick="gtOpenRestoreFile()">♻️ <span><b>OBNOVIŤ ZÁLOHU</b><small>Načítať uloženú zálohu späť do Guard Trainer</small></span>›</button>
       <input id="gtRestoreFileInput" type="file" accept=".json,application/json" style="display:none" onchange="gtHandleRestoreFile(this)">
       <div style="margin-top:12px;padding:12px;border:1px solid #594400;border-radius:7px;background:#080808;color:#aaa;font-size:13px;line-height:1.45">
         Zálohy sú uložené ako súbory <b style="color:#ffd12b">.json</b>. Odporúčam po vytvorení kompletnej zálohy skontrolovať v mobile priečinok <b style="color:#fff">Stiahnuté / Downloads</b>.
@@ -8862,6 +8876,7 @@ function renderBackups(){
       <a class="nav active" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
     </nav><div id="toast" class="toast"></div>`;
   applyThemeUI();
+  gtRefreshBackupLabels();
 }
 
 function renderMore(){

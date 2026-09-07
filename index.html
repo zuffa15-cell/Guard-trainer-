@@ -7056,8 +7056,21 @@ function persistMembersData(changedMemberId=null){
     });
     originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
     changedIds.forEach(id=>{
-      markMemberSaved(id);
-      if(!isApplyingRemote) syncMemberDirectV2(id);
+      // Ak člen z lokálneho zoznamu zmizol, ide o VYMAZANIE, nie o nové uloženie.
+      // Nikdy mu preto neposúvaj save timestamp za delete timestamp – práve to
+      // spôsobovalo, že sa zmazaný člen po chvíli znovu objavil.
+      const stillExists=membersData.some(x=>String(x?.id)===String(id));
+      let deletedAt=0;
+      try{
+        const d=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
+        deletedAt=Number(d[String(id)]||0);
+      }catch(e){}
+      if(stillExists || !deletedAt){
+        markMemberSaved(id);
+        if(!isApplyingRemote) syncMemberDirectV2(id);
+      }else if(!isApplyingRemote){
+        syncDeletedMemberDirectV2(id);
+      }
     });
     // Dôležité: synchronizuj priamo celý zoznam transakciou. Nepoužívaj iba
     // všeobecný cloud push, ktorý môže byť v momente uloženia ešte oneskorený.
@@ -7263,15 +7276,19 @@ function deleteMemberFromList(id){
  deleted.push(archived);
  persistDeletedMembers(deleted);
 
- membersData.splice(idx,1);
- normalizeAllMembers();
+ // Tombstone zapíš PRED odoslaním zmeny do shared-db. Tak sa nemôže stať,
+ // že paralelný cloudový zápis na inom zariadení vráti práve zmazaného člena.
+ const deleteAt=Date.now();
  try{
    const raw=originalGetItem('gt-member-delete-order-v1');
    const dels=raw?JSON.parse(raw):{};
-   dels[String(id)]=Date.now();
+   dels[String(id)]=Math.max(Number(dels[String(id)]||0),deleteAt);
    originalSetItem('gt-member-delete-order-v1',JSON.stringify(dels));
  }catch(e){ console.warn('Guard Trainer: member delete tombstone failed',e); }
+ membersData.splice(idx,1);
+ normalizeAllMembers();
  persistMembersData(id);
+ // Priamy realtime kanál dostane tombstone s tým istým/novším časom.
  try{syncDeletedMemberDirectV2(id);}catch(e){}
  try{pushToCloud(true);}catch(e){}
  renderMembers();

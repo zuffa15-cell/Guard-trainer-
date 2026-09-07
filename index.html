@@ -8025,12 +8025,41 @@ function renderMemberPaymentHistory(id){
 
 function setMemberGroup(group,id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
- if(!m.groups) m.groups=[m.group];
- if(m.groups.includes(group)) m.groups=m.groups.filter(g=>g!==group);
- else m.groups.push(group);
- if(!m.groups.length) m.groups=[group];
+ if(!m.groups) m.groups=m.group?[m.group]:[];
+ const code=String(group||'').trim().toUpperCase();
+ if(!code)return;
+ if(m.groups.some(g=>String(g||'').trim().toUpperCase()===code)) m.groups=m.groups.filter(g=>String(g||'').trim().toUpperCase()!==code);
+ else m.groups.push(code);
+ if(!m.groups.length) m.groups=[code];
+ m.groups=[...new Set(m.groups.map(g=>String(g||'').trim().toUpperCase()).filter(Boolean))];
+ m.group=m.groups[0]||'';
  normalizeMember(m);
+ markMemberSaved(m.id);
+ persistMembersData(m.id);
+ try{syncMemberDirectV2(m,false);}catch(e){}
  renderMemberProfile(id);
+}
+
+// Pridanie existujúceho člena do inej skupiny z Dochádzky musí byť zároveň
+// zmenou jeho profilu. Napr. A -> B znamená, že profil obsahuje A aj B.
+// B sa nesmie uložiť iba do dnešnej dochádzky.
+function addMemberToAttendanceGroupProfile(member,targetGroup){
+ const m=member;
+ if(!m)return false;
+ const code=String(targetGroup||'').trim().toUpperCase();
+ if(!code)return false;
+ const old=Array.isArray(m.groups)?m.groups:[m.group];
+ const groups=old.map(g=>String(g||'').trim().toUpperCase()).filter(Boolean);
+ if(!groups.includes(code)) groups.push(code);
+ m.groups=[...new Set(groups)];
+ // Zachovaj prvú/hlavnú skupinu; ostatné skupiny sú ďalšie skupiny člena.
+ m.group=m.groups[0]||code;
+ normalizeMember(m);
+ markMemberSaved(m.id);
+ persistMembersData(m.id);
+ try{syncMemberDirectV2(m,false);}catch(e){}
+ try{if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),50);}catch(e){}
+ return true;
 }
 function getAvailableMemberGroups(){
  // The administrator controls group existence through the schedule manager.
@@ -10872,11 +10901,7 @@ async function addNewMember(){
      restoreArchivedMember(choice.member.id);
      const restored=membersData.find(x=>Number(x.id)===Number(choice.member.id));
      if(restored){
-       if(!(restored.groups||[]).some(g=>String(g).trim().toUpperCase()===String(attendanceState.group||'').trim().toUpperCase())){
-         restored.groups=[...(restored.groups||[]),attendanceState.group];
-       }
-       restored.group=attendanceState.group;
-       persistMembersData();
+       addMemberToAttendanceGroupProfile(restored,attendanceState.group);
        const existing=attendanceState.members.find(x=>memberSameName(x,restored));
        if(existing){existing.newMember=true;existing.training=true;}
        else attendanceState.members.push({
@@ -10903,10 +10928,12 @@ async function addNewMember(){
      const target=String(attendanceState.group||'').trim().toUpperCase();
      const already=(existingMember.groups||[]).some(g=>String(g).trim().toUpperCase()===target);
      if(!already){
-       existingMember.groups=[...(existingMember.groups||[]),attendanceState.group];
+       addMemberToAttendanceGroupProfile(existingMember,attendanceState.group);
+     }else{
+       // Aj keď už skupina existuje, zabezpeč, že profil a cloud obsahujú
+       // rovnaký kanonický zoznam skupín.
+       addMemberToAttendanceGroupProfile(existingMember,attendanceState.group);
      }
-     existingMember.group=attendanceState.group;
-     persistMembersData();
 
      const existingAttendance=attendanceState.members.find(x=>memberSameName(x,existingMember));
      if(existingAttendance){

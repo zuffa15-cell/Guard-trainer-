@@ -412,6 +412,21 @@ function applyMembersFromCloudSnapshot(data){
   }
 }
 
+function gtApplyBackupMetaFromSharedData(data){
+  try{
+    const remote=data && data['gt-backup-meta-v1'];
+    if(!remote || typeof remote!=='object') return;
+    const meta=gtReadBackupMeta();
+    let changed=false;
+    ['members','attendance','billing','full'].forEach(type=>{
+      if(remote[type] && (!meta[type] || String(remote[type])>String(meta[type]))){
+        meta[type]=remote[type]; changed=true;
+      }
+    });
+    if(changed) gtWriteBackupMeta(meta);
+    gtRefreshBackupLabels();
+  }catch(e){console.warn('Backup meta shared-db read failed',e);}
+}
 function initCloudSync(){
   if(!db) return;
   
@@ -419,6 +434,7 @@ function initCloudSync(){
   db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).onSnapshot(doc=>{
     if(!doc.exists) return;
     const data = doc.data();
+    gtApplyBackupMetaFromSharedData(data);
     const myUid = firebase.auth().currentUser?.uid;
     // Členovia sa spracujú okamžite ešte pred globálnymi kontrolami snapshotu.
     // Vlastný zápis je možné ignorovať nižšie, ale prijatý stav sa už teraz
@@ -8858,6 +8874,12 @@ function gtSetBackupDate(type,iso){
   try{
     if(db && cloudEnabled){
       const uid = firebase.auth().currentUser?.uid || 'unknown';
+      const cloudMeta={...gtReadBackupMeta(),[type]:iso};
+      db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set({
+        'gt-backup-meta-v1':cloudMeta,
+        _updatedAt:Date.now(),
+        _updatedBy:uid
+      },{merge:true}).catch(e=>console.warn('Backup meta shared-db save failed',e));
       db.collection(CLOUD_COLLECTION).doc('backup-meta').set({[type]:iso,_updatedAt:Date.now(),_updatedBy:uid},{merge:true})
         .catch(e=>console.warn('Backup meta cloud save failed',e));
     }

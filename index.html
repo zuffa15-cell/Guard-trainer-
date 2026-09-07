@@ -7843,12 +7843,12 @@ function getSavedMemberTrainingData(member){
     if(!d)return;
     const group=String(groupValue||'').trim();
     const groupKey=normGroup(group)||group;
-    // Jeden člen môže mať ten istý tréning uložený vo viacerých zdrojoch
-    // (história dochádzky + vyúčtovanie, prípadne viac cloudových snapshotov).
-    // Pre osobnú štatistiku je jeden tréning definovaný dátumom + skupinou.
-    // Tým sa rovnaký tréning nikdy nezapočíta dvakrát. Ak má člen v ten deň
-    // skutočne tréning v dvoch rôznych skupinách, B a C sa započítajú osobitne.
-    const unique=`${d.year}-${d.month}-${d.day}|${groupKey}`;
+    // Jeden člen má v osobnej štatistike maximálne JEDEN tréning za jeden
+    // kalendárny deň. Staršie synchronizácie mohli uložiť rovnakú dochádzku
+    // v dvoch skupinových záznamoch (napr. B aj C) a osobná štatistika by potom
+    // nesprávne ukazovala 2 alebo 3 tréningy v ten istý deň. Pre profil člena
+    // je preto dátum autoritatívnym identifikátorom účasti.
+    const unique=`${d.year}-${d.month}-${d.day}`;
     if(seen.has(unique))return;
     seen.add(unique);
     seenSlots.add(unique);

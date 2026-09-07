@@ -14998,19 +14998,18 @@ function renderStatistics(month=appToday().month,year=appToday().year){
     </section>
 
     <section class="stats-section stats-top-groups">
-      <h3>🏆 TOP 3 NAJAKTÍVNEJŠÍ ČLENOVIA PODĽA SKUPÍN</h3>
-      <div class="stats-top-group-grid">
-        ${Object.keys(groupNames).map(g=>{
-          const list=topByGroup[g]||[];
-          return `<div class="stats-top-group">
-            <div class="stats-top-group-title"><b>${groupNames[g]}</b><span>${GROUP_NAMES[g]||''}</span></div>
-            ${list.length?list.map((x,i)=>{
-              const parts=String(x[0]).split('|');
-              return `<div class="top-member"><div class="top-medal">${medals[i]}</div><div><b>${parts[0]} ${parts[1]||''}</b><small>${x[1]} účastí</small></div><strong>${x[1]}×</strong></div>`;
-            }).join(''):`<div class="stats-empty">Zatiaľ bez dochádzky</div>`}
+      <h3>🏆 TOP 3 NAJAKTÍVNEJŠÍ ČLENOVIA – ${monthNames[m-1]} ${y}</h3>
+      <div class="stats-top-group-grid" style="grid-template-columns:1fr">
+        ${top.length?top.map((x,i)=>{
+          const parts=String(x[0]).split('|');
+          return `<div class="top-member">
+            <div class="top-medal">${medals[i]}</div>
+            <div><b>${parts[0]} ${parts[1]||''}</b><small>${x[1]} tréning${Number(x[1])===1?'':'ov'} v mesiaci</small></div>
+            <strong>${x[1]}×</strong>
           </div>`;
-        }).join('')}
+        }).join(''):`<div class="stats-empty">Zatiaľ bez dochádzky</div>`}
       </div>
+      <div class="stats-money-note">Poradie je za celý klub. Člen sa môže zúčastniť tréningov vo viacerých skupinách (napr. B aj C) a všetky jeho tréningy v danom mesiaci sa sčítajú.</div>
     </section>
 
     <section class="stats-section stats-day-extremes">

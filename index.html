@@ -5533,7 +5533,7 @@ function headHomeMonthAttendance(){
       const group=codeOf(r.group||r.groupCode||r.code);
       if(!group || !out[group]) return;
       const iso=dateIso(r);
-      const histKey=`${iso}|${String(r.group||r.groupCode||r.code||'').trim()}`;
+      const histKey=(typeof canonicalAttendanceHistoryKey==='function') ? canonicalAttendanceHistoryKey(`${iso}|${group}`) : `${iso}|${group}`;
       const hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[histKey]) || null;
 
       // Dochádzka je jediný zdroj počtu PRÍTOMNÝCH a NOVÝCH.

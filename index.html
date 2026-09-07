@@ -15010,6 +15010,24 @@ function renderStatistics(month=appToday().month,year=appToday().year){
         }).join(''):`<div class="stats-empty">Zatiaľ bez dochádzky</div>`}
       </div>
       <div class="stats-money-note">Poradie je za celý klub. Člen sa môže zúčastniť tréningov vo viacerých skupinách (napr. B aj C) a všetky jeho tréningy v danom mesiaci sa sčítajú.</div>
+
+      <div class="stats-top-by-groups" style="margin-top:14px">
+        ${Object.keys(groupNames).map(g=>{
+          const list=topByGroup[g]||[];
+          return `<div class="stats-top-group-card" style="margin-top:10px;padding:12px;border:1px solid rgba(220,161,14,.35);border-radius:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:18px;color:#f2b01e">${g}</b><span style="opacity:.7;font-size:12px">TOP 3 V SKUPINE</span></div>
+            ${list.length?list.map((x,i)=>{
+              const parts=String(x[0]).split('|');
+              return `<div class="top-member" style="margin-top:6px">
+                <div class="top-medal">${medals[i]}</div>
+                <div><b>${parts[0]} ${parts[1]||''}</b><small>${x[1]} účast${Number(x[1])===1?'':'i'} v ${monthNames[m-1].toLowerCase()}</small></div>
+                <strong>${x[1]}×</strong>
+              </div>`;
+            }).join(''):`<div class="stats-empty">Zatiaľ bez dochádzky</div>`}
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="stats-money-note">Okrem celkového klubového poradia je nižšie samostatné TOP 3 pre každú skupinu. Ak člen chodí do viacerých skupín, v klubovom poradí sa všetky jeho účasti za mesiac sčítajú.</div>
     </section>
 
     <section class="stats-section stats-day-extremes">

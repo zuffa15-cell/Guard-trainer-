@@ -13813,7 +13813,36 @@ function renderHeadTrainerBilling(){
 }
 
 function showHeadTrainerMembershipReport(){
-  const paid=membershipPayments.slice();
+  // Zdroj pre hlavného trénera musí obsahovať aj platby uložené priamo
+  // v snapshot-e dochádzky/vyúčtovania. Samotné membershipPayments môže
+  // obsahovať iba platby z aktuálneho zariadenia.
+  const buildPaid=()=>{
+    const result=[]; const seen=new Set();
+    const norm=s=>String(s||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+    const add=p=>{
+      if(!p || p.memberId==null || Number(p.amount||0)<=0) return;
+      const d=parsePaymentDate(p.date); if(!d)return;
+      const key=`${Number(p.memberId)}|${d.year}-${d.month}-${d.day}|${norm(p.paidGroup||'')}|${Number(p.amount||0)}`;
+      if(seen.has(key))return; seen.add(key); result.push({...p});
+    };
+    (membershipPayments||[]).forEach(add);
+    // Dochádzka/vyúčtovanie je druhý, autoritatívny zdroj. Týmto sa
+    // načítajú aj staršie Viktorove platby, ktoré boli uložené v snapshot-e.
+    (getBillingRecords()||[]).forEach(r=>{
+      const d=parsePaymentDate(r?.date); if(!d)return;
+      const snap=Array.isArray(r?.paymentSnapshot)?r.paymentSnapshot:[];
+      snap.forEach(x=>{
+        const amount=Number(x?.membership||0); if(amount<=0)return;
+        const member=membersData.find(m=>norm(m?.surname+' '+m?.name)===norm(x?.surname+' '+x?.name));
+        add({memberId:member?.id ?? `${x?.surname||''}|${x?.name||''}`,
+          surname:x?.surname||'',name:x?.name||'',paidGroup:r?.group||'',
+          date:`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`,
+          amount,period:membershipPeriodForDate(r.date),year:d.year,source:'attendance-snapshot'});
+      });
+    });
+    return result;
+  };
+  let paid=buildPaid();
   const modal=document.createElement('div');
   modal.className='membership-paid-modal';
   modal.innerHTML=`<div class="membership-paid-card head-membership-report">
@@ -13881,6 +13910,7 @@ function showHeadTrainerMembershipReport(){
     const lo=Math.min(Date.parse(from),Date.parse(to)), hi=Math.max(Date.parse(from),Date.parse(to));
     const selectedGroup=document.getElementById('membershipReportGroup').value;
 
+    paid=buildPaid();
     const filtered=paid.filter(p=>{
       const d=parsePaymentDate(p.date); if(!d)return false;
       const key=new Date(d.year,d.month-1,d.day).getTime();
@@ -14586,6 +14616,57 @@ function membershipPaymentBelongsToCurrentTrainer(p){
   return false;
 }
 
+function getMembershipReportPayments(fromValue,toValue){
+  const norm=s=>String(s||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+  const parseD=parsePaymentDate;
+  const inRange=(date)=>{
+    const d=parseD(date); if(!d)return false;
+    const key=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    return (!fromValue||key>=fromValue) && (!toValue||key<=toValue);
+  };
+  const result=[]; const seen=new Set();
+  const add=(p)=>{
+    if(!p || p.memberId==null || Number(p.amount||0)<=0 || !inRange(p.date)) return;
+    const key=`${Number(p.memberId)}|${String(p.date)}|${norm(p.paidGroup||'')}|${Number(p.amount||0)}`;
+    if(seen.has(key))return; seen.add(key); result.push({...p});
+  };
+
+  // 1. Normálna história platieb – toto zostáva hlavný zdroj.
+  (membershipPayments||[]).filter(p=>membershipPaymentBelongsToCurrentTrainer(p)).forEach(add);
+
+  // 2. POISTKA: Dochádzka/vyúčtovanie obsahuje kompletný paymentSnapshot.
+  // Ak bola platba zapísaná v Dochádzke, musí sa v prehľade zobraziť aj vtedy,
+  // keď sa samostatná membershipPayments história na zariadení ešte
+  // nesynchronizovala. Toto je dôležité najmä pre staršie Viktorove platby.
+  const me=norm(getCurrentTrainerDisplayName?.()||CURRENT_TRAINER_NAME||'');
+  const myId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
+  const isHead=typeof isHeadTrainer==='function' && isHeadTrainer();
+  const isAdm=typeof isAdmin==='function' && isAdmin();
+  (getBillingRecords()||[]).forEach(r=>{
+    const rd=parseD(r?.date); if(!rd || !inRange(r.date))return;
+    if(!isAdm && !isHead){
+      const rid=Number(r?.trainerId);
+      const author=norm(r?.savedBy||r?.trainer||'');
+      const mine=(Number.isFinite(rid)&&rid>0&&myId!=null&&Number(myId)===rid) || (!!me&&author===me);
+      if(!mine)return;
+    }
+    const snap=Array.isArray(r?.paymentSnapshot)?r.paymentSnapshot:[];
+    snap.forEach(x=>{
+      const amount=Number(x?.membership||0);
+      if(amount<=0)return;
+      const member=membersData.find(m=>norm(m?.surname+' '+m?.name)===norm(x?.surname+' '+x?.name));
+      add({
+        memberId:member?.id ?? `${x?.surname||''}|${x?.name||''}`,
+        surname:x?.surname||'', name:x?.name||'', paidGroup:r?.group||'',
+        date:(()=>{const d=parseD(r.date); return d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:r.date;})(),
+        amount, period:membershipPeriodForDate(r.date), year:rd.year,
+        source:'attendance-snapshot'
+      });
+    });
+  });
+  return result;
+}
+
 function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
   const now=appToday();
   const pad=n=>String(n).padStart(2,'0');
@@ -14594,14 +14675,7 @@ function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
   const lastDay=new Date(now.year,now.month,0).getDate();
   const last=iso(now.year,now.month,lastDay);
   const from=fromValue||first, to=toValue||last;
-  const paid=membershipPayments
-    .filter(p=>membershipPaymentBelongsToCurrentTrainer(p))
-    .filter(p=>{
-      if(!p || p.memberId==null || Number(p.amount||0)<=0)return false;
-      const d=parsePaymentDate(p.date); if(!d)return false;
-      const key=iso(d.year,d.month,d.day);
-      return key>=from && key<=to;
-    })
+  const paid=getMembershipReportPayments(from,to)
     .sort((a,b)=>{
       const da=parsePaymentDate(a.date),db=parsePaymentDate(b.date);
       if(da&&db){
@@ -14609,7 +14683,7 @@ function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
         const xb=new Date(db.year,db.month-1,db.day).getTime();
         if(xa!==xb)return xb-xa;
       }
-      return (a.surname||'').localeCompare(b.surname||'');
+      return String(a.surname||'').localeCompare(String(b.surname||''),'sk');
     });
   const total=paid.reduce((sum,p)=>sum+Number(p.amount||0),0);
   const rows=paid.length
@@ -14630,7 +14704,6 @@ function showTrainerMonthlyMembershipPayments(fromValue=null,toValue=null){
   </div>`;
   document.body.appendChild(modal);
 }
-
 window.showTrainerMonthlyMembershipPayments=showTrainerMonthlyMembershipPayments;
 function showMonthlyMembershipPayments(){
   const current=parsePaymentDate(attendanceState.date) || {year:2026,month:8};

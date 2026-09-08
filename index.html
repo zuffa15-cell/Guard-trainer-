@@ -53,7 +53,7 @@ try {
 const CLOUD_COLLECTION = "guard-trainer-data";
 const CLOUD_DOC = "shared-db";
 const MEMBER_DIRECT_CLOUD_COLLECTION_V2 = "guard-trainer-members-v2";
-const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-billing-delete-order-v1','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-delete-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1'];
+const SYNC_KEYS = ['gt-schedule','gt-group-colors','gt-trainer-invitations-v550','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1','gt-members-real-2026-v847','gt-trainers','gt-trainers-v395','gt-trainer-login-passwords','gt-attendance','gt-finance','gt-monthly-billing-v221','gt-billing-delete-order-v1','gt-training-attendance-history','gt-attendance-save-order-v1','gt-attendance-admin-edits-v1','gt-attendance-delete-order-v1','gt-billing','gt-training-attendance','gt-substitution-offers','gt-club-handover-v1','gt-member-payment-history-real-2026-v847'];
 const ATTENDANCE_PENDING_SAVE_KEY = 'gt-attendance-pending-save-v1';
 
 // ===== SPOLOČNÁ SYNCHRONIZÁCIA ČLENOV – AUTORITATÍVNY STAV =====
@@ -444,6 +444,7 @@ function initCloudSync(){
       // je novší.
       let newerAttendance=false;
       let newerMembers=false;
+      let newerPayments=false;
       // Členovia majú vlastný timestamp podľa ID. Globálny _updatedAt nesmie
       // zablokovať prijatie nového člena z administrátorského zariadenia.
       try{
@@ -451,6 +452,9 @@ function initCloudSync(){
         const remoteOrder=data['gt-member-save-order-v1']?JSON.parse(data['gt-member-save-order-v1']):{};
         const localOrder=originalGetItem('gt-member-save-order-v1')?JSON.parse(originalGetItem('gt-member-save-order-v1')):{};
         if(Array.isArray(remoteMembers)) newerMembers=remoteMembers.some(m=>m&&m.id!=null && Number(remoteOrder[String(m.id)]||0)>Number(localOrder[String(m.id)]||0));
+      }catch(e){}
+      try{
+        newerPayments=!!(data[PAYMENT_HISTORY_KEY] && data[PAYMENT_HISTORY_KEY]!==originalGetItem(PAYMENT_HISTORY_KEY));
       }catch(e){}
       try{
         const remoteAdmin=data['gt-attendance-admin-edits-v1']?JSON.parse(data['gt-attendance-admin-edits-v1']):{};
@@ -468,9 +472,10 @@ function initCloudSync(){
           });
         }
       }catch(e){}
-      if(!newerAttendance && !newerMembers) return;
+      if(!newerAttendance && !newerMembers && !newerPayments) return;
       if(newerMembers) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novších členov – prijímam');
-      else console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
+      else if(newerAttendance) console.log('📥 Cloud snapshot je starší globálne, ale obsahuje novšiu dochádzku – prijímam');
+      else console.log('📥 Cloud snapshot obsahuje zmenenú históriu platieb – prijímam');
     }
     
     console.log("📥 Prišla zmena z cloudu");
@@ -518,6 +523,40 @@ function initCloudSync(){
         // zoznam prepísať starým cloudovým snapshotom.
         if((k==='gt-members-real-2026-v847' || k==='gt-member-save-order-v1') && memberSyncHandled) return;
         if(!data[k]) return;
+        if(k===PAYMENT_HISTORY_KEY){
+          // Platby členského/registračného sú spoločné pre všetky zariadenia.
+          // Zlúčime lokálne a cloudové údaje, aby platba zapísaná na jednom
+          // mobile nezmizla z prehľadu na inom mobile.
+          let lp={membership:[],registration:[]}, rp={membership:[],registration:[]};
+          try{const x=originalGetItem(PAYMENT_HISTORY_KEY);const q=x?JSON.parse(x):{};if(q&&typeof q==='object'){lp.membership=Array.isArray(q.membership)?q.membership:[];lp.registration=Array.isArray(q.registration)?q.registration:[];}}catch(e){}
+          try{const q=data[k]?JSON.parse(data[k]):{};if(q&&typeof q==='object'){rp.membership=Array.isArray(q.membership)?q.membership:[];rp.registration=Array.isArray(q.registration)?q.registration:[];}}catch(e){}
+          const mergePayments=(localRows,remoteRows,type)=>{
+            const map=new Map();
+            const put=p=>{
+              if(!p || p.memberId==null) return;
+              const year=Number(p.year||String(p.date||'').slice(0,4)||0);
+              const period=type==='membership'?Number(p.period||0):0;
+              const key=`${type}|${Number(p.memberId)}|${year}|${period}`;
+              const prev=map.get(key);
+              if(!prev){map.set(key,p);return;}
+              const pd=String(prev.date||'').trim(), nd=String(p.date||'').trim();
+              if(!pd && nd){map.set(key,p);return;}
+              if(Number(p.updatedAt||p.savedAt||0)>=Number(prev.updatedAt||prev.savedAt||0) && nd) map.set(key,p);
+            };
+            (Array.isArray(localRows)?localRows:[]).forEach(put);
+            (Array.isArray(remoteRows)?remoteRows:[]).forEach(put);
+            return Array.from(map.values());
+          };
+          const mergedPay={
+            membership:mergePayments(lp.membership,rp.membership,'membership'),
+            registration:mergePayments(lp.registration,rp.registration,'registration')
+          };
+          const raw=JSON.stringify(mergedPay);
+          if(raw!==originalGetItem(PAYMENT_HISTORY_KEY)){originalSetItem(PAYMENT_HISTORY_KEY,raw);localStorage.setItem(PAYMENT_HISTORY_KEY,raw);changed=true;}
+          membershipPayments.splice(0,membershipPayments.length,...mergedPay.membership);
+          registrationPayments.splice(0,registrationPayments.length,...mergedPay.registration);
+          return;
+        }
         if(k==='gt-attendance-delete-order-v1'){
           let remoteDel={};
           try{ remoteDel=JSON.parse(data[k]||'{}')||{}; }catch(e){}
@@ -7325,7 +7364,17 @@ try{
 const membershipPayments=paymentHistoryStore.membership;
 const registrationPayments=paymentHistoryStore.registration;
 function persistPaymentHistory(){
-  try{localStorage.setItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:membershipPayments,registration:registrationPayments}));}catch(e){}
+  try{
+    const payload=JSON.stringify({membership:membershipPayments,registration:registrationPayments});
+    localStorage.setItem(PAYMENT_HISTORY_KEY,payload);
+    // Platby členského/registračného musia byť spoločné pre všetky zariadenia.
+    // Bez tohto zápisu ostal report 'ZAPLATENÉ ČLENSKÉ' iba na zariadení,
+    // na ktorom bola platba zapísaná.
+    try{ if(typeof pushToCloud==='function' && typeof db!=='undefined' && db) {
+      pushToCloud(true);
+      setTimeout(()=>{try{pushToCloud(true);}catch(e){}},300);
+    }}catch(e){}
+  }catch(e){}
 }
 function recordMembershipPayment(member,amount,date,group,period=membershipPeriodForDate(date)){
   const trainerName=String(getCurrentTrainerDisplayName?.()||'').trim();

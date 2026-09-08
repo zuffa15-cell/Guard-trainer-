@@ -7864,54 +7864,58 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
-  // Štatistika člena vychádza z uloženej dochádzky. Pri čítaní používame
-  // normalizované meno, aby zmena veľkosti písmen/medzier v profile
-  // nerozbila historickú dochádzku. Ako záložný zdroj používame aj
-  // kompletný attendanceStateSnapshot vo vyúčtovaní (staršie záznamy).
+  // AUTORITATÍVNY ZDROJ ŠTATISTIKY ČLENA = ULOŽENÁ DOCHÁDZKA.
+  // Vyúčtovanie sa tu zámerne vôbec nepoužíva. Vymazaný tréning sa nesmie
+  // objaviť späť v štatistike ani po synchronizácii.
   const normName=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
   const surname=normName(member?.surname), name=normName(member?.name);
-  const key=`${member.surname}|${member.name}`;
   const rows=[];
   const seen=new Set();
-  const seenSlots=new Set();
-  const normGroup=v=>{
-    const x=String(v||'').trim().toUpperCase();
-    if(!x)return '';
-    const m=x.match(/^([A-ZČĎĽŇŠŤŽ0-9+]+)/);
-    return m?m[1]:x;
+
+  const canonicalDate=v=>{
+    const d=parsePaymentDate(v);
+    return d ? `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}` : '';
   };
-  const addRow=(dateValue,groupValue,nameValue,source='')=>{
+  const canonicalGroup=v=>String(v||'').trim().toUpperCase();
+
+  // Mazacie značky dochádzky majú prednosť pred historickým záznamom.
+  let deleted={};
+  try{ deleted=JSON.parse(originalGetItem('gt-attendance-delete-order-v1')||'{}')||{}; }catch(e){ deleted={}; }
+
+  const isDeleted=(dateValue,groupValue)=>{
+    const date=canonicalDate(dateValue), group=canonicalGroup(groupValue);
+    if(!date || !group)return false;
+    const key=attendanceDeleteKey(date,group);
+    return Number(deleted[key]||0)>0;
+  };
+
+  const addRow=(dateValue,groupValue)=>{
     const d=parsePaymentDate(dateValue);
     if(!d)return;
+    const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
     const group=String(groupValue||'').trim();
-    const groupKey=normGroup(group)||group;
-    // Jeden člen má v osobnej štatistike maximálne JEDEN tréning za jeden
-    // kalendárny deň. Staršie synchronizácie mohli uložiť rovnakú dochádzku
-    // v dvoch skupinových záznamoch (napr. B aj C) a osobná štatistika by potom
-    // nesprávne ukazovala 2 alebo 3 tréningy v ten istý deň. Pre profil člena
-    // je preto dátum autoritatívnym identifikátorom účasti.
-    const unique=`${d.year}-${d.month}-${d.day}`;
-    if(seen.has(unique))return;
-    seen.add(unique);
-    seenSlots.add(unique);
+    if(!group || isDeleted(dateValue,group))return;
+    // Jeden reálne uložený tréning za deň. Ak sa rovnaká dochádzka objaví
+    // viackrát kvôli synchronizácii alebo členovi s B+C, započíta sa raz.
+    if(seen.has(dateKey))return;
+    seen.add(dateKey);
     rows.push({
       date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-      group:group||groupKey,
-      name:nameValue||'',
+      group:group,
       dateObj:new Date(d.year,d.month-1,d.day)
     });
   };
 
-  // 1. Primárny zdroj: uložená dochádzka podľa dátumu + skupiny.
   try{
     if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
       Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
         const parts=String(histKey).split('|');
         const dateValue=parts[0]||'';
         const groupValue=parts.slice(1).join('|')||'';
+        if(isDeleted(dateValue,groupValue))return;
         const hist=trainingAttendanceByGroup[histKey];
         if(!hist || typeof hist!=='object')return;
-        // Nečítame iba presný key – člen mohol mať neskôr opravené meno.
+
         let memberState=null;
         Object.keys(hist).some(k=>{
           const kp=String(k).split('|');
@@ -7920,41 +7924,15 @@ function getSavedMemberTrainingData(member){
           }
           return false;
         });
-        if(!memberState || (!memberState.training && !memberState.newMember))return;
-        addRow(dateValue,groupValue,'',`history|${histKey}`);
+
+        // Do štatistiky sa počíta každý člen, ktorý bol v dochádzke označený
+        // ako TRÉNING alebo NOVÝ. Stav NOVÝ je tiež účasť na danom tréningu,
+        // preto sa musí započítať do počtu tréningov člena.
+        if(!memberState || (memberState.training!==true && memberState.newMember!==true))return;
+        addRow(dateValue,groupValue);
       });
     }
-  }catch(e){ console.warn('member training history read failed',e); }
-
-  // 2. Záložný zdroj: kompletný snapshot dochádzky uložený vo vyúčtovaní.
-  // Toto pokrýva aj staršie tréningy, pri ktorých sa samostatná história
-  // dochádzky na tomto zariadení ešte nenachádza.
-  try{
-    getBillingRecords().forEach((r,idx)=>{
-      const d=parsePaymentDate(r.date);
-      if(!d)return;
-      const group=String(r.group||r.groupCode||'').trim();
-      let matched=false;
-      if(Array.isArray(r.attendanceStateSnapshot)){
-        matched=r.attendanceStateSnapshot.some(x=>
-          normName(x?.surname)===surname && normName(x?.name)===name && (x?.training||x?.newMember)
-        );
-      }
-      if(!matched && Array.isArray(r.attendanceSnapshot)){
-        matched=r.attendanceSnapshot.some(k=>{
-          const kp=String(k||'').split('|');
-          return normName(kp[0])===surname && normName(kp.slice(1).join('|'))===name;
-        });
-      }
-      if(!matched)return;
-      const slot=`${d.year}-${d.month}-${d.day}|${normGroup(group)||group}`;
-      // Ak už máme rovnaký dátum + skupinu z reálnej dochádzky, vyúčtovanie
-      // je iba záložný zdroj a nesmie tú istú účasť započítať druhýkrát.
-      if(seenSlots.has(slot))return;
-      const sourceKey=String(r.key||`${r.date}|${group}|${r.trainer||''}|${idx}`);
-      addRow(r.date,group,r.name||'',`billing|${sourceKey}`);
-    });
-  }catch(e){ console.warn('member billing training history read failed',e); }
+  }catch(e){ console.warn('member training attendance stats read failed',e); }
 
   rows.sort((a,b)=>b.dateObj-a.dateObj);
   return rows;

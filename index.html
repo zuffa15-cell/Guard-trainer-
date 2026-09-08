@@ -12323,19 +12323,18 @@ window.forceMyBillingScreen=forceMyBillingScreen;
 async function saveBillingRecordToServerNow(record){
   try{
     if(typeof db==='undefined' || !db || !record) return false;
+    // Firestore odmieta undefined hodnoty. Pred odoslaním vytvoríme čistú JSON kópiu.
+    let cleanRecord;
+    try{ cleanRecord=JSON.parse(JSON.stringify(record)); }catch(e){ cleanRecord={...record}; }
     const ref=db.collection('guard-trainer-billing').doc('all');
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      let rows=Array.isArray(data.records)?data.records.slice():[];
-      const norm=v=>String(v||'').trim().toUpperCase();
-      const d=parsePaymentDate(record.date);
-      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record.date||'');
-      const group=norm(record.group);
-      const isRef=r=>!!r?.substituteReference;
-      // Bežný tréning patrí iba trénerovi, ktorý ho práve uložil.
-      // Preto na serveri odstránime staré finančné kópie rovnakého dátumu+skupiny.
-      if(!isRef(record)){
+    const norm=v=>String(v||'').trim().toUpperCase();
+    const d=parsePaymentDate(cleanRecord.date);
+    const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(cleanRecord.date||'');
+    const group=norm(cleanRecord.group);
+    const isRef=r=>!!r?.substituteReference;
+    const mergeRows=(data)=>{
+      let rows=Array.isArray(data?.records)?data.records.slice():[];
+      if(!isRef(cleanRecord)){
         rows=rows.filter(r=>{
           if(isRef(r)) return true;
           const rd=parsePaymentDate(r?.date);
@@ -12343,32 +12342,53 @@ async function saveBillingRecordToServerNow(record){
           return !(rdk===dk && norm(r?.group)===group);
         });
       }else{
-        // Pri zástupe nechaj finančný záznam zástupcu a aktualizuj iba jeho
-        // informačný riadok, aby sa nepočítal dvakrát.
-        rows=rows.filter(r=>String(r?.key||'')!==String(record.key||''));
+        rows=rows.filter(r=>String(r?.key||'')!==String(cleanRecord.key||''));
       }
-      rows.push(record);
-      // NOVÉ ULOŽENIE MUSÍ ZRUŠIŤ STARÚ MAZACIU ZNAČKU.
-      // Ak Peter (alebo iný tréner) v minulosti vymazal rovnaké vyúčtovanie,
-      // v billingDeleteOrder zostala značka. Nové vyúčtovanie sa síce správne
-      // zapísalo na server, ale klient ho potom pri merge znovu odfiltroval.
-      // Pri novom uložení je preto tento záznam jednoznačne platný a jeho
-      // starú delete značku treba odstrániť aj priamo v serverovej transakcii.
-      const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
-      const recordCanonicalKey=`${norm(record.trainer)}|${dk}|${group}`;
+      rows.push(cleanRecord);
+      const del=(data?.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?{...data.billingDeleteOrder}:{};
+      const recordCanonicalKey=`${norm(cleanRecord.trainer)}|${dk}|${group}`;
       delete del[recordCanonicalKey];
-      tx.set(ref,{records:rows,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
-    });
-    console.log('✅ Vyúčtovanie okamžite uložené na server:',record.trainer,record.date,record.group);
+      return {rows,del};
+    };
+    // Primárne atomická transakcia.
+    try{
+      await db.runTransaction(async tx=>{
+        const snap=await tx.get(ref);
+        const data=snap.exists?(snap.data()||{}):{};
+        const merged=mergeRows(data);
+        tx.set(ref,{records:merged.rows,billingDeleteOrder:merged.del,updatedAt:Date.now()},{merge:false});
+      });
+      console.log('✅ Vyúčtovanie okamžite uložené na server:',cleanRecord.trainer,cleanRecord.date,cleanRecord.group);
+      return true;
+    }catch(txErr){
+      console.warn('Billing transaction failed, skúšam bezpečný fallback:',txErr);
+    }
+    // Fallback pre mobil/krátku Firestore chybu: čerstvý GET + SET.
+    // Nestrieľame lokálny snapshot naslepo – najprv vždy načítame aktuálny server.
+    const snap=await ref.get();
+    const data=snap.exists?(snap.data()||{}):{};
+    const merged=mergeRows(data);
+    await ref.set({records:merged.rows,billingDeleteOrder:merged.del,updatedAt:Date.now()},{merge:false});
+    console.log('✅ Vyúčtovanie uložené fallback zápisom:',cleanRecord.trainer,cleanRecord.date,cleanRecord.group);
     return true;
   }catch(e){
-    console.warn('❌ Okamžitý zápis vyúčtovania na server zlyhal:',e);
+    console.error('❌ Zápis vyúčtovania na server zlyhal:',e);
     return false;
   }
 }
 window.saveBillingRecordToServerNow=saveBillingRecordToServerNow;
 
-function saveTrainingBilling(saveButton){
+async function saveTrainingBilling(saveButton){
+  // Tlačidlo musí reagovať OKAMŽITE – ešte pred každým zápisom/synchronizáciou.
+  // Ak by niektorá pomocná funkcia zlyhala, používateľ stále jasne vidí, že
+  // klik bol prijatý. Serverový zápis potom prebehne samostatne s opakovaním.
+  if(saveButton){
+    try{
+      saveButton.disabled=true;
+      saveButton.classList.add('billing-saved');
+      saveButton.textContent='✓ ULOŽENÉ';
+    }catch(e){}
+  }
   // Tréner môže spätne upraviť svoju vlastnú dochádzku a znovu uložiť
   // vyúčtovanie vrátane členského a registračného.
   // Pri opätovnom uložení sa existujúci záznam aktualizuje.
@@ -12379,12 +12399,12 @@ function saveTrainingBilling(saveButton){
   // Pred uložením vyúčtovania vždy zapíšeme kompletný stav dochádzky.
   // Je to autoritatívna kópia aj pre členov označených NOVÝ, ktorí nie sú
   // súčasťou attendanceSnapshot (ten je určený pre platených/prítomných).
-  saveCurrentTrainingAttendance();
-  commitMembershipDraftsForCurrentTraining();
-  commitRegistrationDraftsForCurrentTraining();
+  try{ saveCurrentTrainingAttendance(); }catch(e){ console.warn('Uloženie dochádzky pred vyúčtovaním zlyhalo:',e); }
+  try{ commitMembershipDraftsForCurrentTraining(); }catch(e){ console.warn('Commit členského pred vyúčtovaním zlyhal:',e); }
+  try{ commitRegistrationDraftsForCurrentTraining(); }catch(e){ console.warn('Commit registračného pred vyúčtovaním zlyhal:',e); }
   // Po commitnutí platieb ešte raz uložíme stav, aby sa do histórie dostali
   // aj všetky aktuálne zmeny z tejto obrazovky.
-  saveCurrentTrainingAttendance();
+  try{ saveCurrentTrainingAttendance(); }catch(e){ console.warn('Druhé uloženie dochádzky zlyhalo:',e); }
   const fee=trainingFee();
   const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
   const trainingPaid=attendanceState.members.filter(m=>m.training&&!m.newMember&&!m.trainingAccount).length;
@@ -12528,57 +12548,44 @@ function saveTrainingBilling(saveButton){
   // Označ ho ako pending, aby ho starší realtime snapshot dočasne neodstránil.
   billingSaveInFlight.set(recordCanonical, record);
   persistMonthlyBillingRecords(true);
-  // Okamžite prekresli „Moje vyúčtovanie“ – bez čakania na veľký refresh.
-  try{
-    if(typeof renderMonthlyBilling==='function'){
-      renderMonthlyBilling();
-      try{ history.replaceState(null,'','#trainer-month'); }catch(e){ location.hash='trainer-month'; }
+  // Obrazovku zatiaľ neprekresľujeme – zelené tlačidlo musí zostať viditeľné
+  // až do potvrdenia zápisu na server.
+  // KRITICKÉ: zápis ide na autoritatívny billing dokument.
+  // Počkáme na potvrdenie a pri krátkom Firestore výpadku ho zopakujeme.
+  let ok=false;
+  for(let attempt=1; attempt<=4 && !ok; attempt++){
+    try{ ok=await saveBillingRecordToServerNow(record); }catch(e){
+      console.warn('Billing save attempt '+attempt+' zlyhal:',e);
+      ok=false;
     }
-  }catch(e){ console.warn('Okamžité zobrazenie nového vyúčtovania:',e); }
-  // KRITICKÉ: zápis ide okamžite na autoritatívny billing dokument.
-  saveBillingRecordToServerNow(record).then(ok=>{
-    billingSaveInFlight.delete(recordCanonical);
-    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
-
-    // Po úspešnom zápise si bežný tréner okamžite načíta AUTORITATÍVNY
-    // záznam priamo zo servera a až potom prekreslí svoje vyúčtovanie.
-    // Týmto sa odstráni rozdiel medzi stavom "na serveri je" a "v Moje
-    // vyúčtovanie nie je". Platí rovnako pre Petra aj ostatných trénerov.
-    const refreshOwnBillingFromServer=()=>{
-      try{
-        if(typeof db==='undefined' || !db || typeof window.mergeBillingRecords!=='function') return;
-        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
-          if(doc.exists){
-            const data=doc.data()||{};
-            if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
-            if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
-          }
-          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-        }).catch(()=>{
-          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-        });
-      }catch(e){
-        try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
-      }
-    };
-    if(ok) refreshOwnBillingFromServer();
-    else { try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){} }
-    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-  }).catch(err=>{
-    billingSaveInFlight.delete(recordCanonical);
-    console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
-    try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-  });
-  lockAttendanceFully();
-  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
-  if(saveButton){
-    saveButton.classList.add('billing-saved');
-    saveButton.textContent='✓ ULOŽENÉ';
+    if(!ok && attempt<4) await new Promise(resolve=>setTimeout(resolve,400*attempt));
   }
+  billingSaveInFlight.delete(recordCanonical);
+  if(ok){
+    // Po potvrdení servera si načítame autoritatívny dokument ešte raz.
+    // Hlavný tréner ho sleduje realtime listenerom a týmto dostane rovnaký stav.
+    try{
+      if(typeof db!=='undefined' && db){
+        const doc=await db.collection('guard-trainer-billing').doc('all').get();
+        if(doc.exists){
+          const data=doc.data()||{};
+          if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
+          if(Array.isArray(data.records) && typeof window.mergeBillingRecords==='function') window.mergeBillingRecords(data.records,'post-save');
+        }
+      }
+    }catch(e){ console.warn('Post-save billing refresh failed:',e); }
+  }else{
+    console.warn('❌ Vyúčtovanie sa nepodarilo odoslať na server ani po 4 pokusoch.');
+  }
+  setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
+  try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+  lockAttendanceFully();
+  toast(ok ? (substitution ? '✓ Vyúčtovanie uložené a odoslané – zástup: '+activeTrainer : '✓ Vyúčtovanie uložené a odoslané na server.') : '⚠ Vyúčtovanie je uložené lokálne, serverový zápis zlyhal.');
+
   // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
   // ani na ďalší veľký refresh zariadenia.
   try{
+    if(saveButton) saveButton.disabled=false;
     location.hash='trainer-month';
     if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
   }catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }

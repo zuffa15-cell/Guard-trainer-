@@ -1068,26 +1068,6 @@ function pushToCloud(force = false){
     .catch(e=>console.warn('Push fail',e));
 }
 
-// Realtime UI: po prijatí zmeny dochádzky z cloudu musí trénerov zoznam
-// okamžite prepočítať počty tréningov. Predtým sa síce dáta zmenili v
-// localStorage, ale otvorená obrazovka zostala vykreslená zo starého stavu.
-window.addEventListener('cloud-sync-update',()=>{
-  try{
-    const hash=String(location.hash||'');
-    if(hash==='#members' || hash==='#memberAttendance' || hash==='#memberProfile'){
-      if(hash==='#members' && typeof renderMembers==='function') renderMembers();
-      else if(hash==='#memberAttendance'){
-        const id=Number(history.state?.gtId||0);
-        if(id && typeof renderMemberAttendance==='function') renderMemberAttendance(id);
-      }
-      else if(hash==='#memberProfile'){
-        const id=Number(history.state?.gtId||0);
-        if(id && typeof renderMemberProfile==='function') renderMemberProfile(id);
-      }
-    }
-  }catch(e){ console.warn('Realtime redraw členov zlyhal',e); }
-});
-
 // 3. Intercept localStorage.setItem aby sa auto-syncovalo - s ochranou proti slučke
 localStorage.setItem = function(key, value){
   originalSetItem(key, value);
@@ -1469,7 +1449,7 @@ body{overflow-x:hidden}
   overflow-y:hidden;
   -webkit-overflow-scrolling:touch;
   overscroll-behavior-x:contain;
-  touch-action:pan-x pan-y;
+  touch-action:pan-x;
   border:1px solid #8c6800;
   border-radius:6px;
   scrollbar-width:auto;
@@ -1681,10 +1661,10 @@ body{overflow-x:hidden}
 .member-profile-box{border:1px solid #594400;border-radius:8px;padding:11px;margin-top:9px}.member-profile-box h3{font-size:12px;color:#ffd12b;margin:0 0 9px}.member-form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.member-form-grid label{font-size:9px;color:#aaa;display:flex;flex-direction:column;gap:4px}.member-form-grid input,.member-form-grid select{background:#090909;border:1px solid #594400;color:#eee;border-radius:5px;padding:8px}.member-payment-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.member-payment-cards>div{border:1px solid #49390b;border-radius:6px;padding:9px}.profile-payment-edit{display:block;width:100%;margin-top:7px;background:#111;border:1px solid #b58b18;color:#ffd12b;border-radius:5px;padding:6px 5px;font-size:8px;font-weight:800;cursor:pointer}.member-payment-editor-name{font-size:15px;font-weight:800;color:#ffd12b;margin:-2px 0 10px}.member-payment-cards b{display:block;font-size:9px;color:#aaa}.member-payment-cards strong{display:block;margin:6px 0;font-size:13px}.member-payment-cards .ok{color:#43d05a}.member-payment-cards .bad{color:#ef3939}.member-payment-cards small{color:#888;font-size:9px}.attendance-history{display:grid;grid-template-columns:1fr 1fr;gap:7px;font-size:11px}.attendance-history span{color:#888}.profile-delete-box button{background:#160606;border:1px solid #d92828;color:#f23a3a;border-radius:5px;padding:10px 14px;font-weight:800}
 @media(max-width:700px){.member-list-head{display:none}.member-row{grid-template-columns:40px 1.5fr 45px 1fr 65px 20px;gap:5px}.member-row .member-contact{display:none}.member-avatar{width:36px;height:36px}.member-name b{font-size:12px}.member-name span{font-size:9px}.member-group-col small{display:none}.member-pay span{font-size:7px}.member-filters{grid-template-columns:1fr 1fr}.member-filters input{grid-column:1/3}.member-stats span{font-size:8px}.member-stats b{font-size:19px}.member-profile-card{grid-template-columns:58px 1fr 1fr}.member-big-avatar{width:52px;height:52px;font-size:24px}.member-status{grid-column:2/4}.member-form-grid{grid-template-columns:1fr 1fr}.member-payment-cards{grid-template-columns:1fr 1fr}.member-payment-cards>div:last-child{grid-column:1/3}}
 
-.member-detail-page{padding-bottom:80px}.member-detail-top .top-more{border:1px solid #594400;border-radius:7px;color:#ffd12b;padding:8px 12px;font-size:18px}.member-hero{border:1px solid #735600;border-radius:9px;padding:12px;display:grid;grid-template-columns:220px 1.5fr 150px;gap:14px;align-items:center}.member-photo-wrap{position:relative;width:190px}.member-photo-wrap .member-big-avatar{width:175px;height:175px;border:1px solid #e4ad19;font-size:65px}.photo-btn{position:absolute;right:0;bottom:5px;width:48px;height:48px;border-radius:50%;background:#050505;border:1px solid #e4ad19;color:#ffd12b;font-size:19px;display:flex;align-items:center;justify-content:center}.member-identity{padding-left:60px;box-sizing:border-box;min-width:0}.member-identity h1{font-size:36px;margin:0;text-transform:uppercase}.member-identity h2{font-size:28px;margin:2px 0 12px}.hero-groups{display:flex;gap:9px}.hero-groups button{background:none;border:0;padding:0}.hero-groups button .member-group{width:49px;height:49px;font-size:18px;border:2px solid #222}.hero-groups button.chosen .member-group{box-shadow:0 0 0 2px #ffd12b inset}.hero-training{height:155px;border:1px solid #594400;border-radius:8px;display:flex;align-items:stretch;justify-content:center;text-align:center;box-sizing:border-box;padding:0}.hero-training b{font-size:40px;line-height:1.05;text-align:center;width:100%}.hero-training span{font-size:18px;line-height:1.2;text-align:center;width:100%}.member-stats-btn{width:100%;height:100%;margin:0;background:#0b0b0b;border:0;color:#ffd12b;border-radius:7px;padding:8px 6px;font-weight:800;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.member-stats-btn .member-stats-label{font-size:17px!important;color:#eee!important;line-height:1.1!important}.member-stats-btn strong{font-size:40px;line-height:1.05;color:#ffd12b}.member-stats-btn .member-stats-title{font-size:15px!important;line-height:1.1!important;color:#ffd12b!important;border-top:1px solid #594400;padding-top:8px;width:88%;text-transform:uppercase}.member-stats-btn:active{background:#111}.member-training-stats-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px 16px 94px;box-sizing:border-box;overflow:hidden}.member-training-stats-panel{width:min(430px,100%);max-height:calc(88vh - 78px);overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;background:#080808;border:1px solid #735600;border-radius:10px;padding:15px;box-shadow:0 10px 40px #000}.member-training-stats-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.member-training-stats-head h3{margin:0;color:#ffd12b;font-size:18px}.member-training-stats-close{background:none;border:1px solid #594400;color:#ddd;border-radius:5px;padding:5px 9px;font-size:18px}.member-training-stats-total{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}.member-training-stats-total>div{border:1px solid #594400;border-radius:7px;padding:10px;text-align:center;min-width:0;box-sizing:border-box}.member-training-stats-total b{display:block;color:#ffd12b;font-size:24px}.member-training-stats-total span{font-size:9px;color:#aaa}.member-month-card{position:relative;border:1px solid #594400;border-radius:7px;min-height:82px;display:flex;align-items:center;justify-content:center;text-align:center;box-sizing:border-box}.member-month-card strong{display:block;font-size:14px;color:#eee;padding:0 42px}.member-month-card b{display:block;color:#ffd12b;font-size:25px;margin-top:4px}.member-month-arrow{position:absolute;top:50%;transform:translateY(-50%);width:34px;height:42px;background:#111;border:1px solid #594400;color:#ffd12b;border-radius:6px;font-size:24px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}.member-month-arrow.left{left:5px}.member-month-arrow.right{right:5px}.member-month-arrow:disabled{opacity:.25;cursor:default}.member-stats-section-title{margin:14px 0 7px;color:#ffd12b;font-size:13px;font-weight:800}.member-stats-dates{display:flex;flex-direction:column;gap:5px}.member-stats-date{display:grid;grid-template-columns:76px minmax(0,1fr) 34px 34px;align-items:center;gap:7px;border:1px solid #352a0a;border-radius:5px;padding:5px 7px;min-height:38px;box-sizing:border-box}.member-stats-date b{color:#ffd12b;font-size:11px;line-height:1.05}.member-stats-date span{color:#aaa}.member-stats-group-badge{display:flex;width:30px;height:30px;border-radius:5px;align-items:center;justify-content:center;color:#fff;font-style:normal;font-weight:900;font-size:11px;justify-self:end;box-shadow:inset 0 1px 2px rgba(255,255,255,.2)}
+.member-detail-page{padding-bottom:80px}.member-detail-top .top-more{border:1px solid #594400;border-radius:7px;color:#ffd12b;padding:8px 12px;font-size:18px}.member-hero{border:1px solid #735600;border-radius:9px;padding:12px;display:grid;grid-template-columns:220px 1.5fr 150px;gap:14px;align-items:center}.member-photo-wrap{position:relative;width:190px}.member-photo-wrap .member-big-avatar{width:175px;height:175px;border:1px solid #e4ad19;font-size:65px}.photo-btn{position:absolute;right:0;bottom:5px;width:48px;height:48px;border-radius:50%;background:#050505;border:1px solid #e4ad19;color:#ffd12b;font-size:19px;display:flex;align-items:center;justify-content:center}.member-identity{padding-left:60px;box-sizing:border-box;min-width:0}.member-identity h1{font-size:36px;margin:0;text-transform:uppercase}.member-identity h2{font-size:28px;margin:2px 0 12px}.hero-groups{display:flex;gap:9px}.hero-groups button{background:none;border:0;padding:0}.hero-groups button .member-group{width:49px;height:49px;font-size:18px;border:2px solid #222}.hero-groups button.chosen .member-group{box-shadow:0 0 0 2px #ffd12b inset}.hero-training{height:155px;border:1px solid #594400;border-radius:8px;display:flex;align-items:stretch;justify-content:center;text-align:center;box-sizing:border-box;padding:0}.hero-training b{font-size:40px;line-height:1.05;text-align:center;width:100%}.hero-training span{font-size:18px;line-height:1.2;text-align:center;width:100%}.member-stats-btn{width:100%;height:100%;margin:0;background:#0b0b0b;border:0;color:#ffd12b;border-radius:7px;padding:8px 6px;font-weight:800;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.member-stats-btn .member-stats-label{font-size:17px!important;color:#eee!important;line-height:1.1!important}.member-stats-btn strong{font-size:40px;line-height:1.05;color:#ffd12b}.member-stats-btn .member-stats-title{font-size:15px!important;line-height:1.1!important;color:#ffd12b!important;border-top:1px solid #594400;padding-top:8px;width:88%;text-transform:uppercase}.member-stats-btn:active{background:#111}.member-training-stats-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px 16px 94px;box-sizing:border-box;overflow:hidden}.member-training-stats-panel{width:min(430px,100%);max-height:calc(88vh - 78px);overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;background:#080808;border:1px solid #735600;border-radius:10px;padding:15px;box-shadow:0 10px 40px #000}.member-training-stats-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.member-training-stats-head h3{margin:0;color:#ffd12b;font-size:18px}.member-training-stats-close{background:none;border:1px solid #594400;color:#ddd;border-radius:5px;padding:5px 9px;font-size:18px}.member-training-stats-total{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}.member-training-stats-total>div{border:1px solid #594400;border-radius:7px;padding:10px;text-align:center;min-width:0;box-sizing:border-box}.member-training-stats-total b{display:block;color:#ffd12b;font-size:24px}.member-training-stats-total span{font-size:9px;color:#aaa}.member-month-card{position:relative;border:1px solid #594400;border-radius:7px;min-height:82px;display:flex;align-items:center;justify-content:center;text-align:center;box-sizing:border-box}.member-month-card strong{display:block;font-size:14px;color:#eee;padding:0 42px}.member-month-card b{display:block;color:#ffd12b;font-size:25px;margin-top:4px}.member-month-arrow{position:absolute;top:50%;transform:translateY(-50%);width:34px;height:42px;background:#111;border:1px solid #594400;color:#ffd12b;border-radius:6px;font-size:24px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}.member-month-arrow.left{left:5px}.member-month-arrow.right{right:5px}.member-month-arrow:disabled{opacity:.25;cursor:default}.member-stats-section-title{margin:14px 0 7px;color:#ffd12b;font-size:13px;font-weight:800}.member-stats-dates{display:flex;flex-direction:column;gap:5px}.member-stats-date{display:grid;grid-template-columns:76px 1fr 34px;align-items:center;gap:7px;border:1px solid #352a0a;border-radius:5px;padding:5px 7px;min-height:38px;box-sizing:border-box}.member-stats-date b{color:#ffd12b;font-size:11px;line-height:1.05}.member-stats-date span{color:#aaa}.member-stats-group-badge{display:flex;width:30px;height:30px;border-radius:5px;align-items:center;justify-content:center;color:#fff;font-style:normal;font-weight:900;font-size:11px;justify-self:end;box-shadow:inset 0 1px 2px rgba(255,255,255,.2)}
 .member-stats-date .member-stats-group-badge{background-image:none!important;border:0!important;opacity:1!important;color:#fff!important;line-height:30px;text-align:center;}.profile-meta-icon{display:inline-flex!important;align-items:center;justify-content:center;font-style:normal}.member-month-history{display:flex;flex-direction:column;gap:5px}.member-month-history-row{display:grid;grid-template-columns:90px 1fr 30px;align-items:center;gap:8px;border:1px solid #352a0a;border-radius:5px;padding:7px 9px}.member-month-history-row .month-name{color:#eee;font-size:11px}.member-month-history-row .bar{height:9px;background:#191919;border-radius:5px;overflow:hidden;border:1px solid #302600}.member-month-history-row .bar i{display:block;height:100%;background:#ffd12b;border-radius:5px}.member-month-history-row strong{color:#ffd12b;text-align:right}.member-training-stats-close{background:#e52b2b!important;border-color:#e52b2b!important;color:#fff!important;width:42px;height:42px;padding:0!important;font-size:26px!important;display:flex;align-items:center;justify-content:center}.member-meta{grid-column:1/4;display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid #594400;border-radius:8px;padding:13px}.member-meta>div{padding:0 20px;border-right:1px solid #594400}.member-meta>div:last-child{border:0}.member-meta span{color:#ffd12b;font-size:24px;float:left;margin-right:14px}.member-meta small,.member-meta b{display:block}.member-meta small{color:#bbb}.member-meta b{font-size:17px;margin-top:6px}.member-detail-box{border:1px solid #594400;border-radius:9px;padding:14px;margin-top:12px}.member-detail-box h3{color:#ffd12b;margin:0 0 10px;font-size:19px}.application-main{display:flex;align-items:center;gap:15px;min-height:70px}.app-icon{color:#ffd12b;font-size:34px}.application-main div:nth-child(2){display:flex;flex-direction:column;font-size:18px}.application-main div:nth-child(2) span{color:#bbb;margin-top:5px}.application-main button{margin-left:auto;background:none;border:1px solid #e4ad19;border-radius:7px;color:#ffd12b;padding:12px 20px;font-weight:800;font-size:14px}.detail-chevron{font-size:34px;color:#aaa}.complete-line{border-top:1px solid #594400;padding-top:12px;color:#43d05a;font-size:17px}.box-heading{display:flex;justify-content:space-between;align-items:center}.box-heading button{background:#e9a90d;border:1px solid #ffc52d;border-radius:7px;padding:11px 20px;font-weight:900;font-size:14px}.account-paid-type,.account-paid-label{color:#4fbc35!important}.account-paid-check{background:#4fbc35!important;color:#111!important}.payment-status-paid{color:#4fbc35!important;font-weight:700}.payment-status-unpaid{color:#ef3939!important;font-weight:700}.account-history-row{border-left:3px solid #ff3b3b;padding-left:10px}
 .payment-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.payment-cards>div{border:1px solid #594400;border-radius:7px;padding:14px;text-align:center;min-height:165px;display:flex;flex-direction:column;align-items:center;gap:7px}.payment-cards b{font-size:13px}.payment-cards label,.payment-cards small{color:#bbb}.payment-cards strong{background:#4fbc35;color:#111;border-radius:50%;width:35px;height:35px;display:flex;align-items:center;justify-content:center;font-size:22px}.payment-cards em{font-style:normal;font-size:24px;font-weight:800}.payment-cards span{color:#43d05a}.history-row{width:100%;margin-top:10px;background:none;border:0;border-top:1px solid #594400;color:#ffd12b;text-align:left;padding:14px 8px;font-size:16px}.history-row span{float:right;font-size:28px}.attendance-row{width:100%;display:flex;align-items:center;gap:15px;background:#050505;color:#ddd;text-align:left}.attendance-row>span{color:#ffd12b;font-size:30px}.attendance-row h3{margin:0;color:#ffd12b}.attendance-row p{margin:4px 0 0;color:#aaa}.attendance-row>b{margin-left:auto;color:#ffd12b;font-size:30px}.notes-line{display:grid;grid-template-columns:1fr auto;gap:10px}.notes-line i{border:1px solid #594400;border-radius:7px;padding:13px;color:#aaa}.notes-line button{background:none;border:1px solid #594400;color:#ffd12b;border-radius:7px;padding:10px 18px}.edit-member-btn{width:100%;margin-top:12px;background:#e8a80e;border:1px solid #ffc52d;color:#111;border-radius:7px;padding:12px;font-size:16px;font-weight:900}.group-edit-note{display:block;color:#888;font-size:10px;margin-top:6px}
-@media(max-width:700px){.member-identity{padding-left:8px}.member-stats-date{grid-template-columns:68px minmax(0,1fr) 30px 30px;min-height:34px;padding:4px 6px;gap:5px}.member-stats-date b{font-size:10px}.member-stats-group-badge{width:28px;height:28px;font-size:10px}.member-hero{grid-template-columns:80px 1fr;gap:8px}.member-photo-wrap{width:75px}.member-photo-wrap .member-big-avatar{width:70px;height:70px;font-size:30px}.photo-btn{width:28px;height:28px;font-size:12px;right:-2px}.member-identity h1{font-size:23px}.member-identity h2{font-size:19px;margin-bottom:6px}.hero-groups{gap:4px}.hero-groups button .member-group{width:29px;height:29px;font-size:11px}.hero-training{grid-column:1/3;height:65px}.hero-training b{font-size:25px}.hero-training span{font-size:11px}.member-meta{grid-column:1/3;grid-template-columns:1fr 1fr 1fr;padding:8px}.member-meta>div{padding:0 5px}.member-meta span{font-size:14px;margin-right:4px}.member-meta small,.member-meta b{font-size:8px}.member-detail-box{padding:10px}.application-main button{padding:8px;font-size:9px}.payment-cards{grid-template-columns:1fr 1fr;gap:7px}.payment-cards>div{min-height:115px;padding:9px}.payment-cards em{font-size:19px}.payment-cards b{font-size:9px}.notes-line{grid-template-columns:1fr}.edit-member-btn{font-size:14px}}
+@media(max-width:700px){.member-identity{padding-left:8px}.member-stats-date{grid-template-columns:68px 1fr 30px;min-height:34px;padding:4px 6px;gap:5px}.member-stats-date b{font-size:10px}.member-stats-group-badge{width:28px;height:28px;font-size:10px}.member-hero{grid-template-columns:80px 1fr;gap:8px}.member-photo-wrap{width:75px}.member-photo-wrap .member-big-avatar{width:70px;height:70px;font-size:30px}.photo-btn{width:28px;height:28px;font-size:12px;right:-2px}.member-identity h1{font-size:23px}.member-identity h2{font-size:19px;margin-bottom:6px}.hero-groups{gap:4px}.hero-groups button .member-group{width:29px;height:29px;font-size:11px}.hero-training{grid-column:1/3;height:65px}.hero-training b{font-size:25px}.hero-training span{font-size:11px}.member-meta{grid-column:1/3;grid-template-columns:1fr 1fr 1fr;padding:8px}.member-meta>div{padding:0 5px}.member-meta span{font-size:14px;margin-right:4px}.member-meta small,.member-meta b{font-size:8px}.member-detail-box{padding:10px}.application-main button{padding:8px;font-size:9px}.payment-cards{grid-template-columns:1fr 1fr;gap:7px}.payment-cards>div{min-height:115px;padding:9px}.payment-cards em{font-size:19px}.payment-cards b{font-size:9px}.notes-line{grid-template-columns:1fr}.edit-member-btn{font-size:14px}}
 
 /* Member list simplified */
 .member-row{grid-template-columns:48px 1.8fr 1fr 1.1fr 55px 24px}
@@ -8019,7 +7999,7 @@ function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=
  overlay.className='member-training-stats-overlay';
  const content = view==='days' ? `
    <div class="member-stats-section-title">${monthLabel.toUpperCase()} – TRÉNINGY PODĽA DNÍ</div>
-   <div class="member-stats-dates">${monthRows.length?monthRows.map(x=>{const code=String(x.group||'—').trim().toUpperCase(); const color=getGroupColor(code,'gold'); const adminDelete=isAdmin()?`<button type="button" title="Vymazať tréning" style="width:30px;height:30px;border:1px solid #8b2525;border-radius:6px;background:#351010;color:#ff5b5b;font-size:16px;font-weight:900;cursor:pointer;" onclick="event.stopPropagation();deleteMemberTrainingFromStats(${m.id},'${String(x.date).replace(/'/g,"\'")}','${String(code).replace(/'/g,"\'")}')">×</button>`:'<span></span>'; return `<div class="member-stats-date"><b>${x.date}</b><span></span><i class="member-stats-group-badge" style="background:${color}!important;background-image:none!important;">${escapeHtml(code)}</i>${adminDelete}</div>`;}).join(''):'<div class="stats-empty">V tomto mesiaci nemá zaznamenanú účasť.</div>'}</div>
+   <div class="member-stats-dates">${monthRows.length?monthRows.map(x=>{const code=String(x.group||'—').trim().toUpperCase(); const color=getGroupColor(code,'gold'); return `<div class="member-stats-date"><b>${x.date}</b><span></span><i class="member-stats-group-badge" style="background:${color}!important;background-image:none!important;">${escapeHtml(code)}</i></div>`;}).join(''):'<div class="stats-empty">V tomto mesiaci nemá zaznamenanú účasť.</div>'}</div>
    <button class="member-stats-back-months" onclick="renderMemberTrainingStats(${m.id},${monthOffset},'months',0)">‹&nbsp; SPÄŤ NA PREHĽAD MESIACOV</button>
  ` : view==='year' ? `
    <div class="member-stats-year-head">
@@ -8052,141 +8032,6 @@ function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=
  overlay.addEventListener('click',()=>overlay.remove());
  app.appendChild(overlay);
 }
-
-
-// ADMIN: vymazanie konkrétneho tréningu priamo zo štatistiky člena.
-// Používa rovnakú autoritatívnu dochádzku ako obrazovka Dochádzka a zároveň
-// odstráni všetky súvisiace vyúčtovania pre daný dátum + skupinu.
-function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
-  try{
-    if(!isAdmin()){ toast('Túto funkciu môže použiť iba administrátor.'); return false; }
-    const member=membersData.find(x=>Number(x.id)===Number(memberId));
-    const group=String(groupValue||'').trim().toUpperCase();
-    const parsed=parsePaymentDate(dateValue);
-    if(!member||!group||!parsed){ toast('Tréning sa nepodarilo identifikovať.'); return false; }
-    const iso=`${parsed.year}-${String(parsed.month).padStart(2,'0')}-${String(parsed.day).padStart(2,'0')}`;
-    const key=attendanceDeleteKey(iso,group);
-    if(!confirm(`Naozaj vymazať tréning člena?\n\n${String(dateValue)} – skupina ${group}\n\nVymaže sa iba účasť tohto člena. Tréning a jeho vyúčtovanie zostanú zachované.`)) return false;
-    const deletedAt=Date.now();
-
-    // Autoritatívne odstránenie iba dochádzky konkrétneho člena.
-    // DÔLEŽITÉ: nemažeme celý záznam tréningu ani jeho billing.
-    const attendance=trainingAttendanceByGroup[key];
-    if(attendance && typeof attendance==='object'){
-      const targetSurname=String(member.surname||'').trim().toUpperCase();
-      const targetName=String(member.name||'').trim().toUpperCase();
-      const sameMember=x=>String(x?.surname||'').trim().toUpperCase()===targetSurname && String(x?.name||'').trim().toUpperCase()===targetName;
-      ['members','attendance','rows'].forEach(prop=>{
-        if(Array.isArray(attendance[prop])) attendance[prop]=attendance[prop].filter(x=>!sameMember(x));
-      });
-      if(Array.isArray(attendance)) trainingAttendanceByGroup[key]=attendance.filter(x=>!sameMember(x));
-    }
-    try{
-      // Ulož aktuálny záznam dochádzky bez zmazania celého tréningu.
-      originalSetItem('gt-training-attendance',JSON.stringify(trainingAttendanceByGroup));
-    }catch(e){}
-
-    // Záznam vymazania konkrétneho člena je uložený samostatne, aby sa
-    // vzdialený klient nesnažil člena do tohto tréningu znovu doplniť.
-    try{
-      const raw=originalGetItem('gt-attendance-admin-edits-v1')||'{}';
-      const o=JSON.parse(raw)||{};
-      const memberKey=`${key}|${Number(member.id)}`;
-      o[memberKey]=deletedAt;
-      originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(o));
-    }catch(e){}
-    persistTrainingAttendanceHistory();
-
-    // Pošli zmenu dochádzky na server. Nepoužívame attendanceDeleteOrder pre
-    // celý tréning, pretože by tým zmizol tréning aj ostatným členom.
-    try{
-      if(typeof syncAttendanceMemberDeleteToCloud==='function'){
-        syncAttendanceMemberDeleteToCloud(key,member,deletedAt);
-      }
-    }catch(e){ console.warn('Member attendance delete cloud sync',e); }
-
-    // AKTUALIZUJ iba finančné údaje tohto jedného člena v existujúcom
-    // vyúčtovaní. Samotný riadok tréningu zostáva zachovaný.
-    const targetNormSurname=String(member.surname||'').trim().toUpperCase();
-    const targetNormName=String(member.name||'').trim().toUpperCase();
-    const targetKey=`${targetNormSurname}|${targetNormName}`;
-    const affected=[];
-    (monthlyBillingRecords||[]).forEach((r,i)=>{
-      if(r?.substituteReference) return;
-      const d=parsePaymentDate(r?.date);
-      const rIso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
-      if(rIso!==iso || String(r?.group||'').trim().toUpperCase()!==group) return;
-      affected.push({r,i});
-    });
-
-    affected.forEach(({r,i})=>{
-      const snap=Array.isArray(r.attendanceStateSnapshot)?r.attendanceStateSnapshot.slice():[];
-      const paySnap=Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[];
-      const hasDetailedSnap=snap.length>0 || paySnap.length>0;
-      const filteredSnap=snap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
-      const filteredPay=paySnap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
-
-      // Ak máme kompletný snapshot, dopočítame presne nový stav.
-      let paying=Number(r.paying||0), trainingPaid=Number(r.trainingPaid||0), newCount=Number(r.newCount||0);
-      let trainingSum=Number(r.trainingSum||0), trainerReward=Number(r.trainerReward||0);
-      if(hasDetailedSnap){
-        const active=snap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
-        paying=active.filter(x=>!!x.training && !x.newMember).length;
-        trainingPaid=active.filter(x=>!!x.training && !x.newMember && !x.trainingAccount).length;
-        newCount=active.filter(x=>!!x.newMember).length;
-        const fee=Number(r.trainingFee||5);
-        trainingSum=trainingPaid*fee;
-        const rewardRate=Number(r.trainerRewardPerMember||0);
-        trainerReward=paying*rewardRate;
-      }else{
-        // Staršie vyúčtovania bez snapshotu: odčítaj člena iba ak bol v
-        // attendanceSnapshot evidovaný ako platiaci/prítomný.
-        const oldAtt=Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot:[];
-        const wasPresent=oldAtt.some(x=>String(x||'').trim().toUpperCase()===targetKey);
-        if(wasPresent){
-          const fee=Number(r.trainingFee||5);
-          paying=Math.max(0,paying-1);
-          trainingPaid=Math.max(0,trainingPaid-1);
-          trainingSum=Math.max(0,trainingSum-fee);
-          const rewardRate=Number(r.trainerRewardPerMember||0);
-          trainerReward=Math.max(0,trainerReward-rewardRate);
-        }
-        r.attendanceSnapshot=oldAtt.filter(x=>String(x||'').trim().toUpperCase()!==targetKey);
-      }
-
-      r.attendanceStateSnapshot=filteredSnap;
-      r.paymentSnapshot=filteredPay;
-      r.attendanceSnapshot=(Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot:[]).filter(x=>String(x||'').trim().toUpperCase()!==targetKey);
-      r.paying=paying;
-      r.trainingPaid=trainingPaid;
-      r.trainingSum=trainingSum;
-      r.trainerReward=trainerReward;
-      r.newCount=newCount;
-      r.trainingAccountCount=Math.max(0,Number(r.trainingAccountCount||0)-((snap.length && snap.some(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`===targetKey && x.training && !x.newMember && x.trainingAccount))?1:0));
-      r.gross=trainingSum+Number(r.membershipSum||0)+Number(r.registrationSum||0)+Number(r.otherPlus||0)-Number(r.otherMinus||0);
-      r.clubAmount=r.gross-trainerReward;
-      r.updatedAt=deletedAt;
-      monthlyBillingRecords[i]=r;
-    });
-
-    persistMonthlyBillingRecords();
-    // Zapíš aktualizovaný existujúci billing záznam na server bez mazania
-    // celého tréningu. saveBillingRecordToServerNow zachová riadok a iba ho
-    // nahradí novou verziou pre rovnaký dátum + skupinu.
-    affected.forEach(({r})=>{
-      try{ saveBillingRecordToServerNow(r); }catch(e){ console.warn('Billing member adjustment',e); }
-    });
-
-    try{ pushToCloud(true); }catch(e){}
-    toast('Účasť člena bola vymazaná. Vyúčtovanie tréningu zostalo zachované.');
-    setTimeout(()=>renderMemberTrainingStats(member.id,0,'days',0),250);
-  }catch(e){
-    console.error('DELETE MEMBER TRAINING FROM STATS',e);
-    toast('Účasť sa nepodarilo vymazať.');
-  }
-  return false;
-}
-window.deleteMemberTrainingFromStats=deleteMemberTrainingFromStats;
 
 function renderMemberAttendance(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
@@ -9564,23 +9409,6 @@ function saveAdminAttendanceDirectCloud(key, history, savedAt){
   }catch(e){ console.warn('Priamy cloud zápis admin dochádzky zlyhal',e); }
 }
 
-// Pri vymazaní adminom uložíme do priameho dokumentu trvalý TOMBSTONE.
-// Nestačí zmazať iba shared-db: tréner môže mať starší lokálny snapshot a pri
-// ďalšom otvorení by ho starý priamy dokument znovu vrátil.
-function deleteAdminAttendanceDirectCloud(key, deletedAt){
-  try{
-    if(!db || !cloudEnabled || !isAdmin()) return;
-    const docId=attendanceDirectDocId(key);
-    return db.collection(ATTENDANCE_DIRECT_COLLECTION).doc(docId).set({
-      key:String(key),
-      history:{},
-      deleted:true,
-      adminSavedAt:Number(deletedAt||Date.now()),
-      updatedAt:Date.now()
-    },{merge:true});
-  }catch(e){ console.warn('Priamy cloud tombstone admin dochádzky zlyhal',e); }
-}
-
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
   // Nové uloženie tréningu je vedomá obnova; odstráni prípadnú starú mazaciu značku.
@@ -10687,35 +10515,6 @@ async function refreshCurrentAttendanceFromCloud(){
           localSaved=Number(o[wantedKey]||0);
         }catch(e){}
         localSaved=Math.max(localSaved,getAttendancePendingSaveAt(attendanceState.date,attendanceState.group));
-        // Adminovo vymazanie je autoritatívny tombstone. Ak je novšie než
-        // posledné uloženie trénera, okamžite odstráň záznam aj z otvorenej
-        // dochádzky na trénerovom zariadení.
-        if(d.deleted===true && remoteAdmin>localSaved){
-          (attendanceState.members||[]).forEach(a=>{
-            a.training=false;
-            a.trainingAccount=false;
-            a.newMember=false;
-            a.newMemberDate='';
-          });
-          delete trainingAttendanceByGroup[wantedKey];
-          const delMap=JSON.parse(originalGetItem(ATTENDANCE_DELETE_ORDER_KEY)||'{}')||{};
-          delMap[wantedKey]=Math.max(Number(delMap[wantedKey]||0),remoteAdmin);
-          originalSetItem(ATTENDANCE_DELETE_ORDER_KEY,JSON.stringify(delMap));
-          Object.assign(attendanceDeleteOrder,delMap);
-          const order=JSON.parse(originalGetItem('gt-attendance-save-order-v1')||'{}')||{};
-          delete order[wantedKey];
-          originalSetItem('gt-attendance-save-order-v1',JSON.stringify(order));
-          const adminMap=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')||{};
-          adminMap[wantedKey]=remoteAdmin;
-          originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(adminMap));
-          const pending=JSON.parse(originalGetItem(ATTENDANCE_PENDING_SAVE_KEY)||'{}')||{};
-          delete pending[attendanceSaveOrderKey(attendanceState.date,attendanceState.group)];
-          originalSetItem(ATTENDANCE_PENDING_SAVE_KEY,JSON.stringify(pending));
-          persistTrainingAttendanceHistory();
-          refreshAttendance();
-          console.log('📥 Priame admin VYMAZANIE dochádzky načítané pre trénera',wantedKey);
-          return;
-        }
         // Samostatný admin dokument môže prepísať trénerovu dochádzku
         // IBA vtedy, ak je adminova úprava novšia než posledné uloženie trénera.
         // Predtým sa tu admin snapshot prijal vždy, takže staršia admin verzia
@@ -12348,7 +12147,7 @@ async function saveBillingRecordToServerNow(record){
 }
 window.saveBillingRecordToServerNow=saveBillingRecordToServerNow;
 
-async function saveTrainingBilling(saveButton){
+function saveTrainingBilling(saveButton){
   // Tréner môže spätne upraviť svoju vlastnú dochádzku a znovu uložiť
   // vyúčtovanie vrátane členského a registračného.
   // Pri opätovnom uložení sa existujúci záznam aktualizuje.
@@ -12515,46 +12314,53 @@ async function saveTrainingBilling(saveButton){
       try{ history.replaceState(null,'','#trainer-month'); }catch(e){ location.hash='trainer-month'; }
     }
   }catch(e){ console.warn('Okamžité zobrazenie nového vyúčtovania:',e); }
-  // KRITICKÉ: zápis musí byť potvrdený na autoritatívnom serveri ešte pred
-  // dokončením uloženia. Predtým sa navigácia spúšťala skôr a pri pomalšom
-  // Firestore sa záznam nemusel dostať k hlavnému trénerovi.
-  let serverSaved=false;
-  try{
-    serverSaved=await saveBillingRecordToServerNow(record);
-  }catch(e){
-    console.warn('Vyúčtovanie – serverový zápis zlyhal:',e);
-    serverSaved=false;
-  }
-
-  if(!serverSaved){
+  // KRITICKÉ: zápis ide okamžite na autoritatívny billing dokument.
+  saveBillingRecordToServerNow(record).then(ok=>{
     billingSaveInFlight.delete(recordCanonical);
-    toast('⚠️ Vyúčtovanie sa nepodarilo uložiť na server. Skús to znova.');
+    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
+
+    // Po úspešnom zápise si bežný tréner okamžite načíta AUTORITATÍVNY
+    // záznam priamo zo servera a až potom prekreslí svoje vyúčtovanie.
+    // Týmto sa odstráni rozdiel medzi stavom "na serveri je" a "v Moje
+    // vyúčtovanie nie je". Platí rovnako pre Petra aj ostatných trénerov.
+    const refreshOwnBillingFromServer=()=>{
+      try{
+        if(typeof db==='undefined' || !db || typeof window.mergeBillingRecords!=='function') return;
+        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
+          if(doc.exists){
+            const data=doc.data()||{};
+            if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
+            if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
+          }
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        }).catch(()=>{
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        });
+      }catch(e){
+        try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
+      }
+    };
+    if(ok) refreshOwnBillingFromServer();
+    else { try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){} }
+    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
+  }).catch(err=>{
+    billingSaveInFlight.delete(recordCanonical);
+    console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
     try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-    return false;
-  }
-
-  // Server zápis je potvrdený – záznam môže ísť z pending stavu.
-  billingSaveInFlight.delete(recordCanonical);
-  setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-
-  // Zelený stav zobrazíme ešte na tlačidle pred prechodom na vlastné
-  // vyúčtovanie, aby bolo jasné, že uloženie bolo úspešné.
+    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
+  });
+  lockAttendanceFully();
+  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
   if(saveButton){
     saveButton.classList.add('billing-saved');
     saveButton.textContent='✓ ULOŽENÉ';
   }
-
-  lockAttendanceFully();
-  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
-
-  // Až po potvrdení serverom prejdeme na vlastné vyúčtovanie. Hlavný tréner
-  // už v tomto okamihu môže záznam načítať z guard-trainer-billing/all.
+  // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
+  // ani na ďalší veľký refresh zariadenia.
   try{
     location.hash='trainer-month';
     if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
-  }catch(e){
-    try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
-  }
+  }catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
   return false;
 }
 
@@ -16227,7 +16033,7 @@ setTimeout(set,80);setTimeout(set,300)})();
   overflow-y:hidden !important;
   -webkit-overflow-scrolling:touch !important;
   overscroll-behavior-x:contain !important;
-  touch-action:pan-x pan-y !important;
+  touch-action:pan-x !important;
   scrollbar-width:auto !important;
 }
 .monthly-billing-page .monthly-table-wrap > .monthly-table{

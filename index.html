@@ -7877,23 +7877,25 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
-  // AUTORITATÍVNY ZDROJ ŠTATISTIKY ČLENA = ULOŽENÁ DOCHÁDZKA.
-  // Vyúčtovanie sa tu zámerne vôbec nepoužíva. Vymazaný tréning sa nesmie
-  // objaviť späť v štatistike ani po synchronizácii.
+  // AUTORITATÍVNY ZDROJ ŠTATISTIKY ČLENA = AKTUÁLNA ULOŽENÁ DOCHÁDZKA.
+  // Platby (zelené fajky) ani vyúčtovanie sa tu nikdy nepoužívajú.
+  // Dôležité: ak po synchronizácii existujú dve historické kľúče pre ten istý
+  // dátum/skupinu, prednosť má presne kanonický kľúč. Starý alias teda nemôže
+  // vrátiť už zmazanú/prázdnu dochádzku späť do štatistiky.
   const normName=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
   const surname=normName(member?.surname), name=normName(member?.name);
   const rows=[];
   const seen=new Set();
-
   const canonicalDate=v=>{
     const d=parsePaymentDate(v);
     return d ? `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}` : '';
   };
   const canonicalGroup=v=>String(v||'').trim().toUpperCase();
 
-  // Mazacie značky dochádzky majú prednosť pred historickým záznamom.
   let deleted={};
   try{ deleted=JSON.parse(originalGetItem('gt-attendance-delete-order-v1')||'{}')||{}; }catch(e){ deleted={}; }
+  let saveOrder={};
+  try{ saveOrder=JSON.parse(originalGetItem('gt-attendance-save-order-v1')||'{}')||{}; }catch(e){ saveOrder={}; }
 
   const isDeleted=(dateValue,groupValue)=>{
     const date=canonicalDate(dateValue), group=canonicalGroup(groupValue);
@@ -7902,53 +7904,66 @@ function getSavedMemberTrainingData(member){
     return Number(deleted[key]||0)>0;
   };
 
-  const addRow=(dateValue,groupValue)=>{
-    const d=parsePaymentDate(dateValue);
-    if(!d)return;
-    const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    const group=String(groupValue||'').trim();
-    if(!group || isDeleted(dateValue,group))return;
-    // Jeden reálne uložený tréning za deň. Ak sa rovnaká dochádzka objaví
-    // viackrát kvôli synchronizácii alebo členovi s B+C, započíta sa raz.
-    if(seen.has(dateKey))return;
-    seen.add(dateKey);
-    rows.push({
-      date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-      group:group,
-      dateObj:new Date(d.year,d.month-1,d.day)
-    });
-  };
-
+  // Zostav jeden autoritatívny snapshot pre každý dátum/skupinu.
+  // Ak existuje presný kanonický kľúč, ten má vždy prednosť pred starými aliasmi.
+  const histories={};
   try{
     if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
-      Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
-        const parts=String(histKey).split('|');
-        const dateValue=parts[0]||'';
-        const groupValue=parts.slice(1).join('|')||'';
-        if(isDeleted(dateValue,groupValue))return;
-        const hist=trainingAttendanceByGroup[histKey];
+      Object.keys(trainingAttendanceByGroup).forEach(rawKey=>{
+        const parts=String(rawKey).split('|');
+        const d=canonicalDate(parts[0]||'');
+        const g=canonicalGroup(parts.slice(1).join('|')||'');
+        if(!d || !g)return;
+        const canonical=`${d}|${g}`;
+        const hist=trainingAttendanceByGroup[rawKey];
         if(!hist || typeof hist!=='object')return;
-
-        let memberState=null;
-        Object.keys(hist).some(k=>{
-          const kp=String(k).split('|');
-          if(normName(kp[0])===surname && normName(kp.slice(1).join('|'))===name){
-            memberState=hist[k]; return true;
-          }
-          return false;
-        });
-
-        // Do štatistiky sa počíta každý člen, ktorý bol v dochádzke označený
-        // ako TRÉNING alebo NOVÝ. Stav NOVÝ je tiež účasť na danom tréningu,
-        // preto sa musí započítať do počtu tréningov člena.
-        if(!memberState) return;
-        // TRÉNING aj NOVÝ sú platná účasť. Neberieme nič z vyúčtovania.
-        if(memberState.training===true || memberState.newMember===true){
-          addRow(dateValue,groupValue);
+        const isExact=String(rawKey)===canonical;
+        // Všetky aliasy rovnakého dátumu/skupiny predstavujú ten istý tréning.
+        // Autoritatívny je NAJNOVŠÍ uložený snapshot, nie názov kľúča. Predtým
+        // mal presný kanonický kľúč prednosť aj vtedy, keď bol starší a obsahoval
+        // starú skúšobnú dochádzku (napr. Anderová 2.9.).
+        const stamp=Number(saveOrder[rawKey]||saveOrder[canonical]||0);
+        const prev=histories[canonical];
+        if(!prev || stamp>prev.stamp || (stamp===prev.stamp && isExact && !prev.exact)){
+          histories[canonical]={hist,exact:isExact,stamp};
         }
       });
     }
-  }catch(e){ console.warn('member training attendance stats read failed',e); }
+  }catch(e){ console.warn('member training attendance history index failed',e); }
+
+  Object.keys(histories).forEach(canonical=>{
+    const parts=canonical.split('|');
+    const dateValue=parts[0], groupValue=parts.slice(1).join('|');
+    if(isDeleted(dateValue,groupValue))return;
+    const hist=histories[canonical]?.hist;
+    if(!hist || typeof hist!=='object')return;
+
+    let memberState=null;
+    Object.keys(hist).some(k=>{
+      const kp=String(k).split('|');
+      if(normName(kp[0])===surname && normName(kp.slice(1).join('|'))===name){
+        memberState=hist[k]; return true;
+      }
+      return false;
+    });
+    if(!memberState)return;
+
+    // Zelená fajka v dochádzke patrí k platbe. Účasť určuje IBA prvé tlačidlo
+    // TRÉNING a stav NOVÝ. Tieto dve hodnoty sú uložené priamo v dochádzke.
+    if(memberState.training===true || memberState.newMember===true){
+      const d=parsePaymentDate(dateValue);
+      if(!d)return;
+      const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      // Jeden reálny tréning za deň člena, aj keď je vedený vo viacerých skupinách.
+      if(seen.has(dateKey))return;
+      seen.add(dateKey);
+      rows.push({
+        date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
+        group:String(groupValue||'').trim(),
+        dateObj:new Date(d.year,d.month-1,d.day)
+      });
+    }
+  });
 
   rows.sort((a,b)=>b.dateObj-a.dateObj);
   return rows;

@@ -7436,8 +7436,7 @@ function memberArrivalMonth(m){
 function firstHalfMembershipVisual(m){
  const month=memberArrivalMonth(m);
  if(month && month>=7) return 'icon-inactive';
- if(membershipPaidForPeriod(m,1)) return 'icon-ok';
- return 'icon-no membership-first-half-unpaid';
+ return membershipProfilePaymentForPeriod(m,1,appToday().year)?'icon-ok':'icon-no membership-first-half-unpaid';
 }
 function secondHalfMembershipVisual(m){
  return membershipProfilePaymentForPeriod(m,2)?'icon-ok':'icon-no';
@@ -7453,7 +7452,7 @@ function memberRows(arr){
      <span class="${memberApplicationReceived(m)?'icon-ok':'icon-no'}" title="Prihláška">▤</span>
      <span class="${firstHalfMembershipVisual(m)} membership-period-icon" title="Členské 1. polrok">Č</span>
      <span class="${secondHalfMembershipVisual(m)} membership-period-icon" title="Členské 2. polrok">Č</span>
-     <span class="${memberHasRegistration(m)?'icon-ok':'icon-no'}" title="Registrácia">R</span>
+     <span class="${savedRegistrationForMember(m)?'icon-ok':'icon-no'}" title="Registrácia">R</span>
    </div>
    <div class="member-flags">${(typeof isAdmin==='function'&&isAdmin())||(typeof isHeadTrainer==='function'&&isHeadTrainer())||(typeof isTrainer==='function'&&isTrainer())?`<button type="button" class="member-delete-btn" onclick="event.preventDefault();event.stopPropagation();return deleteMemberFromList(${m.id})">🗑</button>`:''}</div>
    <div class="member-arrow">›</div>
@@ -7509,7 +7508,7 @@ function renderMembers(){
        return groups.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
      });
  const active=visibleMembers.length;
- const unpaidM=visibleMembers.filter(m=>!m.membership).length, unpaidR=visibleMembers.filter(m=>!m.registration).length, debts=visibleMembers.filter(m=>m.debt>0).length;
+ const unpaidM=visibleMembers.filter(m=>!membershipProfilePaymentForPeriod(m,currentMembershipPeriod(),appToday().year)).length, unpaidR=visibleMembers.filter(m=>!memberHasRegistration(m)).length, debts=visibleMembers.filter(m=>m.debt>0).length;
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content members-page">

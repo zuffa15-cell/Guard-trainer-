@@ -11971,7 +11971,7 @@ function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
     rows.forEach(r=>{
       const d=parsePaymentDate(r.date);
       const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-      const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+      const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${norm(r.trainer||r.savedBy||r.name)}|${dk}|${norm(r.group)}`;
       const prev=seen.get(key);
       if(!prev){ seen.set(key,r); return; }
       if(prev.substituteReference && !r.substituteReference) seen.set(key,r);
@@ -12103,7 +12103,7 @@ function initBillingDirectSync(){
             if(Number(billingDeleteOrder[remoteKey]||0) >= Number(r.savedAt||r.updatedAt||0)) return;
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-            const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+            const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${norm(r.trainer||r.savedBy||r.name)}|${dk}|${norm(r.group)}`;
             const prev=seen.get(key);
             if(!prev){ seen.set(key,r); added++; }
             else if(Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)){ seen.set(key,r); updated++; }
@@ -12128,7 +12128,7 @@ function initBillingDirectSync(){
           merged.forEach(r=>{
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-            const k=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+            const k=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${norm(r.trainer||r.savedBy||r.name)}|${dk}|${norm(r.group)}`;
             const prev=pendingSeen.get(k);
             if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) pendingSeen.set(k,r);
           });
@@ -12649,7 +12649,7 @@ async function saveBillingRecordToServerNow(record){
           if(isRef(r)) return true;
           const rd=parsePaymentDate(r?.date);
           const rdk=rd?`${rd.year}-${String(rd.month).padStart(2,'0')}-${String(rd.day).padStart(2,'0')}`:String(r?.date||'');
-          return !(rdk===dk && norm(r?.group)===group);
+          return !(rdk===dk && norm(r?.group)===group && norm(r?.trainer||r?.savedBy||r?.name)===norm(cleanRecord.trainer));
         });
       }else{
         rows=rows.filter(r=>String(r?.key||'')!==String(cleanRecord.key||''));

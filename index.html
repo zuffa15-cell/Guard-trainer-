@@ -8649,6 +8649,34 @@ function confirmDeleteScheduleRange(id){
    x.startDate=nextIsoDate(to);
  }
  localStorage.setItem('gt-schedule',JSON.stringify(arr));
+
+ // Zmazaný tréning nesmie zanechať skúšobnú dochádzku, ktorá by sa ďalej
+ // počítala v štatistike člena. Pri odstránení rozvrhu preto odstránime
+ // dochádzku daného dátumu + skupiny a uložíme trvalú mazaciu značku.
+ try{
+   const dayMap={
+     'PONDELOK':1,'UTOROK':2,'STREDA':3,'ŠTVRTOK':4,'STVRTOK':4,
+     'PIATOK':5,'SOBOTA':6,'NEDEĽA':0,'NEDELA':0
+   };
+   const wantedDow=dayMap[String(x.day||'').trim().toUpperCase()];
+   const groupCode=String(x.groupCode||'').trim().toUpperCase();
+   if(groupCode && wantedDow!==undefined){
+     const fromDate=new Date(from+'T00:00:00');
+     const toDate=new Date(to+'T00:00:00');
+     const deletedAt=Date.now();
+     for(let d=new Date(fromDate); d<=toDate; d.setDate(d.getDate()+1)){
+       if(d.getDay()!==wantedDow) continue;
+       const iso=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+       const key=attendanceDeleteKey(iso,groupCode);
+       attendanceDeleteOrder[key]=Math.max(Number(attendanceDeleteOrder[key]||0),deletedAt);
+       delete trainingAttendanceByGroup[key];
+     }
+     persistAttendanceDeleteOrder();
+     persistTrainingAttendanceHistory();
+     try{ pushToCloud(true); }catch(e){}
+   }
+ }catch(e){ console.warn('Vymazanie súvisiacej dochádzky pri zrušení tréningu zlyhalo',e); }
+
  // Removing a schedule/group must immediately remove that group from trainer profiles.
  syncTrainerGroupsFromSchedules();
  document.getElementById('scheduleDeleteModal')?.remove();

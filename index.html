@@ -43,8 +43,13 @@ try {
   firebase.auth().signInAnonymously().then(()=>{
     cloudEnabled = true;
     console.log("✅ Firebase pripojené - sync zapnutý");
-    initCloudSync();
-    setTimeout(()=>{try{repairMemberCloudBaselineOnce();}catch(e){}},800);
+    // Najprv oprav spoločný základ na 191 členov. Až potom spusti realtime
+    // listener, aby sa starých 206 členov nestihlo načítať späť do zariadení.
+    // Oprava je iba pre administrátora a iba vtedy, keď má lokálne presne 191 členov.
+    (async()=>{
+      try{ await repairMemberCloudBaselineOnce(); }catch(e){ console.warn('Guard Trainer: baseline repair failed',e); }
+      try{ initCloudSync(); }catch(e){ console.warn('Guard Trainer: cloud sync init failed',e); }
+    })();
     // Priamy V2 kanál je ponechaný iba ako zapisovací kanál; pri štarte sa z neho
     // nesmie načítať starý zoznam, lebo by mohol vrátiť už odstránených členov.
   }).catch(e=>console.warn("Auth fail", e));

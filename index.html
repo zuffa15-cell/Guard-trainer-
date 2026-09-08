@@ -4976,10 +4976,14 @@ function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
  const me=getCurrentTrainerDisplayName();
- const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
- const outgoingWaiting=substitutionOffers.filter(o=>o.from===me && !o.acceptedBy).length;
- const acceptedOutgoing=substitutionOffers.filter(o=>o.from===me && o.acceptedBy).length;
- const acceptedIncoming=substitutionOffers.filter(o=>o.acceptedBy===me).length;
+ const todayIso=String(appToday().iso||'');
+ // Ponuka/prijatie zastupovania je upozornenie iba pre DEŇ konkrétneho tréningu.
+ // Staršie ponuky už na Domove nesmú zostať visieť na ďalší deň.
+ const todaysOffers=substitutionOffers.filter(o=>String(o.date||'')===todayIso);
+ const incoming=todaysOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
+ const outgoingWaiting=todaysOffers.filter(o=>o.from===me && !o.acceptedBy).length;
+ const acceptedOutgoing=todaysOffers.filter(o=>o.from===me && o.acceptedBy).length;
+ const acceptedIncoming=todaysOffers.filter(o=>o.acceptedBy===me).length;
  const acceptedTotal=acceptedOutgoing+acceptedIncoming;
  const pendingTotal=incoming+outgoingWaiting;
  const count=pendingTotal+acceptedTotal;

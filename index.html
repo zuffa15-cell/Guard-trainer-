@@ -11085,6 +11085,27 @@ function toggleRegistration(i){
    action:'add',memberId:m.id,surname:m.surname,name:m.name,
    paidGroup:attendanceState.group,date:attendanceDateKey()
  };
+ // Registračné sa zapíše okamžite aj do platobnej histórie a profilu člena.
+ const regDate=attendanceDateKey();
+ const regGroup=attendanceState.group;
+ const regExists=registrationPayments.some(p=>
+   Number(p.memberId)===Number(m.id) && p.paidGroup===regGroup && p.date===regDate
+ );
+ if(!regExists){
+   registrationPayments.push({
+     memberId:m.id,surname:m.surname,name:m.name,paidGroup:regGroup,date:regDate,
+     amount:30,year:Number(String(regDate).slice(0,4))||appToday().year,
+     source:(activeUserRole==='admin'?'admin':'trainer'),
+     collectorTrainer:activeUserRole==='trainer'?String(getCurrentTrainerDisplayName?.()||'').trim():'',
+     collectorTrainerId:activeUserRole==='trainer'&&typeof currentTrainerAccountId==='function'&&currentTrainerAccountId()!=null?Number(currentTrainerAccountId()):null
+   });
+ }
+ m.registration=true;
+ m.registrationDate=regDate;
+ m.registrationAmount=30;
+ m.registrationPaidGroup=regGroup;
+ persistPaymentHistory();
+ persistMembersData(m.id);
  refreshAttendance();
 }
 function toggleNew(i){ if(!attendanceEditGuard()) return; attendanceState.members[i].newMember=!attendanceState.members[i].newMember;refreshAttendance();}
@@ -11147,10 +11168,35 @@ function enterMembership(i){
  if(!Number.isFinite(n)||n<=0){toast('Zadaj platnú sumu');return;}
  a.membershipAmount=n; a.membershipDate=attendanceDateKey(); a.membershipPaidGroup=attendanceState.group;
  if(m){
+   const paymentDate=attendanceDateKey();
+   const paymentGroup=attendanceState.group;
    setMembershipDraft({
      action:'add',memberId:m.id,surname:m.surname,name:m.name,
-     amount:n,date:attendanceDateKey(),paidGroup:attendanceState.group,period
+     amount:n,date:paymentDate,paidGroup:paymentGroup,period
    });
+   // Platba označená v Dochádzke sa zapíše okamžite aj do platobnej histórie
+   // a profilu člena. Vyúčtovanie ju potom iba prevezme bez duplicity.
+   const exists=membershipPayments.some(p=>
+     Number(p.memberId)===Number(m.id) && Number(p.period)===Number(period) &&
+     p.paidGroup===paymentGroup && p.date===paymentDate
+   );
+   if(!exists){
+     const collectorName=String(getCurrentTrainerDisplayName?.()||'').trim();
+     const collectorId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
+     membershipPayments.push({
+       memberId:m.id,surname:m.surname,name:m.name,groups:[paymentGroup],paidGroup:paymentGroup,
+       date:paymentDate,amount:n,period:Number(period),year:Number(String(paymentDate).slice(0,4))||appToday().year,
+       source:(activeUserRole==='admin'?'admin':'trainer'),
+       collectorTrainer:activeUserRole==='trainer'?collectorName:'',
+       collectorTrainerId:activeUserRole==='trainer'&&collectorId!=null?Number(collectorId):null
+     });
+   }
+   m.membership=true;
+   m.membershipAmount=n;
+   m.membershipDate=paymentDate;
+   m.membershipPaidGroup=paymentGroup;
+   persistPaymentHistory();
+   persistMembersData(m.id);
  }
  refreshAttendance();
 }
@@ -12282,6 +12328,7 @@ function commitRegistrationDraftsForCurrentTraining(){
    delete drafts[k];
  });
  persistPaymentHistory();
+ try{ persistMembersData(); }catch(e){ console.warn('Uloženie registračného do profilu zlyhalo:',e); }
 }
 
 function goToMyBillingAfterSave(){

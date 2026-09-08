@@ -11780,7 +11780,7 @@ function normalizeMonthlyBillingRecords(){
     const group=norm(r.group);
     // Jedno reálne vyúčtovanie = jeden tréning (dátum + skupina).
     // Informačný riadok zástupu môže existovať navyše, ale nenahrádza finančný záznam.
-    const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${dk}|${group}`;
+    const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${norm(r.trainer||r.savedBy||r.name)}|${dk}|${group}`;
     const prev=map.get(key);
     if(!prev){ map.set(key,r); return; }
     const rt=Number(r.savedAt||r.updatedAt||0), pt=Number(prev.savedAt||prev.updatedAt||0);

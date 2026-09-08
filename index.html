@@ -13812,11 +13812,11 @@ function renderHeadTrainerBilling(){
   </main>${standardBottomNav('billing', true)}`;
 }
 
-function getMembershipPaymentsForReportFromAttendance(){
-  // ZDROJ PRAVDY PRE "ZAPLATENÉ ČLENSKÉ" JE ULOŽENÁ DOCHÁDZKA.
-  // Každý záznam dochádzky obsahuje pri konkrétnom členovi
-  // membershipAccountAmount + membershipAccountDate. Prehľad preto
-  // NESMIE byť závislý od membershipPayments ani od vyúčtovania.
+async function getMembershipPaymentsForReportFromAttendance(){
+  // ZDROJ PRAVDY PRE „ZAPLATENÉ ČLENSKÉ“ = ULOŽENÁ DOCHÁDZKA.
+  // Najprv načítame lokálnu dochádzku a potom ju pre hlavného trénera
+  // doplníme priamo zo serverovej dochádzky. membershipPayments ani
+  // mesačné vyúčtovanie tu NIE SÚ zdrojom údajov.
   const map=new Map();
   const put=(x,dateValue,groupValue)=>{
     if(!x || Number(x.membershipAccountAmount||0)<=0) return;
@@ -13834,6 +13834,8 @@ function getMembershipPaymentsForReportFromAttendance(){
     );
     const memberKey=member?.id!=null ? `id:${Number(member.id)}` : `name:${surname.toUpperCase()}|${name.toUpperCase()}`;
     const key=`${memberKey}|${date}|${group}|${period}`;
+    // Rovnakú uloženú platbu môžeme dostať lokálne aj zo servera.
+    // Deduplikujeme iba identický člen + dátum + skupina + polrok.
     if(!map.has(key)){
       map.set(key,{
         memberId:member?.id ?? null,
@@ -13844,26 +13846,79 @@ function getMembershipPaymentsForReportFromAttendance(){
     }
   };
 
+  const readHistoryObject=(histObj)=>{
+    if(!histObj || typeof histObj!=='object') return;
+    Object.keys(histObj).forEach(histKey=>{
+      const parts=String(histKey).split('|');
+      const dateValue=parts.shift()||'';
+      const groupValue=parts.join('|')||'';
+      if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateValue,groupValue)) return;
+      const hist=histObj[histKey];
+      if(!hist || typeof hist!=='object') return;
+      Object.keys(hist).forEach(memberKey=>{
+        const bits=String(memberKey).split('|');
+        const x=hist[memberKey];
+        if(!x || typeof x!=='object') return;
+        put({
+          surname:bits.shift()||'',
+          name:bits.join('|')||'',
+          membershipAccountAmount:Number(x.membershipAccountAmount||0),
+          membershipAccountDate:x.membershipAccountDate||dateValue
+        },dateValue,groupValue);
+      });
+    });
+  };
+
+  // 1. Lokálna uložená dochádzka.
   try{
     if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
-      Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
-        const parts=String(histKey).split('|');
+      readHistoryObject(trainingAttendanceByGroup);
+    }
+  }catch(e){ console.warn('membership report local attendance read failed',e); }
+
+  // 2. Serverový spoločný záznam dochádzky – hlavný tréner musí vidieť
+  // platby uložené trénerom aj vtedy, keď jeho mobil ešte nemá lokálnu kópiu.
+  try{
+    if(typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled){
+      const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
+      if(doc.exists){
+        const data=doc.data()||{};
+        let hist={};
+        try{ hist=data['gt-training-attendance-history'] ? JSON.parse(data['gt-training-attendance-history']) : {}; }catch(e){ hist={}; }
+        const canonicalHist={};
+        Object.keys(hist||{}).forEach(k=>{ canonicalHist[canonicalAttendanceHistoryKey(k)]=hist[k]||{}; });
+        readHistoryObject(canonicalHist);
+      }
+    }
+  }catch(e){ console.warn('membership report cloud attendance read failed',e); }
+
+  // 3. Priame serverové záznamy administrátorskej dochádzky. Tie sú
+  // autoritatívne pre konkrétny tréning a obsahujú aj membershipAccountAmount.
+  try{
+    if(typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled && typeof ATTENDANCE_DIRECT_COLLECTION!=='undefined'){
+      const snap=await db.collection(ATTENDANCE_DIRECT_COLLECTION).get();
+      snap.forEach(ds=>{
+        const d=ds.data()||{};
+        if(d.deleted===true) return;
+        const key=String(d.key||'');
+        const parts=key.split('|');
         const dateValue=parts.shift()||'';
         const groupValue=parts.join('|')||'';
         if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateValue,groupValue)) return;
-        const hist=trainingAttendanceByGroup[histKey];
-        if(!hist || typeof hist!=='object') return;
-        Object.keys(hist).forEach(memberKey=>{
-          const bits=String(memberKey).split('|');
-          const x=hist[memberKey];
-          if(!x || typeof x!=='object') return;
-          put({
-            surname:bits.shift()||'',
-            name:bits.join('|')||'',
-            membershipAccountAmount:Number(x.membershipAccountAmount||0),
-            membershipAccountDate:x.membershipAccountDate||dateValue
-          },dateValue,groupValue);
-        });
+        const hist=d.history;
+        if(hist && typeof hist==='object'){
+          Object.keys(hist).forEach(memberKey=>{
+            const bits=String(memberKey).split('|');
+            const x=hist[memberKey];
+            if(!x || typeof x!=='object') return;
+            put({
+              surname:bits.shift()||'',
+              name:bits.join('|')||'',
+              membershipAccountAmount:Number(x.membershipAccountAmount||0),
+              membershipAccountDate:x.membershipAccountDate||dateValue
+            },dateValue,groupValue);
+          });
+        }
       });
     }
   }catch(e){ console.warn('membership report direct attendance read failed',e); }
@@ -13879,8 +13934,8 @@ function getMembershipPaymentsForReportFromAttendance(){
   });
 }
 
-function showHeadTrainerMembershipReport(){
-  const paid=getMembershipPaymentsForReportFromAttendance();
+async function showHeadTrainerMembershipReport(){
+  const paid=await getMembershipPaymentsForReportFromAttendance();
   const modal=document.createElement('div');
   modal.className='membership-paid-modal';
   modal.innerHTML=`<div class="membership-paid-card head-membership-report">

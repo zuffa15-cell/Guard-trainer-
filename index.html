@@ -10273,6 +10273,11 @@ function deleteCurrentTrainerAttendance(){
 window.deleteCurrentTrainerAttendance=deleteCurrentTrainerAttendance;
 
 function attendance(){
+  // Pri otvorení z „Moje vyúčtovanie“ je uložený dátum konkrétneho riadku
+  // nadradený dnešnému dátumu. Tento kontext musí prežiť aj hashchange,
+  // ktorý môže nastať po history.pushState na Android/WebView.
+  const billingDateContextActive=!!(window.__attendanceBillingDateOverride || window.__attendanceBillingContext?.date);
+  if(billingDateContextActive) window.__attendanceOpenedFromBilling=true;
   if(!isAdmin() && (!isHeadTrainer() || isRealTrainerAttendanceEditor())){
     const accountId=currentTrainerAccountId();
     if(accountId==null){ window.__attendanceOpenedFromBilling=false; toast('Tréner nie je správne prihlásený.'); return; }
@@ -10302,8 +10307,14 @@ function attendance(){
       (!wantedTime || String(x.time||'')===wantedTime) &&
       trainerOwnsTraining(x)
     );
+    if(!own){
+      window.__attendanceOpenedFromBilling=false;
+      toast('Tento tréning patrí inému trénerovi.');
+      return;
+    }
+    // Dátumový override z billing riadku ponechávame aktívny počas celého
+    // renderu attendance(), aby ho nemohol hashchange prepnúť na dnešok.
     window.__attendanceOpenedFromBilling=false;
-    if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
   } else {
     window.__attendanceOpenedFromBilling=false;
   }
@@ -10322,6 +10333,7 @@ function attendance(){
   refreshCurrentDateDefaults();
   if(window.__attendanceOpenedFromBilling && (window.__attendanceBillingDateOverride || window.__attendanceBillingContext?.date)){
     attendanceState.date=String(window.__attendanceBillingDateOverride || window.__attendanceBillingContext.date);
+    window.__attendanceOpenSource='billing';
   }
   applyTrainingSettingsForAttendance();
 
@@ -15884,6 +15896,14 @@ window.addEventListener('hashchange',()=>{
   if(r==='statistics'){ renderStatistics(); return; }
   if(r==='calendar'){ renderCalendar(); return; }
   if(r==='attendance'){
+    // Kliknutie na starší tréning v „Moje vyúčtovanie“ musí zostať na dátume
+    // kliknutého riadku. Hashchange nesmie vytvoriť dnešnú dochádzku.
+    if(window.__attendanceBillingDateOverride || window.__attendanceBillingContext?.date){
+      window.__attendanceOpenedFromBilling=true;
+      window.__attendanceOpenSource='billing';
+      attendance();
+      return;
+    }
     if(window.__attendanceOpenedFromCalendar){
       window.__attendanceOpenedFromCalendar=false;
       window.__attendanceOpenSource='calendar';

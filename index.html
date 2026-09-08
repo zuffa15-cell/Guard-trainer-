@@ -12803,15 +12803,13 @@ async function saveTrainingBilling(saveButton){
       persistBillingDeleteOrder();
     }
   }catch(e){}
-  // JEDNO PRAVIDLO: jeden tréning (dátum + skupina) patrí iba trénerovi,
-  // ktorý práve uložil dochádzku/vyúčtovanie. Ak boli staršie kópie uložené
-  // pod iným trénerom, aktuálne uloženie ich nahradí.
-  const trainingOwnerKey=(()=>{ const d=parsePaymentDate(record.date); const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(record.date||''); return `${dk}|${String(record.group||'').trim().toUpperCase()}`; })();
+  // DÔLEŽITÉ: tréning patrí konkrétnemu trénerovi. Pri ukladaní nesmieme
+  // odstrániť tréning iného trénera len preto, že má rovnaký dátum a skupinu.
+  // Nahradíme iba predchádzajúcu verziu TOHTO trénera pre rovnaký dátum/skupinu.
+  const trainerRecordKey=recordCanonical;
   monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
-    const d=parsePaymentDate(r&&r.date);
-    const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
-    const k=`${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
-    return k!==trainingOwnerKey || !!r.substituteReference;
+    if(!!r.substituteReference) return true;
+    return canonicalBillingKey(r)!==trainerRecordKey;
   });
   monthlyBillingRecords.push(record);
   // Okamžitá lokálna kópia pre „Moje vyúčtovanie“. Uchováme ju aj po

@@ -8049,6 +8049,7 @@ function getMemberTrainingCount(member){
 }
 
 function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=0){
+  window.__gtMemberStatsView={id:Number(id),monthOffset:Number(monthOffset||0),view:String(view||'months'),yearOffset:Number(yearOffset||0)};
  const m=membersData.find(x=>x.id===id); if(!m)return;
  const all=getSavedMemberTrainingData(m);
  const today=appToday();
@@ -8207,6 +8208,48 @@ function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
   return false;
 }
 window.deleteMemberTrainingFromStats=deleteMemberTrainingFromStats;
+
+// Synchronizácia ADMIN vymazania účasti pre všetky zariadenia.
+// Z priameho cloudového kanála čítame IBA memberDeletes — nikdy tým
+// neprepíšeme trénerovu vlastnú dochádzku ani celé vyúčtovanie.
+let __gtMemberDeleteCloudUnsub=null;
+function initMemberDeleteCloudSync(){
+  try{
+    if(__gtMemberDeleteCloudUnsub || !db || !cloudEnabled) return;
+    __gtMemberDeleteCloudUnsub=db.collection(ATTENDANCE_DIRECT_COLLECTION).onSnapshot(snap=>{
+      let changed=false;
+      snap.forEach(doc=>{
+        const d=doc.data()||{};
+        const key=String(d.key||'');
+        const memberDeletes=(d.memberDeletes&&typeof d.memberDeletes==='object')?d.memberDeletes:{};
+        if(!key || !Object.keys(memberDeletes).length) return;
+        const hist=trainingAttendanceByGroup[key];
+        if(!hist || typeof hist!=='object') return;
+        Object.keys(memberDeletes).forEach(id=>{
+          const m=membersData.find(x=>Number(x.id)===Number(id));
+          if(!m) return;
+          const hk=String(m.surname||'')+'|'+String(m.name||'');
+          if(Array.isArray(hist)){
+            const before=hist.length;
+            trainingAttendanceByGroup[key]=hist.filter(x=>!(String(x?.surname||'').trim().toUpperCase()===String(m.surname||'').trim().toUpperCase() && String(x?.name||'').trim().toUpperCase()===String(m.name||'').trim().toUpperCase()));
+            if(trainingAttendanceByGroup[key].length!==before) changed=true;
+          }else if(Object.prototype.hasOwnProperty.call(hist,hk)){
+            delete hist[hk]; changed=true;
+          }
+        });
+      });
+      if(changed){
+        try{persistTrainingAttendanceHistory();}catch(e){}
+        const v=window.__gtMemberStatsView;
+        if(v && location.hash==='#memberTrainingStats'){
+          setTimeout(()=>{try{renderMemberTrainingStats(v.id,v.monthOffset,v.view,v.yearOffset);}catch(e){}},30);
+        }
+      }
+    },err=>{ console.warn('Member delete cloud sync',err); __gtMemberDeleteCloudUnsub=null; });
+  }catch(e){ console.warn('initMemberDeleteCloudSync',e); }
+}
+setTimeout(()=>{try{initMemberDeleteCloudSync();}catch(e){}},1500);
+setInterval(()=>{try{if(!__gtMemberDeleteCloudUnsub) initMemberDeleteCloudSync();}catch(e){}},5000);
 
 function renderMemberAttendance(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;

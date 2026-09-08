@@ -4954,7 +4954,7 @@ function clearTodaySubstitutionTests(){
 }
 window.clearTodaySubstitutionTests=clearTodaySubstitutionTests;
 
-function acceptSubstitution(id){
+async function acceptSubstitution(id){
  const o=substitutionOffers.find(x=>x.id===id);
  if(!o)return;
  o.acceptedBy=getCurrentTrainerDisplayName();
@@ -4978,11 +4978,21 @@ function acceptSubstitution(id){
      trainingFee:0,trainerRewardPerMember:0,
      substitute:true,substituteReference:true,
      substituteBy:o.acceptedBy,
-     substituteLabel:'ZASTUPOVAL: '+o.acceptedBy
+     substituteLabel:'ZASTUPOVAL: '+o.acceptedBy,
+     savedAt:Date.now(),
+     savedBy:o.from,
+     savedByRole:'TRAINER'
    };
    const ri=monthlyBillingRecords.findIndex(r=>r.key===refKey);
    if(ri>=0) monthlyBillingRecords[ri]=ref; else monthlyBillingRecords.push(ref);
    persistMonthlyBillingRecords();
+   // DÔLEŽITÉ: informačný záznam o zastupovaní musí byť uložený aj na
+   // spoločný serverový billing dokument. Inak ho vidí iba pôvodný tréner
+   // na svojom zariadení a hlavný tréner ho v mesačnom vyúčtovaní neuvidí.
+   try{
+     const savedToCloud=await saveBillingRecordToServerNow(ref);
+     if(!savedToCloud) console.warn('Zástupný informačný záznam sa nepodarilo uložiť na server.');
+   }catch(e){ console.warn('Cloud zápis informácie o zastupovaní zlyhal:',e); }
  }catch(e){ console.error('substitution reference save',e); }
 
  const modal=document.getElementById('substitutionOffersModal');

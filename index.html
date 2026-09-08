@@ -1068,6 +1068,26 @@ function pushToCloud(force = false){
     .catch(e=>console.warn('Push fail',e));
 }
 
+// Realtime UI: po prijatí zmeny dochádzky z cloudu musí trénerov zoznam
+// okamžite prepočítať počty tréningov. Predtým sa síce dáta zmenili v
+// localStorage, ale otvorená obrazovka zostala vykreslená zo starého stavu.
+window.addEventListener('cloud-sync-update',()=>{
+  try{
+    const hash=String(location.hash||'');
+    if(hash==='#members' || hash==='#memberAttendance' || hash==='#memberProfile'){
+      if(hash==='#members' && typeof renderMembers==='function') renderMembers();
+      else if(hash==='#memberAttendance'){
+        const id=Number(history.state?.gtId||0);
+        if(id && typeof renderMemberAttendance==='function') renderMemberAttendance(id);
+      }
+      else if(hash==='#memberProfile'){
+        const id=Number(history.state?.gtId||0);
+        if(id && typeof renderMemberProfile==='function') renderMemberProfile(id);
+      }
+    }
+  }catch(e){ console.warn('Realtime redraw členov zlyhal',e); }
+});
+
 // 3. Intercept localStorage.setItem aby sa auto-syncovalo - s ochranou proti slučke
 localStorage.setItem = function(key, value){
   originalSetItem(key, value);
@@ -8046,69 +8066,123 @@ function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
     if(!member||!group||!parsed){ toast('Tréning sa nepodarilo identifikovať.'); return false; }
     const iso=`${parsed.year}-${String(parsed.month).padStart(2,'0')}-${String(parsed.day).padStart(2,'0')}`;
     const key=attendanceDeleteKey(iso,group);
-    if(!confirm(`Naozaj vymazať tréning?\n\n${String(dateValue)} – skupina ${group}\n\nVymaže sa dochádzka a súvisiace vyúčtovanie.`)) return false;
+    if(!confirm(`Naozaj vymazať tréning člena?\n\n${String(dateValue)} – skupina ${group}\n\nVymaže sa iba účasť tohto člena. Tréning a jeho vyúčtovanie zostanú zachované.`)) return false;
     const deletedAt=Date.now();
-    attendanceDeleteOrder[key]=Math.max(Number(attendanceDeleteOrder[key]||0),deletedAt);
-    persistAttendanceDeleteOrder();
 
-    // Autoritatívne odstránenie dochádzky.
-    delete trainingAttendanceByGroup[key];
+    // Autoritatívne odstránenie iba dochádzky konkrétneho člena.
+    // DÔLEŽITÉ: nemažeme celý záznam tréningu ani jeho billing.
+    const attendance=trainingAttendanceByGroup[key];
+    if(attendance && typeof attendance==='object'){
+      const targetSurname=String(member.surname||'').trim().toUpperCase();
+      const targetName=String(member.name||'').trim().toUpperCase();
+      const sameMember=x=>String(x?.surname||'').trim().toUpperCase()===targetSurname && String(x?.name||'').trim().toUpperCase()===targetName;
+      ['members','attendance','rows'].forEach(prop=>{
+        if(Array.isArray(attendance[prop])) attendance[prop]=attendance[prop].filter(x=>!sameMember(x));
+      });
+      if(Array.isArray(attendance)) trainingAttendanceByGroup[key]=attendance.filter(x=>!sameMember(x));
+    }
     try{
-      const raw=originalGetItem('gt-attendance-save-order-v1')||'{}';
-      const o=JSON.parse(raw)||{}; delete o[key];
-      originalSetItem('gt-attendance-save-order-v1',JSON.stringify(o));
+      // Ulož aktuálny záznam dochádzky bez zmazania celého tréningu.
+      originalSetItem('gt-training-attendance',JSON.stringify(trainingAttendanceByGroup));
     }catch(e){}
+
+    // Záznam vymazania konkrétneho člena je uložený samostatne, aby sa
+    // vzdialený klient nesnažil člena do tohto tréningu znovu doplniť.
     try{
       const raw=originalGetItem('gt-attendance-admin-edits-v1')||'{}';
-      const o=JSON.parse(raw)||{}; delete o[key];
+      const o=JSON.parse(raw)||{};
+      const memberKey=`${key}|${Number(member.id)}`;
+      o[memberKey]=deletedAt;
       originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(o));
     }catch(e){}
     persistTrainingAttendanceHistory();
 
-    // Zruš všetky billing záznamy patriace tomuto dátumu + skupine.
-    const removedKeys=[];
-    (monthlyBillingRecords||[]).forEach(r=>{
-      const d=parsePaymentDate(r?.date);
-      const rIso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
-      if(rIso===iso && String(r?.group||'').trim().toUpperCase()===group && !r.substituteReference){
-        const ck=billingRecordCanonicalKey(r);
-        billingDeleteOrder[ck]=Math.max(Number(billingDeleteOrder[ck]||0),deletedAt);
-        removedKeys.push(ck);
-      }
-    });
-    monthlyBillingRecords=(monthlyBillingRecords||[]).filter(r=>{
-      const d=parsePaymentDate(r?.date);
-      const rIso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
-      return !(rIso===iso && String(r?.group||'').trim().toUpperCase()===group && !r.substituteReference);
-    });
-    persistBillingDeleteOrder();
-    persistMonthlyBillingRecords();
-
-    // Odstráň aj prípadné lokálne dočasné/pending billing záznamy.
+    // Pošli zmenu dochádzky na server. Nepoužívame attendanceDeleteOrder pre
+    // celý tréning, pretože by tým zmizol tréning aj ostatným členom.
     try{
-      if(typeof billingSaveInFlight!=='undefined'){
-        [...billingSaveInFlight.entries()].forEach(([ck,r])=>{
-          const d=parsePaymentDate(r?.date);
-          const rIso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
-          if(rIso===iso && String(r?.group||'').trim().toUpperCase()===group) billingSaveInFlight.delete(ck);
-        });
+      if(typeof syncAttendanceMemberDeleteToCloud==='function'){
+        syncAttendanceMemberDeleteToCloud(key,member,deletedAt);
       }
-      if(typeof billingJustSaved!=='undefined'){
-        [...billingJustSaved.entries()].forEach(([ck,v])=>{
-          const r=v?.record||v;
-          const d=parsePaymentDate(r?.date);
-          const rIso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
-          if(rIso===iso && String(r?.group||'').trim().toUpperCase()===group) billingJustSaved.delete(ck);
-        });
+    }catch(e){ console.warn('Member attendance delete cloud sync',e); }
+
+    // AKTUALIZUJ iba finančné údaje tohto jedného člena v existujúcom
+    // vyúčtovaní. Samotný riadok tréningu zostáva zachovaný.
+    const targetNormSurname=String(member.surname||'').trim().toUpperCase();
+    const targetNormName=String(member.name||'').trim().toUpperCase();
+    const targetKey=`${targetNormSurname}|${targetNormName}`;
+    const affected=[];
+    (monthlyBillingRecords||[]).forEach((r,i)=>{
+      if(r?.substituteReference) return;
+      const d=parsePaymentDate(r?.date);
+      const rIso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
+      if(rIso!==iso || String(r?.group||'').trim().toUpperCase()!==group) return;
+      affected.push({r,i});
+    });
+
+    affected.forEach(({r,i})=>{
+      const snap=Array.isArray(r.attendanceStateSnapshot)?r.attendanceStateSnapshot.slice():[];
+      const paySnap=Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[];
+      const hasDetailedSnap=snap.length>0 || paySnap.length>0;
+      const filteredSnap=snap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
+      const filteredPay=paySnap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
+
+      // Ak máme kompletný snapshot, dopočítame presne nový stav.
+      let paying=Number(r.paying||0), trainingPaid=Number(r.trainingPaid||0), newCount=Number(r.newCount||0);
+      let trainingSum=Number(r.trainingSum||0), trainerReward=Number(r.trainerReward||0);
+      if(hasDetailedSnap){
+        const active=snap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
+        paying=active.filter(x=>!!x.training && !x.newMember).length;
+        trainingPaid=active.filter(x=>!!x.training && !x.newMember && !x.trainingAccount).length;
+        newCount=active.filter(x=>!!x.newMember).length;
+        const fee=Number(r.trainingFee||5);
+        trainingSum=trainingPaid*fee;
+        const rewardRate=Number(r.trainerRewardPerMember||0);
+        trainerReward=paying*rewardRate;
+      }else{
+        // Staršie vyúčtovania bez snapshotu: odčítaj člena iba ak bol v
+        // attendanceSnapshot evidovaný ako platiaci/prítomný.
+        const oldAtt=Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot:[];
+        const wasPresent=oldAtt.some(x=>String(x||'').trim().toUpperCase()===targetKey);
+        if(wasPresent){
+          const fee=Number(r.trainingFee||5);
+          paying=Math.max(0,paying-1);
+          trainingPaid=Math.max(0,trainingPaid-1);
+          trainingSum=Math.max(0,trainingSum-fee);
+          const rewardRate=Number(r.trainerRewardPerMember||0);
+          trainerReward=Math.max(0,trainerReward-rewardRate);
+        }
+        r.attendanceSnapshot=oldAtt.filter(x=>String(x||'').trim().toUpperCase()!==targetKey);
       }
-    }catch(e){}
+
+      r.attendanceStateSnapshot=filteredSnap;
+      r.paymentSnapshot=filteredPay;
+      r.attendanceSnapshot=(Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot:[]).filter(x=>String(x||'').trim().toUpperCase()!==targetKey);
+      r.paying=paying;
+      r.trainingPaid=trainingPaid;
+      r.trainingSum=trainingSum;
+      r.trainerReward=trainerReward;
+      r.newCount=newCount;
+      r.trainingAccountCount=Math.max(0,Number(r.trainingAccountCount||0)-((snap.length && snap.some(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`===targetKey && x.training && !x.newMember && x.trainingAccount))?1:0));
+      r.gross=trainingSum+Number(r.membershipSum||0)+Number(r.registrationSum||0)+Number(r.otherPlus||0)-Number(r.otherMinus||0);
+      r.clubAmount=r.gross-trainerReward;
+      r.updatedAt=deletedAt;
+      monthlyBillingRecords[i]=r;
+    });
+
+    persistMonthlyBillingRecords();
+    // Zapíš aktualizovaný existujúci billing záznam na server bez mazania
+    // celého tréningu. saveBillingRecordToServerNow zachová riadok a iba ho
+    // nahradí novou verziou pre rovnaký dátum + skupinu.
+    affected.forEach(({r})=>{
+      try{ saveBillingRecordToServerNow(r); }catch(e){ console.warn('Billing member adjustment',e); }
+    });
 
     try{ pushToCloud(true); }catch(e){}
-    toast('Tréning bol vymazaný.');
+    toast('Účasť člena bola vymazaná. Vyúčtovanie tréningu zostalo zachované.');
     setTimeout(()=>renderMemberTrainingStats(member.id,0,'days',0),250);
   }catch(e){
     console.error('DELETE MEMBER TRAINING FROM STATS',e);
-    toast('Tréning sa nepodarilo vymazať.');
+    toast('Účasť sa nepodarilo vymazať.');
   }
   return false;
 }
@@ -9490,6 +9564,23 @@ function saveAdminAttendanceDirectCloud(key, history, savedAt){
   }catch(e){ console.warn('Priamy cloud zápis admin dochádzky zlyhal',e); }
 }
 
+// Pri vymazaní adminom uložíme do priameho dokumentu trvalý TOMBSTONE.
+// Nestačí zmazať iba shared-db: tréner môže mať starší lokálny snapshot a pri
+// ďalšom otvorení by ho starý priamy dokument znovu vrátil.
+function deleteAdminAttendanceDirectCloud(key, deletedAt){
+  try{
+    if(!db || !cloudEnabled || !isAdmin()) return;
+    const docId=attendanceDirectDocId(key);
+    return db.collection(ATTENDANCE_DIRECT_COLLECTION).doc(docId).set({
+      key:String(key),
+      history:{},
+      deleted:true,
+      adminSavedAt:Number(deletedAt||Date.now()),
+      updatedAt:Date.now()
+    },{merge:true});
+  }catch(e){ console.warn('Priamy cloud tombstone admin dochádzky zlyhal',e); }
+}
+
 function saveCurrentTrainingAttendance(){
   const key=trainingAttendanceKey();
   // Nové uloženie tréningu je vedomá obnova; odstráni prípadnú starú mazaciu značku.
@@ -10596,6 +10687,35 @@ async function refreshCurrentAttendanceFromCloud(){
           localSaved=Number(o[wantedKey]||0);
         }catch(e){}
         localSaved=Math.max(localSaved,getAttendancePendingSaveAt(attendanceState.date,attendanceState.group));
+        // Adminovo vymazanie je autoritatívny tombstone. Ak je novšie než
+        // posledné uloženie trénera, okamžite odstráň záznam aj z otvorenej
+        // dochádzky na trénerovom zariadení.
+        if(d.deleted===true && remoteAdmin>localSaved){
+          (attendanceState.members||[]).forEach(a=>{
+            a.training=false;
+            a.trainingAccount=false;
+            a.newMember=false;
+            a.newMemberDate='';
+          });
+          delete trainingAttendanceByGroup[wantedKey];
+          const delMap=JSON.parse(originalGetItem(ATTENDANCE_DELETE_ORDER_KEY)||'{}')||{};
+          delMap[wantedKey]=Math.max(Number(delMap[wantedKey]||0),remoteAdmin);
+          originalSetItem(ATTENDANCE_DELETE_ORDER_KEY,JSON.stringify(delMap));
+          Object.assign(attendanceDeleteOrder,delMap);
+          const order=JSON.parse(originalGetItem('gt-attendance-save-order-v1')||'{}')||{};
+          delete order[wantedKey];
+          originalSetItem('gt-attendance-save-order-v1',JSON.stringify(order));
+          const adminMap=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')||{};
+          adminMap[wantedKey]=remoteAdmin;
+          originalSetItem('gt-attendance-admin-edits-v1',JSON.stringify(adminMap));
+          const pending=JSON.parse(originalGetItem(ATTENDANCE_PENDING_SAVE_KEY)||'{}')||{};
+          delete pending[attendanceSaveOrderKey(attendanceState.date,attendanceState.group)];
+          originalSetItem(ATTENDANCE_PENDING_SAVE_KEY,JSON.stringify(pending));
+          persistTrainingAttendanceHistory();
+          refreshAttendance();
+          console.log('📥 Priame admin VYMAZANIE dochádzky načítané pre trénera',wantedKey);
+          return;
+        }
         // Samostatný admin dokument môže prepísať trénerovu dochádzku
         // IBA vtedy, ak je adminova úprava novšia než posledné uloženie trénera.
         // Predtým sa tu admin snapshot prijal vždy, takže staršia admin verzia

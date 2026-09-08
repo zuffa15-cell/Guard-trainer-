@@ -12535,64 +12535,53 @@ async function saveTrainingBilling(saveButton){
       try{ history.replaceState(null,'','#trainer-month'); }catch(e){ location.hash='trainer-month'; }
     }
   }catch(e){ console.warn('Okamžité zobrazenie nového vyúčtovania:',e); }
-  // Uloženie má byť pre používateľa okamžité: tlačidlo sa po stlačení
-  // hneď zafarbí na zeleno a otvorí sa „Moje vyúčtovanie“. Zápis na server
-  // pokračuje na pozadí, aby sme nezablokovali UI pri pomalšom Firestore.
-  if(saveButton){
-    saveButton.classList.add('billing-saved');
-    saveButton.textContent='✓ ULOŽENÉ';
-  }
-  lockAttendanceFully();
-  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
-
-  // Serverový zápis ide na pozadí. Po potvrdení servera sa lokálny stav
-  // ponechá a prípadný realtime snapshot ho môže bezpečne potvrdiť.
-  (async()=>{
-    let ok=false;
-    for(let attempt=1; attempt<=3 && !ok; attempt++){
-      try{ ok=await saveBillingRecordToServerNow(record); }catch(e){ ok=false; }
-      if(!ok && attempt<3) await new Promise(resolve=>setTimeout(resolve,500*attempt));
-    }
+  // KRITICKÉ: zápis ide okamžite na autoritatívny billing dokument.
+  saveBillingRecordToServerNow(record).then(ok=>{
     billingSaveInFlight.delete(recordCanonical);
-    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal aj po opakovaní.');
-    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-    if(ok){
+    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
+
+    // Po úspešnom zápise si bežný tréner okamžite načíta AUTORITATÍVNY
+    // záznam priamo zo servera a až potom prekreslí svoje vyúčtovanie.
+    // Týmto sa odstráni rozdiel medzi stavom "na serveri je" a "v Moje
+    // vyúčtovanie nie je". Platí rovnako pre Petra aj ostatných trénerov.
+    const refreshOwnBillingFromServer=()=>{
       try{
-        if(typeof db!=='undefined' && db && typeof window.mergeBillingRecords==='function'){
-          db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
-            if(doc.exists){
-              const data=doc.data()||{};
-              if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
-              if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
-            }
-            try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-          }).catch(()=>{});
-        }
-      }catch(e){}
-    }
-    if(ok){
-      try{
-        if(typeof db!=='undefined' && db && typeof window.mergeBillingRecords==='function'){
-          const doc=await db.collection('guard-trainer-billing').doc('all').get();
+        if(typeof db==='undefined' || !db || typeof window.mergeBillingRecords!=='function') return;
+        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
           if(doc.exists){
             const data=doc.data()||{};
             if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
             if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
           }
           try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-        }
-      }catch(e){ console.warn('Post-save billing refresh failed:',e); }
-    }
+        }).catch(()=>{
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        });
+      }catch(e){
+        try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
+      }
+    };
+    if(ok) refreshOwnBillingFromServer();
+    else { try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){} }
     setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-  })();
-
-  // Zobrazenie vlastného vyúčtovania je okamžité – presne ako pred úpravou.
+  }).catch(err=>{
+    billingSaveInFlight.delete(recordCanonical);
+    console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
+    try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
+  });
+  lockAttendanceFully();
+  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
+  if(saveButton){
+    saveButton.classList.add('billing-saved');
+    saveButton.textContent='✓ ULOŽENÉ';
+  }
+  // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
+  // ani na ďalší veľký refresh zariadenia.
   try{
     location.hash='trainer-month';
     if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
-  }catch(e){
-    try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
-  }
+  }catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
   return false;
 }
 

@@ -560,6 +560,19 @@ function initCloudSync(){
           });
           const mergedRaw=JSON.stringify(merged);
           if(mergedRaw!==localRaw){ originalSetItem(k,mergedRaw); changed=true; }
+          // Dôležité: štatistika člena číta priamo trainingAttendanceByGroup.
+          // Samotný localStorage po cloud synchronizácii nestačí, pretože
+          // objekt v pamäti by inak mohol ešte obsahovať starú/skúšobnú
+          // dochádzku. Po každom cloud merge nahraď aj in-memory históriu.
+          try{
+            if(typeof trainingAttendanceByGroup!=='undefined'){
+              Object.keys(trainingAttendanceByGroup).forEach(k=>delete trainingAttendanceByGroup[k]);
+              Object.keys(merged).forEach(k=>{
+                trainingAttendanceByGroup[k]=merged[k]&&typeof merged[k]==='object'?merged[k]:{};
+              });
+            }
+          }catch(e){}
+          try{ persistTrainingAttendanceHistory(); }catch(e){}
           return;
         }
         if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY){
@@ -7928,8 +7941,11 @@ function getSavedMemberTrainingData(member){
         // Do štatistiky sa počíta každý člen, ktorý bol v dochádzke označený
         // ako TRÉNING alebo NOVÝ. Stav NOVÝ je tiež účasť na danom tréningu,
         // preto sa musí započítať do počtu tréningov člena.
-        if(!memberState || (memberState.training!==true && memberState.newMember!==true))return;
-        addRow(dateValue,groupValue);
+        if(!memberState) return;
+        // TRÉNING aj NOVÝ sú platná účasť. Neberieme nič z vyúčtovania.
+        if(memberState.training===true || memberState.newMember===true){
+          addRow(dateValue,groupValue);
+        }
       });
     }
   }catch(e){ console.warn('member training attendance stats read failed',e); }

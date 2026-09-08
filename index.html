@@ -10312,9 +10312,10 @@ function attendance(){
       toast('Tento tréning patrí inému trénerovi.');
       return;
     }
-    // Dátumový override z billing riadku ponechávame aktívny počas celého
-    // renderu attendance(), aby ho nemohol hashchange prepnúť na dnešok.
-    window.__attendanceOpenedFromBilling=false;
+    // Dátum z billing riadku musí zostať aktívny aj po kontrole vlastníctva.
+    // Predchádzajúca verzia tu príliš skoro nastavila __attendanceOpenedFromBilling=false,
+    // takže refreshCurrentDateDefaults() následne použil dnešný dátum.
+    // Nižšie sa dátum uloží do attendanceState a billing kontext sa potom bezpečne vyčistí.
   } else {
     window.__attendanceOpenedFromBilling=false;
   }
@@ -10334,6 +10335,11 @@ function attendance(){
   if(window.__attendanceOpenedFromBilling && (window.__attendanceBillingDateOverride || window.__attendanceBillingContext?.date)){
     attendanceState.date=String(window.__attendanceBillingDateOverride || window.__attendanceBillingContext.date);
     window.__attendanceOpenSource='billing';
+    // Konkrétny dátum už je v attendanceState. Kontekst vyčistíme až teraz,
+    // aby ďalšie otvorenie Dochádzky (napr. z Domova) nemohlo zdediť starý dátum.
+    window.__attendanceOpenedFromBilling=false;
+    window.__attendanceBillingDateOverride=null;
+    window.__attendanceBillingContext=null;
   }
   applyTrainingSettingsForAttendance();
 

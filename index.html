@@ -8165,6 +8165,15 @@ function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
     if(attendance && typeof attendance==='object'){
       const targetSurname=String(member.surname||'').trim().toUpperCase();
       const targetName=String(member.name||'').trim().toUpperCase();
+      // Be tolerant of both the current object snapshot (Surname|Name -> state)
+      // and older array-shaped snapshots. The current format is an object, so
+      // filtering only array properties previously did nothing at all.
+      Object.keys(attendance).forEach(k=>{
+        const kp=String(k).split('|');
+        const ks=String(kp[0]||'').trim().toUpperCase();
+        const kn=String(kp.slice(1).join('|')||'').trim().toUpperCase();
+        if(ks===targetSurname && kn===targetName) delete attendance[k];
+      });
       const sameMember=x=>String(x?.surname||'').trim().toUpperCase()===targetSurname && String(x?.name||'').trim().toUpperCase()===targetName;
       ['members','attendance','rows'].forEach(prop=>{
         if(Array.isArray(attendance[prop])) attendance[prop]=attendance[prop].filter(x=>!sameMember(x));
@@ -8199,8 +8208,11 @@ function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
     // Tréning, jeho suma, počet platiacich a ostatní členovia zostávajú úplne nedotknutí.
     // Vymazaná je iba účasť tohto konkrétneho člena; štatistika ju preto už nebude počítať.
     try{ pushToCloud(true); }catch(e){}
+    // Obrazovku prekreslíme okamžite — používateľ nemusí čakať na Firebase
+    // ani robiť refresh. Zdrojom je už lokálne zmenený autoritatívny stav.
+    try{ renderMemberTrainingStats(member.id,monthOffsetFromCurrentDate(dateValue),'days',0); }catch(e){}
+    try{ if(typeof renderMemberProfile==='function') renderMemberProfile(member.id); }catch(e){}
     toast('Účasť člena bola vymazaná. Vyúčtovanie tréningu zostalo zachované.');
-    setTimeout(()=>renderMemberTrainingStats(member.id,monthOffsetFromCurrentDate(dateValue),'days',0),50);
   }catch(e){
     console.error('DELETE MEMBER TRAINING FROM STATS',e);
     toast('Účasť sa nepodarilo vymazať.');

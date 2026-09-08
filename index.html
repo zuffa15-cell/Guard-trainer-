@@ -7267,7 +7267,10 @@ function loadPersistedMembers(){
     if(Array.isArray(raw) && raw.length){
       membersData.splice(0,membersData.length,...raw);
       normalizeAllMembers();
-      persistMembersData();
+      // Pri štarte je toto iba lokálna cache. NESMIE sa hneď odoslať späť do cloudu,
+      // pretože môže obsahovať starý zoznam (napr. 206 namiesto spoločných 191).
+      // Najprv musí prísť aktuálny shared-db snapshot; lokálny zápis do cloudu
+      // sa vykonáva až pri skutočnej úprave člena cez persistMembersData().
       return true;
     }
   }catch(e){ console.warn('Guard Trainer: saved members could not be loaded',e); }
@@ -7275,20 +7278,19 @@ function loadPersistedMembers(){
   // v847: pri prvom spustení je zdrojom členov výhradne aktuálny Excel import.
   // Žiadne staré gt-members kľúče sa nesmú použiť.
   normalizeAllMembers();
-  persistMembersData();
   return false;
 }
 
 // Jednorazová oprava po prechode na autoritatívny zoznam: ak je na adminovom
-// zariadení aktuálne opravených 190 členov, tento stav sa zapíše na server ako
-// nový základ a všetky cloudové ID mimo neho dostanú tombstone. Tým sa starých
+// zariadení aktuálnych 191 členov, tento stav sa zapíše na server ako
+// nový základ 191 členov a všetky cloudové ID mimo neho dostanú tombstone. Tým sa starých
 // 206 členov nedá znovu vytiahnuť späť cez starý cloudový zoznam.
 async function repairMemberCloudBaselineOnce(){
   try{
     if(window.__memberBaselineRepairDone || !db || !cloudEnabled) return;
     if(typeof isAdmin!=='function' || !isAdmin()) return;
     const local=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]');
-    if(!Array.isArray(local) || local.length!==190) return;
+    if(!Array.isArray(local) || local.length!==191) return;
     window.__memberBaselineRepairDone=true;
     const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
     await db.runTransaction(async tx=>{
@@ -7307,7 +7309,7 @@ async function repairMemberCloudBaselineOnce(){
       const clean=m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;};
       tx.set(ref,{[MEMBERS_STORAGE_KEY]:JSON.stringify(local.map(clean)),[MEMBER_SAVE_ORDER_KEY]:JSON.stringify(order),'gt-member-delete-order-v1':JSON.stringify(dels),_updatedAt:now,_lastUpdateBy:firebase.auth().currentUser?.uid||'unknown'},{merge:true});
     });
-    console.log('🛠️ Členovia: jednorazovo nastavený opravený základ 190.');
+    console.log('🛠️ Členovia: jednorazovo nastavený spoločný základ 191.');
   }catch(e){console.warn('Guard Trainer: oprava základu členov zlyhala',e);window.__memberBaselineRepairDone=false;}
 }
 

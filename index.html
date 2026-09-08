@@ -8162,78 +8162,9 @@ function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
       }
     }catch(e){ console.warn('Member attendance delete cloud sync',e); }
 
-    // AKTUALIZUJ iba finančné údaje tohto jedného člena v existujúcom
-    // vyúčtovaní. Samotný riadok tréningu zostáva zachovaný.
-    const targetNormSurname=String(member.surname||'').trim().toUpperCase();
-    const targetNormName=String(member.name||'').trim().toUpperCase();
-    const targetKey=`${targetNormSurname}|${targetNormName}`;
-    const affected=[];
-    (monthlyBillingRecords||[]).forEach((r,i)=>{
-      if(r?.substituteReference) return;
-      const d=parsePaymentDate(r?.date);
-      const rIso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r?.date||'');
-      if(rIso!==iso || String(r?.group||'').trim().toUpperCase()!==group) return;
-      affected.push({r,i});
-    });
-
-    affected.forEach(({r,i})=>{
-      const snap=Array.isArray(r.attendanceStateSnapshot)?r.attendanceStateSnapshot.slice():[];
-      const paySnap=Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[];
-      const hasDetailedSnap=snap.length>0 || paySnap.length>0;
-      const filteredSnap=snap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
-      const filteredPay=paySnap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
-
-      // Ak máme kompletný snapshot, dopočítame presne nový stav.
-      let paying=Number(r.paying||0), trainingPaid=Number(r.trainingPaid||0), newCount=Number(r.newCount||0);
-      let trainingSum=Number(r.trainingSum||0), trainerReward=Number(r.trainerReward||0);
-      if(hasDetailedSnap){
-        const active=snap.filter(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`!==targetKey);
-        paying=active.filter(x=>!!x.training && !x.newMember).length;
-        trainingPaid=active.filter(x=>!!x.training && !x.newMember && !x.trainingAccount).length;
-        newCount=active.filter(x=>!!x.newMember).length;
-        const fee=Number(r.trainingFee||5);
-        trainingSum=trainingPaid*fee;
-        const rewardRate=Number(r.trainerRewardPerMember||0);
-        trainerReward=paying*rewardRate;
-      }else{
-        // Staršie vyúčtovania bez snapshotu: odčítaj člena iba ak bol v
-        // attendanceSnapshot evidovaný ako platiaci/prítomný.
-        const oldAtt=Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot:[];
-        const wasPresent=oldAtt.some(x=>String(x||'').trim().toUpperCase()===targetKey);
-        if(wasPresent){
-          const fee=Number(r.trainingFee||5);
-          paying=Math.max(0,paying-1);
-          trainingPaid=Math.max(0,trainingPaid-1);
-          trainingSum=Math.max(0,trainingSum-fee);
-          const rewardRate=Number(r.trainerRewardPerMember||0);
-          trainerReward=Math.max(0,trainerReward-rewardRate);
-        }
-        r.attendanceSnapshot=oldAtt.filter(x=>String(x||'').trim().toUpperCase()!==targetKey);
-      }
-
-      r.attendanceStateSnapshot=filteredSnap;
-      r.paymentSnapshot=filteredPay;
-      r.attendanceSnapshot=(Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot:[]).filter(x=>String(x||'').trim().toUpperCase()!==targetKey);
-      r.paying=paying;
-      r.trainingPaid=trainingPaid;
-      r.trainingSum=trainingSum;
-      r.trainerReward=trainerReward;
-      r.newCount=newCount;
-      r.trainingAccountCount=Math.max(0,Number(r.trainingAccountCount||0)-((snap.length && snap.some(x=>`${String(x?.surname||'').trim().toUpperCase()}|${String(x?.name||'').trim().toUpperCase()}`===targetKey && x.training && !x.newMember && x.trainingAccount))?1:0));
-      r.gross=trainingSum+Number(r.membershipSum||0)+Number(r.registrationSum||0)+Number(r.otherPlus||0)-Number(r.otherMinus||0);
-      r.clubAmount=r.gross-trainerReward;
-      r.updatedAt=deletedAt;
-      monthlyBillingRecords[i]=r;
-    });
-
-    persistMonthlyBillingRecords();
-    // Zapíš aktualizovaný existujúci billing záznam na server bez mazania
-    // celého tréningu. saveBillingRecordToServerNow zachová riadok a iba ho
-    // nahradí novou verziou pre rovnaký dátum + skupinu.
-    affected.forEach(({r})=>{
-      try{ saveBillingRecordToServerNow(r); }catch(e){ console.warn('Billing member adjustment',e); }
-    });
-
+    // DÔLEŽITÉ: Pri vymazaní tréningu zo štatistiky člena NEMENÍME VYÚČTOVANIE.
+    // Tréning, jeho suma, počet platiacich a ostatní členovia zostávajú úplne nedotknutí.
+    // Vymazaná je iba účasť tohto konkrétneho člena; štatistika ju preto už nebude počítať.
     try{ pushToCloud(true); }catch(e){}
     toast('Účasť člena bola vymazaná. Vyúčtovanie tréningu zostalo zachované.');
     setTimeout(()=>renderMemberTrainingStats(member.id,0,'days',0),250);

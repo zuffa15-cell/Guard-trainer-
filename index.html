@@ -11910,14 +11910,34 @@ function initBillingDirectSync(){
       }
     }catch(e){}
     
-    // Live sync
+    // Live sync – Firestore listener je hlavný mechanizmus.
+    // Polling je iba poistka pre zariadenie hlavného trénera: ak sa realtime
+    // listener po prebudení mobilu alebo krátkom výpadku nepripojí, hlavný
+    // tréner musí aj tak dostať nové vyúčtovanie bez prepnutia karty.
     db.collection('guard-trainer-billing').doc('all').onSnapshot(doc=>{
       if(!doc.exists) return;
       const data=doc.data()||{};
       loadBillingDeleteOrderFromCloud(data);
       if(!data.records || !Array.isArray(data.records)) return;
       mergeBillingRecords(data.records, 'snapshot');
+    }, err=>{
+      console.warn('Billing realtime listener error:', err);
     });
+
+    if(!window.__gtBillingHeadPollStarted){
+      window.__gtBillingHeadPollStarted=true;
+      window.__gtBillingHeadPollTimer=setInterval(()=>{
+        try{
+          if(typeof isAdmin!=='function' || (!isAdmin() && !(typeof isHeadTrainer==='function' && isHeadTrainer()))) return;
+          // Keď je hlavný/admin na vyúčtovaní, načítaj autoritatívny serverový
+          // dokument pravidelne. Nečakaj na navigáciu ani manuálny refresh.
+          const open=location.hash==='#billing' || location.hash==='#head-trainer-detail' ||
+                     location.hash==='#trainer-month' || !!document.querySelector('.head-billing, .monthly-billing-page');
+          if(!open) return;
+          fetchBilling();
+        }catch(e){ console.warn('Billing realtime fallback poll:',e); }
+      },1000);
+    }
     
     // Aj hlavný cloud doc (gt-monthly-billing-v221 v guard-trainer-app)
     try{
@@ -12527,9 +12547,14 @@ async function saveTrainingBilling(saveButton){
 
   // Serverový zápis ide na pozadí. Po potvrdení servera sa lokálny stav
   // ponechá a prípadný realtime snapshot ho môže bezpečne potvrdiť.
-  saveBillingRecordToServerNow(record).then(ok=>{
+  (async()=>{
+    let ok=false;
+    for(let attempt=1; attempt<=3 && !ok; attempt++){
+      try{ ok=await saveBillingRecordToServerNow(record); }catch(e){ ok=false; }
+      if(!ok && attempt<3) await new Promise(resolve=>setTimeout(resolve,500*attempt));
+    }
     billingSaveInFlight.delete(recordCanonical);
-    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
+    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal aj po opakovaní.');
     setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
     if(ok){
       try{
@@ -12545,11 +12570,21 @@ async function saveTrainingBilling(saveButton){
         }
       }catch(e){}
     }
-  }).catch(err=>{
-    billingSaveInFlight.delete(recordCanonical);
-    console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
+    if(ok){
+      try{
+        if(typeof db!=='undefined' && db && typeof window.mergeBillingRecords==='function'){
+          const doc=await db.collection('guard-trainer-billing').doc('all').get();
+          if(doc.exists){
+            const data=doc.data()||{};
+            if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
+            if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
+          }
+          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
+        }
+      }catch(e){ console.warn('Post-save billing refresh failed:',e); }
+    }
     setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-  });
+  })();
 
   // Zobrazenie vlastného vyúčtovania je okamžité – presne ako pred úpravou.
   try{

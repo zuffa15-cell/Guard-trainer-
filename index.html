@@ -8028,6 +8028,14 @@ function getSavedMemberTrainingData(member){
           return false;
         });
         if(!memberState || (!memberState.training && !memberState.newMember))return;
+        // Admin môže vymazať iba účasť konkrétneho člena. Tento tombstone má
+        // prednosť pred lokálnym history, aby sa údaj okamžite prestal rátať.
+        try{
+          const edits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')||{};
+          const memberObj=membersData.find(x=>normName(x.surname)===surname && normName(x.name)===name);
+          const mk=`${canonicalAttendanceHistoryKey(histKey)}|${Number(memberObj?.id||0)}`;
+          if(Number(edits[mk]||0)>0) return;
+        }catch(e){}
         addRow(dateValue,groupValue,'');
       });
     }
@@ -8114,6 +8122,30 @@ function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=
 // ADMIN: vymazanie konkrétneho tréningu priamo zo štatistiky člena.
 // Používa rovnakú autoritatívnu dochádzku ako obrazovka Dochádzka a zároveň
 // odstráni všetky súvisiace vyúčtovania pre daný dátum + skupinu.
+// Cloud synchronizácia vymazania účasti iba jedného člena.
+// Nikdy nemaže celý tréning ani jeho vyúčtovanie.
+function syncAttendanceMemberDeleteToCloud(key,member,deletedAt){
+  try{
+    if(!db || !cloudEnabled || !isAdmin()) return Promise.resolve(false);
+    const docRef=db.collection(ATTENDANCE_DIRECT_COLLECTION).doc(attendanceDirectDocId(key));
+    return docRef.get().then(snap=>{
+      const data=snap.exists?(snap.data()||{}):{};
+      const history=(data.history && typeof data.history==='object')?data.history:{};
+      const memberKey=String(member.surname||'')+'|'+String(member.name||'');
+      delete history[memberKey];
+      const deletes=(data.memberDeletes && typeof data.memberDeletes==='object')?data.memberDeletes:{};
+      deletes[String(Number(member.id))]=Number(deletedAt||Date.now());
+      return docRef.set({
+        key:String(key), history, memberDeletes:deletes, deleted:false,
+        adminSavedAt:Number(deletedAt||Date.now()), updatedAt:Date.now()
+      },{merge:true});
+    }).catch(e=>{ console.warn('Member attendance cloud delete failed',e); return false; });
+  }catch(e){ console.warn('Member attendance cloud delete failed',e); return Promise.resolve(false); }
+}
+
+function monthOffsetFromCurrentDate(dateValue){
+  try{ const d=parsePaymentDate(dateValue), t=appToday(); return (d.year-t.year)*12+(d.month-t.month); }catch(e){ return 0; }
+}
 function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
   try{
     if(!isAdmin()){ toast('Túto funkciu môže použiť iba administrátor.'); return false; }
@@ -8167,7 +8199,7 @@ function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
     // Vymazaná je iba účasť tohto konkrétneho člena; štatistika ju preto už nebude počítať.
     try{ pushToCloud(true); }catch(e){}
     toast('Účasť člena bola vymazaná. Vyúčtovanie tréningu zostalo zachované.');
-    setTimeout(()=>renderMemberTrainingStats(member.id,0,'days',0),250);
+    setTimeout(()=>renderMemberTrainingStats(member.id,monthOffsetFromCurrentDate(dateValue),'days',0),50);
   }catch(e){
     console.error('DELETE MEMBER TRAINING FROM STATS',e);
     toast('Účasť sa nepodarilo vymazať.');
@@ -10895,8 +10927,13 @@ async function refreshCurrentAttendanceFromCloud(){
         // Toto porovnanie je podľa konkrétneho dátumu + skupiny.
         const adminIsNewer = remoteAdmin > localSaved;
         if(adminIsNewer && d.history && typeof d.history==='object'){
-          const hist=d.history;
+          const hist=Object.assign({},d.history||{});
+          const memberDeletes=(d.memberDeletes&&typeof d.memberDeletes==='object')?d.memberDeletes:{};
           (attendanceState.members||[]).forEach(a=>{
+            if(Number(memberDeletes[String(Number(a.id))]||0)>0){
+              a.training=false; a.trainingAccount=false; a.newMember=false; a.newMemberDate='';
+              return;
+            }
             const x=hist[a.surname+'|'+a.name];
             a.training=!!x?.training;
             a.trainingAccount=!!x?.trainingAccount;

@@ -12348,7 +12348,7 @@ async function saveBillingRecordToServerNow(record){
 }
 window.saveBillingRecordToServerNow=saveBillingRecordToServerNow;
 
-function saveTrainingBilling(saveButton){
+async function saveTrainingBilling(saveButton){
   // Tréner môže spätne upraviť svoju vlastnú dochádzku a znovu uložiť
   // vyúčtovanie vrátane členského a registračného.
   // Pri opätovnom uložení sa existujúci záznam aktualizuje.
@@ -12515,53 +12515,46 @@ function saveTrainingBilling(saveButton){
       try{ history.replaceState(null,'','#trainer-month'); }catch(e){ location.hash='trainer-month'; }
     }
   }catch(e){ console.warn('Okamžité zobrazenie nového vyúčtovania:',e); }
-  // KRITICKÉ: zápis ide okamžite na autoritatívny billing dokument.
-  saveBillingRecordToServerNow(record).then(ok=>{
-    billingSaveInFlight.delete(recordCanonical);
-    if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
+  // KRITICKÉ: zápis musí byť potvrdený na autoritatívnom serveri ešte pred
+  // dokončením uloženia. Predtým sa navigácia spúšťala skôr a pri pomalšom
+  // Firestore sa záznam nemusel dostať k hlavnému trénerovi.
+  let serverSaved=false;
+  try{
+    serverSaved=await saveBillingRecordToServerNow(record);
+  }catch(e){
+    console.warn('Vyúčtovanie – serverový zápis zlyhal:',e);
+    serverSaved=false;
+  }
 
-    // Po úspešnom zápise si bežný tréner okamžite načíta AUTORITATÍVNY
-    // záznam priamo zo servera a až potom prekreslí svoje vyúčtovanie.
-    // Týmto sa odstráni rozdiel medzi stavom "na serveri je" a "v Moje
-    // vyúčtovanie nie je". Platí rovnako pre Petra aj ostatných trénerov.
-    const refreshOwnBillingFromServer=()=>{
-      try{
-        if(typeof db==='undefined' || !db || typeof window.mergeBillingRecords!=='function') return;
-        db.collection('guard-trainer-billing').doc('all').get().then(doc=>{
-          if(doc.exists){
-            const data=doc.data()||{};
-            if(typeof loadBillingDeleteOrderFromCloud==='function') loadBillingDeleteOrderFromCloud(data);
-            if(Array.isArray(data.records)) window.mergeBillingRecords(data.records,'post-save');
-          }
-          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-        }).catch(()=>{
-          try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-        });
-      }catch(e){
-        try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
-      }
-    };
-    if(ok) refreshOwnBillingFromServer();
-    else { try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){} }
-    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-  }).catch(err=>{
+  if(!serverSaved){
     billingSaveInFlight.delete(recordCanonical);
-    console.warn('Vyúčtovanie – serverový zápis zlyhal:',err);
+    toast('⚠️ Vyúčtovanie sa nepodarilo uložiť na server. Skús to znova.');
     try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
-    setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
-  });
-  lockAttendanceFully();
-  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
+    return false;
+  }
+
+  // Server zápis je potvrdený – záznam môže ísť z pending stavu.
+  billingSaveInFlight.delete(recordCanonical);
+  setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
+
+  // Zelený stav zobrazíme ešte na tlačidle pred prechodom na vlastné
+  // vyúčtovanie, aby bolo jasné, že uloženie bolo úspešné.
   if(saveButton){
     saveButton.classList.add('billing-saved');
     saveButton.textContent='✓ ULOŽENÉ';
   }
-  // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
-  // ani na ďalší veľký refresh zariadenia.
+
+  lockAttendanceFully();
+  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
+
+  // Až po potvrdení serverom prejdeme na vlastné vyúčtovanie. Hlavný tréner
+  // už v tomto okamihu môže záznam načítať z guard-trainer-billing/all.
   try{
     location.hash='trainer-month';
     if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
-  }catch(e){ try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){} }
+  }catch(e){
+    try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(err){}
+  }
   return false;
 }
 

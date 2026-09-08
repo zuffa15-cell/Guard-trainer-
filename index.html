@@ -12368,7 +12368,7 @@ async function saveBillingRecordToServerNow(record){
 }
 window.saveBillingRecordToServerNow=saveBillingRecordToServerNow;
 
-async function saveTrainingBilling(saveButton){
+function saveTrainingBilling(saveButton){
   // Tréner môže spätne upraviť svoju vlastnú dochádzku a znovu uložiť
   // vyúčtovanie vrátane členského a registračného.
   // Pri opätovnom uložení sa existujúci záznam aktualizuje.
@@ -12528,17 +12528,14 @@ async function saveTrainingBilling(saveButton){
   // Označ ho ako pending, aby ho starší realtime snapshot dočasne neodstránil.
   billingSaveInFlight.set(recordCanonical, record);
   persistMonthlyBillingRecords(true);
-  // DÔLEŽITÉ: tlačidlo musí dostať zelený stav EŠTE PRED prekreslením
-  // obrazovky. renderMonthlyBilling() totiž odstráni pôvodné tlačidlo z DOM.
-  // Toto je pôvodné správanie: klik -> zelené ULOŽENÉ -> Moje vyúčtovanie.
-  if(saveButton){
-    saveButton.classList.add('billing-saved');
-    saveButton.textContent='✓ ULOŽENÉ';
-  }
-  lockAttendanceFully();
-  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
-
-  // KRITICKÉ: zápis ide na autoritatívny billing dokument na pozadí.
+  // Okamžite prekresli „Moje vyúčtovanie“ – bez čakania na veľký refresh.
+  try{
+    if(typeof renderMonthlyBilling==='function'){
+      renderMonthlyBilling();
+      try{ history.replaceState(null,'','#trainer-month'); }catch(e){ location.hash='trainer-month'; }
+    }
+  }catch(e){ console.warn('Okamžité zobrazenie nového vyúčtovania:',e); }
+  // KRITICKÉ: zápis ide okamžite na autoritatívny billing dokument.
   saveBillingRecordToServerNow(record).then(ok=>{
     billingSaveInFlight.delete(recordCanonical);
     if(!ok) console.warn('Vyúčtovanie ostalo iba lokálne – serverový zápis zlyhal.');
@@ -12573,8 +12570,14 @@ async function saveTrainingBilling(saveButton){
     try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
     setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
   });
-  // Zobrazenie vlastného vyúčtovania je okamžité – až PO nastavení zeleného
-  // stavu tlačidla, aby sa používateľovi vždy zobrazilo „✓ ULOŽENÉ“.
+  lockAttendanceFully();
+  toast(substitution ? 'Vyúčtovanie uložené – zástup: '+activeTrainer : 'Vyúčtovanie uložené');
+  if(saveButton){
+    saveButton.classList.add('billing-saved');
+    saveButton.textContent='✓ ULOŽENÉ';
+  }
+  // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
+  // ani na ďalší veľký refresh zariadenia.
   try{
     location.hash='trainer-month';
     if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();

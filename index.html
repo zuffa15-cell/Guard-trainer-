@@ -10648,7 +10648,34 @@ function memberHasRegistration(m){
 function savedRegistrationForMember(m){
   if(!m)return null;
   const id=Number(m.id);
-  return registrationPayments.find(p=>Number(p.memberId)===id) || null;
+  // 1. Trvalá história platieb je hlavný zdroj pravdy.
+  const saved=registrationPayments.find(p=>Number(p.memberId)===id && Number(p.amount||30)>0);
+  if(saved) return saved;
+  // 2. Poistka: tréner mohol práve zapísať registračné v Dochádzke,
+  // ale profil člena ešte nemusel dostať synchronizovaný membersData snapshot.
+  try{
+    const live=Array.isArray(attendanceState?.members)
+      ? attendanceState.members.find(a=>String(a?.surname||'')===String(m.surname||'') && String(a?.name||'')===String(m.name||''))
+      : null;
+    if(live && live.registration){
+      return {
+        memberId:id,surname:m.surname,name:m.name,
+        paidGroup:live.registrationPaidGroup||attendanceState.group,
+        date:live.registrationDate||attendanceDateKey(),
+        amount:Number(live.registrationAmount||30),
+        liveAttendance:true
+      };
+    }
+  }catch(e){}
+  // 3. Historický billing snapshot – iba poistka pre profil, nie nový zdroj
+  // finančného vyúčtovania.
+  try{
+    const snap=attendanceState.billingPaymentSnapshot?.[m.surname+'|'+m.name];
+    if(snap && Number(snap.registration||0)>0){
+      return {memberId:id,surname:m.surname,name:m.name,paidGroup:attendanceState.group,date:attendanceState.date||appToday().iso,amount:Number(snap.registration||30),billingSnapshot:true};
+    }
+  }catch(e){}
+  return null;
 }
 function registrationPaidHereToday(m){
   if(!m)return false;

@@ -13812,8 +13812,40 @@ function renderHeadTrainerBilling(){
   </main>${standardBottomNav('billing', true)}`;
 }
 
+function getMembershipPaymentsForReportFromAttendance(){
+  const map=new Map();
+  const put=(p)=>{
+    if(!p || p.memberId==null || Number(p.amount||0)<=0) return;
+    const d=parsePaymentDate(p.date);
+    const period=Number(p.period||((d&&d.month<=6)?1:2));
+    const key=`${Number(p.memberId)}|${p.date||''}|${p.paidGroup||''}|${period}`;
+    if(!map.has(key)) map.set(key,p);
+  };
+  (membershipPayments||[]).forEach(put);
+  try{
+    (getBillingRecords()||[]).forEach(r=>{
+      if(!Array.isArray(r?.paymentSnapshot)) return;
+      const rd=parsePaymentDate(r.date);
+      if(!rd) return;
+      const date=`${rd.year}-${String(rd.month).padStart(2,'0')}-${String(rd.day).padStart(2,'0')}`;
+      const period=rd.month<=6?1:2;
+      r.paymentSnapshot.forEach(x=>{
+        const member=(membersData||[]).find(m=>String(m.surname||'').trim()===String(x.surname||'').trim() && String(m.name||'').trim()===String(x.name||'').trim());
+        if(Number(x.membership||0)<=0) return;
+        put({
+          memberId:member?.id ?? `name:${x.surname||''}|${x.name||''}`,
+          surname:x.surname||'', name:x.name||'', paidGroup:r.group||'',
+          date, amount:Number(x.membership||0), period, year:rd.year,
+          source:'attendanceSnapshot', collectorTrainer:r.trainer||r.savedBy||''
+        });
+      });
+    });
+  }catch(e){ console.warn('membership report attendance fallback failed',e); }
+  return Array.from(map.values());
+}
+
 function showHeadTrainerMembershipReport(){
-  const paid=membershipPayments.slice();
+  const paid=getMembershipPaymentsForReportFromAttendance();
   const modal=document.createElement('div');
   modal.className='membership-paid-modal';
   modal.innerHTML=`<div class="membership-paid-card head-membership-report">

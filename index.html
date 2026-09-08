@@ -13818,7 +13818,14 @@ function getMembershipPaymentsForReportFromAttendance(){
     if(!p || p.memberId==null || Number(p.amount||0)<=0) return;
     const d=parsePaymentDate(p.date);
     const period=Number(p.period||((d&&d.month<=6)?1:2));
-    const key=`${Number(p.memberId)}|${p.date||''}|${p.paidGroup||''}|${period}`;
+    // Ak člen ešte nie je v lokálnom zozname členov, memberId môže byť
+    // textový fallback (napr. name:SURNAME|NAME). Number(...) by z neho
+    // spravil NaN a všetky takéto platby v rovnaký deň by sa zliali do jednej.
+    // Preto používame stabilný kľúč podľa ID, alebo podľa mena.
+    const memberKey=(p.memberId!=null && Number.isFinite(Number(p.memberId)))
+      ? `id:${Number(p.memberId)}`
+      : `name:${String(p.surname||'').trim().toUpperCase()}|${String(p.name||'').trim().toUpperCase()}`;
+    const key=`${memberKey}|${p.date||''}|${p.paidGroup||''}|${period}`;
     if(!map.has(key)) map.set(key,p);
   };
   (membershipPayments||[]).forEach(put);

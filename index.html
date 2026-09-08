@@ -9674,7 +9674,12 @@ function commitMembershipDraftsForCurrentTraining(){
           collectorTrainerId:activeUserRole==='trainer'&&collectorId!=null?Number(collectorId):null
         });
         const savedMember=membersData.find(x=>Number(x.id)===Number(ch.memberId));
-        if(savedMember && activeUserRole==='admin'){
+        // Platba členského zapísaná v Dochádzke je skutočná platba člena,
+        // nie iba dočasná informácia pre vyúčtovanie. Musí sa preto zapísať
+        // aj do hlavného profilu člena bez ohľadu na to, či ju zapísal Admin
+        // alebo tréner. Prihláška NIE JE podmienkou zobrazenia zaplateného
+        // členského v profile.
+        if(savedMember){
           savedMember.membership=true;
           savedMember.membershipAmount=Number(ch.amount||30);
           savedMember.membershipDate=ch.date;
@@ -9685,6 +9690,9 @@ function commitMembershipDraftsForCurrentTraining(){
     delete drafts[k];
   });
   persistPaymentHistory();
+  // Zmena platby v Dochádzke sa musí okamžite premietnuť aj do profilu člena
+  // a uložiť do spoločnej databázy.
+  try{ persistMembersData(); }catch(e){ console.warn('Uloženie členského do profilu zlyhalo:',e); }
 }
 
 function getSavedTrainingAttendance(group,name){

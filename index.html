@@ -9320,12 +9320,83 @@ async function gtRestoreAttendanceToCloud(backupData){
     if(Object.prototype.hasOwnProperty.call(backupData||{},k)) values[k]=String(backupData[k]);
     else values[k]=firebase.firestore.FieldValue.delete();
   });
-  values._lastUpdateBy=firebase.auth().currentUser?.uid||'unknown';
-  values._updatedAt=Date.now();
+  const uid=firebase.auth().currentUser?.uid||'unknown';
+  const restoreNow=Date.now();
+  values._lastUpdateBy=uid;
+  values._updatedAt=restoreNow;
+  // Obnovenie dochádzky je autoritatívne. Najprv prepíšeme shared-db celý
+  // balík dochádzky zo zálohy, nie merge jednotlivých starších hodnôt.
   await db.runTransaction(async tx=>{
-    const snap=await tx.get(ref);
     tx.set(ref,values,{merge:true});
   });
+
+  // DÔLEŽITÉ: adminova dochádzka má ešte samostatný realtime kanál
+  // guard-trainer-attendance. Ak by sme ho pri obnove neprepísali, pri ďalšom
+  // otvorení tréningu by sa starý admin snapshot mohol vrátiť do mobilu.
+  // Preto obnovíme aj tento kanál priamo zo zálohy.
+  try{
+    const raw=backupData?.['gt-training-attendance-history'];
+    const hist=raw?JSON.parse(raw):{};
+    const adminRaw=backupData?.['gt-attendance-admin-edits-v1'];
+    const adminEdits=adminRaw?JSON.parse(adminRaw):{};
+    const delRaw=backupData?.['gt-attendance-delete-order-v1'];
+    const delOrder=delRaw?JSON.parse(delRaw):{};
+    const saveRaw=backupData?.['gt-attendance-save-order-v1'];
+    const saveOrder=saveRaw?JSON.parse(saveRaw):{};
+    const normalized={};
+    Object.keys(hist||{}).forEach(k=>{
+      const key=canonicalAttendanceHistoryKey(k);
+      normalized[key]=hist[k]||{};
+    });
+
+    const col=db.collection(ATTENDANCE_DIRECT_COLLECTION);
+    const existing=await col.get();
+    const wanted=new Set(Object.keys(normalized));
+    let batch=db.batch(), count=0;
+    const commit=async()=>{ if(count){ await batch.commit(); batch=db.batch(); count=0; } };
+
+    // Všetky priame dokumenty, ktoré v zálohe nie sú, dostanú tombstone.
+    // Tým sa staršia dochádzka nemôže po obnove znovu objaviť.
+    existing.forEach(d=>{
+      const id=String(d.id||'');
+      const data=d.data()||{};
+      const key=String(data.key||'');
+      if(wanted.has(key)) return;
+      const deletedAt=Math.max(restoreNow,Number(adminEdits[key]||0),Number(delOrder[key]||0));
+      batch.set(col.doc(id),{
+        key:key||id.replace(/_/g,'%'),
+        history:{},
+        deleted:true,
+        adminSavedAt:deletedAt,
+        updatedAt:restoreNow,
+        restoredFromBackup:true
+      },{merge:true});
+      if(++count>=450){ /* Firestore batch limit is handled by commit below */ }
+    });
+    await commit();
+
+    // Dokumenty obsiahnuté v zálohe obnovíme s novým autoritatívnym časom.
+    batch=db.batch(); count=0;
+    Object.keys(normalized).forEach(key=>{
+      const deletedAt=Number(delOrder[key]||0);
+      const backupTime=Math.max(Number(adminEdits[key]||0),Number(saveOrder[key]||0),restoreNow);
+      const isDeleted=deletedAt>Number(adminEdits[key]||0) && deletedAt>Number(saveOrder[key]||0);
+      batch.set(col.doc(attendanceDirectDocId(key)),{
+        key,
+        history:isDeleted?{}:normalized[key],
+        deleted:isDeleted,
+        adminSavedAt:backupTime,
+        updatedAt:restoreNow,
+        restoredFromBackup:true,
+        restoredBy:uid
+      },{merge:true});
+      if(++count>=450){ /* handled after loop */ }
+    });
+    await commit();
+  }catch(e){
+    console.warn('Obnova priameho cloudu dochádzky zlyhala',e);
+    // Shared-db obnova už prebehla; priamy kanál je poistka navyše.
+  }
   return true;
 }
 

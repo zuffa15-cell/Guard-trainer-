@@ -927,6 +927,7 @@ function initCloudSync(){
     syncEnabled = true;
     try{ initTrainersDirectSync(); }catch(e){}
     try{ initBillingDirectSync(); }catch(e){}
+    try{ initSubstitutionCloudSync(); }catch(e){}
 
 }
 
@@ -4807,6 +4808,60 @@ function persistSubstitutionOffers(){
   try{ localStorage.setItem('gt-substitution-offers', JSON.stringify(Array.isArray(substitutionOffers)?substitutionOffers:[])); }
   catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
 }
+
+// ZASTUPOVANIE – spoločný cloudový zdroj pre hlavného trénera/admina.
+// Lokálne localStorage nestačí, pretože ponuka/prijatie vzniká na zariadení
+// trénera a hlavný tréner používa iné zariadenie. Ukladáme teda prijaté ponuky
+// aj samostatne do Firestore a pri štarte ich načítame na všetkých privilegovaných
+// zariadeniach. Toto je iba informačný kanál; finančné vyúčtovanie zostáva v
+// guard-trainer-billing/all.
+const SUBSTITUTION_CLOUD_COLLECTION='guard-trainer-substitutions';
+const SUBSTITUTION_CLOUD_DOC='all';
+let substitutionCloudReady=false;
+function saveSubstitutionOffersToCloud(){
+  try{
+    if(typeof db==='undefined' || !db || !cloudEnabled) return Promise.resolve(false);
+    const offers=Array.isArray(substitutionOffers)?substitutionOffers:[];
+    return db.collection(SUBSTITUTION_CLOUD_COLLECTION).doc(SUBSTITUTION_CLOUD_DOC)
+      .set({offers,updatedAt:Date.now()},{merge:false})
+      .then(()=>{ substitutionCloudReady=true; console.log('✅ Zastupovania uložené na serveri:',offers.length); return true; })
+      .catch(e=>{ console.warn('Cloud zápis zastupovania zlyhal:',e); return false; });
+  }catch(e){ return Promise.resolve(false); }
+}
+function initSubstitutionCloudSync(){
+  try{
+    if(typeof db==='undefined' || !db || !cloudEnabled) return;
+    const ref=db.collection(SUBSTITUTION_CLOUD_COLLECTION).doc(SUBSTITUTION_CLOUD_DOC);
+    ref.onSnapshot(doc=>{
+      try{
+        if(!doc.exists) return;
+        const data=doc.data()||{};
+        if(!Array.isArray(data.offers)) return;
+        const byId=new Map();
+        data.offers.forEach(o=>{ if(o && o.id!=null) byId.set(String(o.id),o); });
+        // Server je autoritatívny pre prijaté zastupovania. Lokálne ponuky,
+        // ktoré ešte server nepozná, ponecháme iba na trénerovom zariadení.
+        const localPending=(Array.isArray(substitutionOffers)?substitutionOffers:[])
+          .filter(o=>o && !o.acceptedBy && !byId.has(String(o.id)));
+        substitutionOffers=[...data.offers,...localPending];
+        persistSubstitutionOffers();
+        substitutionCloudReady=true;
+        try{
+          const headOpen=typeof isAdmin==='function' && (isAdmin()||isHeadTrainer());
+          if(headOpen && (document.querySelector('.head-billing') || document.querySelector('.monthly-billing-page'))){
+            if(document.querySelector('.monthly-billing-page') && window.__gtHeadTrainerDetail && typeof renderHeadTrainerDetail==='function'){
+              const d=window.__gtHeadTrainerDetail;
+              renderHeadTrainerDetail(d.trainerName,d.month,d.year);
+            }else if(document.querySelector('.head-billing') && typeof renderHeadTrainerBilling==='function'){
+              renderHeadTrainerBilling();
+            }
+          }
+        }catch(e){}
+      }catch(e){ console.warn('Spracovanie cloud zastupovania zlyhalo:',e); }
+    },e=>console.warn('Realtime zastupovania zlyhal:',e));
+  }catch(e){ console.warn('Spustenie sync zastupovania zlyhalo:',e); }
+}
+window.saveSubstitutionOffersToCloud=saveSubstitutionOffersToCloud;
 const ALL_TRAINERS = ['JÁN NOVÁK','MATEJ KOVÁČ','LUCIA ŠIMKOVÁ','PETER TÓTH','ZUZANA MIHÁLOVÁ'];
 let CURRENT_TRAINER_NAME = 'TRÉNER 1';
 MY_TRAINER_GROUPS=[];
@@ -4872,6 +4927,7 @@ function openSubstitutionOffer(code,name){
      status:'ČAKÁ NA PRIJATIE'
    });
    persistSubstitutionOffers();
+   saveSubstitutionOffersToCloud();
    modal.remove();
    updateHomeQuickOverview();
    toast('Ponuka zastupovania odoslaná');
@@ -4960,6 +5016,9 @@ async function acceptSubstitution(id){
  o.acceptedBy=getCurrentTrainerDisplayName();
  o.status='PRIJATÉ';
  persistSubstitutionOffers();
+ // Kritické: prijatie musí byť viditeľné aj na zariadení hlavného trénera.
+ // Zapíšeme celý stav ponúk na spoločný cloud ešte pred vytvorením billing referencie.
+ try{ await saveSubstitutionOffersToCloud(); }catch(e){ console.warn('Cloud zápis prijatého zastupovania zlyhal:',e); }
 
  // Create the original trainer's informational zero-value entry immediately.
  // The actual substitute will later save the real billing record.
@@ -12871,6 +12930,30 @@ function getTrainerMonthlyRecords(trainerName,month=appToday().month,year=appTod
   }).filter(r=>{
     const d=parsePaymentDate(r.date); return d&&d.month===month&&d.year===year;
   });
+
+  // Poistka pre hlavného trénera: ak sa informačný billing riadok zástupu
+  // z akéhokoľvek dôvodu ešte nedostal do billing dokumentu, prijatá ponuka
+  // sama obsahuje všetky údaje potrebné na zobrazenie informačného riadku.
+  // Finančné sumy zostávajú nulové – ide iba o informáciu o zastupovaní.
+  try{
+    (Array.isArray(substitutionOffers)?substitutionOffers:[]).forEach(o=>{
+      if(!o || !o.acceptedBy) return;
+      if(norm(o.from)!==targetNorm) return;
+      const d=parsePaymentDate(formatBillingDate(o.date));
+      if(!d || d.month!==Number(month) || d.year!==Number(year)) return;
+      const exists=rows.some(r=>!!r?.substituteReference && norm(r.trainer)===targetNorm &&
+        (()=>{const rd=parsePaymentDate(r.date); return rd&&rd.year===d.year&&rd.month===d.month&&rd.day===d.day&&norm(r.group)===norm(o.code);})());
+      if(exists) return;
+      rows.push({
+        key:`${o.date}|${o.code||''}|${o.groupName||''}|ORIGINAL|${o.from}`,
+        trainer:o.from,date:formatBillingDate(o.date),group:o.code||'',name:o.groupName||'',
+        paying:0,trainingSum:0,membershipSum:0,registrationSum:0,otherPlus:0,otherMinus:0,gross:0,
+        trainerReward:0,clubAmount:0,trainingFee:0,trainerRewardPerMember:0,
+        substitute:true,substituteReference:true,substituteBy:o.acceptedBy,
+        substituteLabel:'ZASTUPOVAL: '+o.acceptedBy,savedAt:Number(o.acceptedAt||0)||Date.now()
+      });
+    });
+  }catch(e){ console.warn('Fallback informačného zástupu z ponuky zlyhal:',e); }
 
   const originalOrder=new Map(rows.map((r,i)=>[r,i]));
   rows.sort((a,b)=>{

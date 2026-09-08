@@ -7292,16 +7292,40 @@ function membershipPaymentForPeriod(memberId,period,year=appToday().year){
 }
 function membershipProfilePaymentForPeriod(member,period,year=appToday().year){
   if(!member) return null;
+  // 1. Trvalá história platieb je hlavný zdroj pravdy.
   const paid=membershipPaymentForPeriod(member.id,period,year);
   if(paid) return paid;
+  // 2. Platba na účet má prednosť pred evidenciou v profile.
   const account=membershipAccountForPeriod(member.id,period,year);
   if(account) return account;
-  const md=String(member.membershipDate||'');
-  const my=Number(md.slice(0,4));
+
+  // 3. Poistka pre platbu zapísanú priamo v profile člena.
+  // Dátum môže byť v ISO aj v slovenskom tvare DD. MM. RRRR.
+  const md=String(member.membershipDate||'').trim();
   const mp=Number(membershipPeriodForDate(md)||0);
-  if(member.membership && Number(member.membershipAmount||0)>0 && my===Number(year) && mp===Number(period)){
+  let my=Number(md.slice(0,4));
+  if(!my){ const dm=md.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/); if(dm) my=Number(dm[3]); }
+  if(Number(member.membershipAmount||0)>0 && my===Number(year) && mp===Number(period)){
     return {date:md,amount:Number(member.membershipAmount||30),legacy:true};
   }
+
+  // 4. Posledná poistka: ak tréner práve zapísal členské v Dochádzke,
+  // profil ho musí ukázať okamžite aj v prípade, že synchronizácia profilu
+  // do cloudu ešte neprebehla.
+  try{
+    const live=Array.isArray(attendanceState?.members)
+      ? attendanceState.members.find(a=>String(a?.surname||'')===String(member.surname||'') && String(a?.name||'')===String(member.name||''))
+      : null;
+    if(live && Number(live.membershipAmount||0)>0){
+      const ld=String(live.membershipDate||attendanceDateKey()||'').trim();
+      const lp=Number(live.membershipPeriod||membershipPeriodForDate(ld)||0);
+      let ly=Number(ld.slice(0,4));
+      if(!ly){ const dm=ld.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/); if(dm) ly=Number(dm[3]); }
+      if(ly===Number(year) && lp===Number(period)){
+        return {date:ld,amount:Number(live.membershipAmount),liveAttendance:true};
+      }
+    }
+  }catch(e){}
   return null;
 }
 function membershipAccountForPeriod(memberId,period,year=appToday().year){

@@ -337,6 +337,12 @@ function applyMembersFromCloudSnapshot(data){
 
     let localMembers=[];
     try{ const x=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]'); if(Array.isArray(x)) localMembers=x; }catch(e){}
+    // Pri prvom cloudovom načítaní je server autoritatívny. Zoznam členov
+    // obsahuje aj údaje, ktoré tréner zapísal v Dochádzke a ktoré sa pri
+    // uložení preniesli do profilu: členské, registračné a prihlášku.
+    // Starú lokálnu cache preto pri prvom snapshot-e nesmieme uprednostniť.
+    const firstCloudMembersSnapshot = !window.__gtFirstCloudMembersSnapshot;
+    if(firstCloudMembersSnapshot) window.__gtFirstCloudMembersSnapshot=true;
     let localOrder={}, localDelete={};
     try{ const x=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}'); if(x&&typeof x==='object') localOrder=x; }catch(e){}
     try{ const x=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}'); if(x&&typeof x==='object') localDelete=x; }catch(e){}
@@ -352,7 +358,7 @@ function applyMembersFromCloudSnapshot(data){
       if(!m||m.id==null) return;
       const id=String(m.id), local=byId.get(id);
       const rt=Number(remoteOrder[id]||0), lt=Number(localOrder[id]||0);
-      if(!local || rt>=lt){
+      if(firstCloudMembersSnapshot || !local || rt>=lt){
         const next=clean(m);
         if(!local || JSON.stringify(clean(local))!==JSON.stringify(next)) changed=true;
         byId.set(id,next);
@@ -385,7 +391,7 @@ function applyMembersFromCloudSnapshot(data){
     originalSetItem(MEMBER_SAVE_ORDER_KEY,JSON.stringify(mergedOrder));
     originalSetItem('gt-member-delete-order-v1',JSON.stringify(mergedDelete));
 
-    if(changed){
+    if(changed || firstCloudMembersSnapshot){
       isApplyingRemote=true;
       try{
         membersData.splice(0,membersData.length,...merged.map(m=>({...m})));
@@ -490,6 +496,11 @@ function initCloudSync(){
     cloudInitialSnapshotReceived = true;
     let changed = false;
     let paymentDataChanged = false;
+    // Prvý snapshot po otvorení je autoritatívny serverový stav. Práve pri
+    // štarte nesmie stará lokálna cache prebiť údaje, ktoré tréner zapísal
+    // v DOCHÁDZKE (členské, registrácia, prihláška) a uložil do profilu.
+    const isFirstCloudSnapshot = !window.__gtFirstCloudSnapshotApplied;
+    if(isFirstCloudSnapshot) window.__gtFirstCloudSnapshotApplied=true;
     isApplyingRemote = true;
     try {
       // v896: Dochádzka za konkrétny deň nesmie byť prepísaná starším
@@ -553,7 +564,10 @@ function initCloudSync(){
             (Array.isArray(remoteRows)?remoteRows:[]).forEach(put);
             return Array.from(map.values());
           };
-          const mergedPay={
+          const mergedPay=isFirstCloudSnapshot ? {
+            membership:rp.membership,
+            registration:rp.registration
+          } : {
             membership:mergePayments(lp.membership,rp.membership,'membership'),
             registration:mergePayments(lp.registration,rp.registration,'registration')
           };
@@ -567,6 +581,37 @@ function initCloudSync(){
           membershipPayments.splice(0,membershipPayments.length,...mergedPay.membership);
           registrationPayments.splice(0,registrationPayments.length,...mergedPay.registration);
           gtInitialPaymentsLoaded=true;
+          // Platba zapísaná v Dochádzke je zároveň platba člena v profile.
+          // Po prijatí spoločného snapshotu ju premietni do membersData, aby
+          // Zoznam členov nemusel spúšťať samostatné načítanie platieb.
+          try{
+            const currentYear=appToday().year;
+            membersData.forEach(m=>{
+              const reg=registrationPayments.find(p=>Number(p.memberId)===Number(m.id)&&Number(p.amount||30)>0);
+              if(reg){m.registration=true;m.registrationDate=reg.date||m.registrationDate||'';m.registrationAmount=Number(reg.amount||30);m.registrationPaidGroup=reg.paidGroup||m.registrationPaidGroup||'';}
+              const p2=membershipPayments.find(p=>Number(p.memberId)===Number(m.id)&&Number(p.period)===2&&Number(p.year||String(p.date||'').slice(0,4))===currentYear);
+              const p1=membershipPayments.find(p=>Number(p.memberId)===Number(m.id)&&Number(p.period)===1&&Number(p.year||String(p.date||'').slice(0,4))===currentYear);
+              const pay=p2||p1;
+              if(pay){m.membership=true;m.membershipDate=pay.date||m.membershipDate||'';m.membershipAmount=Number(pay.amount||30);m.membershipPaidGroup=pay.paidGroup||m.membershipPaidGroup||'';}
+            });
+            originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+            paymentDataChanged=true;
+            changed=true;
+          }catch(e){console.warn('Premietnutie platieb zapísaných v Dochádzke zlyhalo',e);}
+          // Záznam platby zapísaný v Dochádzke je zároveň stav profilu člena.
+          // Po prvom cloudovom načítaní ho preto premietni aj do membersData,
+          // aby Zoznam členov používal rovnaký zdroj bez potreby otvárať Dochádzku.
+          try{
+            const currentYear=appToday().year;
+            membersData.forEach(m=>{
+              const reg=registrationPayments.find(p=>Number(p.memberId)===Number(m.id) && Number(p.amount||30)>0);
+              if(reg){m.registration=true;m.registrationDate=reg.date||m.registrationDate||'';m.registrationAmount=Number(reg.amount||30);m.registrationPaidGroup=reg.paidGroup||m.registrationPaidGroup||'';}
+              const periods=[1,2].map(period=>membershipPayments.find(p=>Number(p.memberId)===Number(m.id)&&Number(p.period)===period&&Number(p.year||String(p.date||'').slice(0,4))===currentYear));
+              const latest=periods[1]||periods[0];
+              if(latest){m.membership=true;m.membershipAmount=Number(latest.amount||30);m.membershipDate=latest.date||m.membershipDate||'';m.membershipPaidGroup=latest.paidGroup||m.membershipPaidGroup||'';}
+            });
+            originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+          }catch(e){ console.warn('Premietnutie platieb do profilu člena zlyhalo',e); }
           return;
         }
         if(k==='gt-attendance-delete-order-v1'){
@@ -7662,19 +7707,9 @@ function deleteMemberFromList(id){
 
 
 async function renderMembers(){
- // Zoznam členov sa nesmie blokovať čakaním na Firestore. Lokálny zoznam
- // sa vykreslí okamžite a shared-db listener ho po doručení aktuálnych platieb
- // automaticky prekreslí. Tým sa odstráni dlhé čakanie pri orlovi.
- try{
-   if(typeof ensureInitialPaymentHistoryLoaded==='function' && !gtInitialPaymentsLoaded && db && cloudEnabled){
-     // Len na pozadí – nikdy nečakaj na túto Promise pred vykreslením zoznamu.
-     ensureInitialPaymentHistoryLoaded().then(ok=>{
-       if(ok && location.hash==='#members' && typeof renderMembers==='function'){
-         setTimeout(()=>{try{renderMembers();}catch(e){}},0);
-       }
-     }).catch(()=>{});
-   }
- }catch(e){ console.warn('Guard Trainer: platby pri otvorení ČLENOVIA',e); }
+ // ČLENOVIA používajú rovnaké údaje, ktoré tréner zapisuje v DOCHÁDZKE.
+ // Neštartuj tu druhé samostatné čítanie platieb. Autoritatívny stav príde
+ // cez jediný shared-db snapshot a ten následne prekreslí otvorený zoznam.
  membersData.sort((a,b)=>{const x=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});return x||(a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});});
  normalizeAllMembers();
  const app=document.querySelector('.app');
@@ -16572,35 +16607,22 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
   function app(){return document.querySelector('.app')}
   function splash(){return document.getElementById('gtSplashV319')||document.getElementById('gtSplash')||document.querySelector('[id*="Splash"]')}
   async function showApp(){
-    // Po prihlásení počkaj na prvý Firebase snapshot. Bez tohto kroku sa na
-    // prvý pohľad zobrazí stará dochádzka z localStorage a cloud ju dorovná
-    // až neskôr; používateľ potom musí robiť veľký refresh.
-    // Maximum je 5 sekúnd, takže pri výpadku internetu aplikácia nezostane
-    // visieť na splash obrazovke.
+    // Pri štarte čakáme iba na prvý spoločný snapshot. Platby sa nečítajú
+    // druhým samostatným kanálom – sú súčasťou rovnakých dát, ktoré tréner
+    // zapisuje v DOCHÁDZKE a ktoré sa ukladajú do profilu člena.
     if(typeof cloudInitialSnapshotReady!=='undefined' && !cloudInitialSnapshotReady){
       if(!cloudInitialWaitStarted){
         cloudInitialWaitStarted=true;
-        window._gtCloudWaitStartedAt=Number(cloudSyncStartedAt||Date.now());
+        window._gtCloudWaitStartedAt=Date.now();
       }
-      const elapsed=Date.now()-Number(window._gtCloudWaitStartedAt||cloudSyncStartedAt||Date.now());
-      if(elapsed<20000){
-        setTimeout(showApp,150);
+      const elapsed=Date.now()-Number(window._gtCloudWaitStartedAt||Date.now());
+      if(elapsed<2000){
+        setTimeout(showApp,100);
         return;
       }
-      console.warn('Firebase prvý snapshot neprišiel do 20 s – pokračujem z lokálnych dát');
+      console.warn('Firebase prvý snapshot neprišiel do 2 s – pokračujem z lokálnych dát');
       cloudInitialSnapshotReady=true;
     }
-    try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}
-    // Platobná história musí byť pripravená ešte pred prvým vykreslením zoznamu členov.
-    try{
-      let paymentsReady=await ensureInitialPaymentHistoryLoaded();
-      if(!paymentsReady){
-        for(let i=0;i<10 && !paymentsReady;i++){
-          await new Promise(r=>setTimeout(r,500));
-          paymentsReady=await ensureInitialPaymentHistoryLoaded();
-        }
-      }
-    }catch(e){ console.warn('Úvodné načítanie platieb:',e); }
     // Posledná synchronizačná poistka pred prvým zobrazením aplikácie.
     try{ if(typeof applyMemberApplicationFiles==='function') applyMemberApplicationFiles(); }catch(e){}
     console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');

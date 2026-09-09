@@ -7413,7 +7413,15 @@ const registrationPayments=paymentHistoryStore.registration;
 let gtInitialPaymentsLoaded=false;
 async function ensureInitialPaymentHistoryLoaded(){
   try{
-    if(gtInitialPaymentsLoaded || !db || !cloudEnabled) return;
+    if(gtInitialPaymentsLoaded) return true;
+    // Pri rýchlom štarte môže byť Firebase pripojené až chvíľu po otvorení
+    // aplikácie. Nesmie sa preto stať, že showApp pokračuje s lokálnymi
+    // platbami a prvé načítanie Zoznamu členov zobrazí starý stav.
+    const waitStart=Date.now();
+    while((!db || !cloudEnabled) && Date.now()-waitStart<10000){
+      await new Promise(r=>setTimeout(r,100));
+    }
+    if(!db || !cloudEnabled) return false;
     const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
     if(!snap.exists) return;
     const data=snap.data()||{};
@@ -7448,8 +7456,10 @@ async function ensureInitialPaymentHistoryLoaded(){
     gtInitialPaymentsLoaded=true;
     console.log('💳 Platby načítané zo servera už pri otvorení aplikácie:',mergedMembership.length,'členských,',mergedRegistration.length,'registračných');
     try{ applyMemberApplicationFiles(); }catch(e){}
+    // Platby/prihlášky už sú teraz v pamäti – prekresli aj Zoznam členov,
+    // aby sa zelené fajky zobrazili pri prvom otvorení bez návštevy Dochádzky.
     try{
-      if(location.hash==='#members' && typeof renderMembers==='function') renderMembers();
+      if(typeof renderMembers==='function') renderMembers();
     }catch(e){}
   }catch(e){ console.warn('Guard Trainer: úvodné načítanie platieb z cloudu zlyhalo',e); }
 }
@@ -16553,7 +16563,9 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     }
     try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}
     // Platobná história musí byť pripravená ešte pred prvým vykreslením zoznamu členov.
-    try{ await ensureInitialPaymentHistoryLoaded(); }catch(e){}
+    try{ await ensureInitialPaymentHistoryLoaded(); }catch(e){ console.warn('Úvodné načítanie platieb:',e); }
+    // Posledná synchronizačná poistka pred prvým zobrazením aplikácie.
+    try{ if(typeof applyMemberApplicationFiles==='function') applyMemberApplicationFiles(); }catch(e){}
     console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');
     localStorage.setItem('gt-auth-initialized','true');
 

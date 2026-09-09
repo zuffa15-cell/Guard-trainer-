@@ -7414,54 +7414,57 @@ let gtInitialPaymentsLoaded=false;
 async function ensureInitialPaymentHistoryLoaded(){
   try{
     if(gtInitialPaymentsLoaded) return true;
-    // Pri rýchlom štarte môže byť Firebase pripojené až chvíľu po otvorení
-    // aplikácie. Nesmie sa preto stať, že showApp pokračuje s lokálnymi
-    // platbami a prvé načítanie Zoznamu členov zobrazí starý stav.
+    // Pri otvorení aplikácie je Firestore jediný zdroj pravdy. Lokálna cache
+    // sa NESMIE miešať s cloudovou históriou, pretože práve to spôsobovalo,
+    // že po otvorení boli platby nesprávne a po otvorení Dochádzky sa opravili.
     const waitStart=Date.now();
-    while((!db || !cloudEnabled) && Date.now()-waitStart<10000){
+    while((!db || !cloudEnabled) && Date.now()-waitStart<15000){
       await new Promise(r=>setTimeout(r,100));
     }
     if(!db || !cloudEnabled) return false;
-    const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
-    if(!snap.exists) return;
-    const data=snap.data()||{};
-    const raw=data[PAYMENT_HISTORY_KEY];
-    if(!raw) { gtInitialPaymentsLoaded=true; return; }
-    let remote={membership:[],registration:[]};
-    try{ remote=JSON.parse(raw)||remote; }catch(e){ return; }
-    if(!Array.isArray(remote.membership) || !Array.isArray(remote.registration)) return;
 
-    const merge=(localRows,remoteRows,type)=>{
-      const map=new Map();
-      const put=p=>{
-        if(!p || p.memberId==null) return;
-        const year=Number(p.year||String(p.date||'').slice(0,4)||0);
-        const period=type==='membership'?Number(p.period||0):0;
-        const key=`${type}|${Number(p.memberId)}|${year}|${period}|${p.date||''}|${p.paidGroup||''}`;
-        const prev=map.get(key);
-        if(!prev || Number(p.updatedAt||p.savedAt||0)>=Number(prev.updatedAt||prev.savedAt||0)) map.set(key,p);
-      };
-      (Array.isArray(localRows)?localRows:[]).forEach(put);
-      (Array.isArray(remoteRows)?remoteRows:[]).forEach(put);
-      return Array.from(map.values());
-    };
-    const mergedMembership=merge(membershipPayments,remote.membership,'membership');
-    const mergedRegistration=merge(registrationPayments,remote.registration,'registration');
-    membershipPayments.splice(0,membershipPayments.length,...mergedMembership);
-    registrationPayments.splice(0,registrationPayments.length,...mergedRegistration);
-    try{
-      originalSetItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:mergedMembership,registration:mergedRegistration}));
-      localStorage.setItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:mergedMembership,registration:mergedRegistration}));
-    }catch(e){}
-    gtInitialPaymentsLoaded=true;
-    console.log('💳 Platby načítané zo servera už pri otvorení aplikácie:',mergedMembership.length,'členských,',mergedRegistration.length,'registračných');
+    let snap=null, data=null, raw=null;
+    for(let attempt=0;attempt<8;attempt++){
+      try{
+        snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
+        data=snap.exists?(snap.data()||{}):{};
+        raw=data[PAYMENT_HISTORY_KEY];
+        if(raw) break;
+      }catch(e){}
+      await new Promise(r=>setTimeout(r,300));
+    }
+
+    if(raw){
+      let remote=null;
+      try{remote=JSON.parse(raw)||null;}catch(e){}
+      if(remote && Array.isArray(remote.membership) && Array.isArray(remote.registration)){
+        // PRESNÝ cloudový stav – žiadny merge so starou lokálnou cache.
+        membershipPayments.splice(0,membershipPayments.length,...remote.membership);
+        registrationPayments.splice(0,registrationPayments.length,...remote.registration);
+        try{
+          const exact=JSON.stringify({membership:remote.membership,registration:remote.registration});
+          originalSetItem(PAYMENT_HISTORY_KEY,exact);
+          localStorage.setItem(PAYMENT_HISTORY_KEY,exact);
+        }catch(e){}
+        gtInitialPaymentsLoaded=true;
+        console.log('💳 ŠTART: načítaný PRESNÝ cloudový stav platieb',remote.membership.length,'členských,',remote.registration.length,'registračných');
+      }
+    }
+
+    // Ak cloud ešte nemá platobný kľúč, necháme aktuálnu lokálnu históriu,
+    // ale aplikácia sa už nesmie spoliehať na Dochádzku ako spúšťač načítania.
+    if(!gtInitialPaymentsLoaded){
+      console.warn('⚠️ ŠTART: cloudový kľúč platieb zatiaľ nie je dostupný');
+      return false;
+    }
+
     try{ applyMemberApplicationFiles(); }catch(e){}
-    // Platby/prihlášky už sú teraz v pamäti – prekresli aj Zoznam členov,
-    // aby sa zelené fajky zobrazili pri prvom otvorení bez návštevy Dochádzky.
-    try{
-      if(typeof renderMembers==='function') renderMembers();
-    }catch(e){}
-  }catch(e){ console.warn('Guard Trainer: úvodné načítanie platieb z cloudu zlyhalo',e); }
+    try{ if(typeof renderMembers==='function') renderMembers(); }catch(e){}
+    return true;
+  }catch(e){
+    console.warn('Guard Trainer: úvodné načítanie platieb z cloudu zlyhalo',e);
+    return false;
+  }
 }
 function persistPaymentHistory(){
   try{
@@ -16563,7 +16566,15 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
     }
     try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}
     // Platobná história musí byť pripravená ešte pred prvým vykreslením zoznamu členov.
-    try{ await ensureInitialPaymentHistoryLoaded(); }catch(e){ console.warn('Úvodné načítanie platieb:',e); }
+    try{
+      let paymentsReady=await ensureInitialPaymentHistoryLoaded();
+      if(!paymentsReady){
+        for(let i=0;i<10 && !paymentsReady;i++){
+          await new Promise(r=>setTimeout(r,500));
+          paymentsReady=await ensureInitialPaymentHistoryLoaded();
+        }
+      }
+    }catch(e){ console.warn('Úvodné načítanie platieb:',e); }
     // Posledná synchronizačná poistka pred prvým zobrazením aplikácie.
     try{ if(typeof applyMemberApplicationFiles==='function') applyMemberApplicationFiles(); }catch(e){}
     console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');

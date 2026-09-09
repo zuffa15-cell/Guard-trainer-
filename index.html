@@ -7789,7 +7789,9 @@ async function renderMembers(){
   // Pri cloudovej synchronizácii sa ČLENOVIA môžu prekresliť aj počas písania
   // do vyhľadávania. Zachovaj preto aktuálny text vyhľadávania ešte pred
   // nahradením app.innerHTML, aby sa po synchronizácii vyhľadávanie nezrušilo.
-  const __memberSearchValue = String(document.getElementById('memberSearchInput')?.value || '');
+  const __existingSearchInput = document.getElementById('memberSearchInput');
+  const __memberSearchValue = String(window.__gtMemberSearchValue ?? __existingSearchInput?.value ?? '');
+  const __searchIsActive = !!__existingSearchInput && (__memberSearchValue.length > 0 || document.activeElement === __existingSearchInput);
   // Pred vykreslením zoznamu vždy zober pravdu z uložených Dochádzok/vyúčtovaní.
   try{ syncMemberProfilesFromAttendanceTruth(); }catch(e){}
  // ČLENOVIA používajú rovnaké údaje, ktoré tréner zapisuje v DOCHÁDZKE.
@@ -7807,23 +7809,32 @@ async function renderMembers(){
      });
  const active=visibleMembers.length;
  const unpaidM=visibleMembers.filter(m=>!membershipProfilePaymentForPeriod(m,currentMembershipPeriod(),appToday().year)).length, unpaidR=visibleMembers.filter(m=>!memberHasRegistration(m)).length, debts=visibleMembers.filter(m=>m.debt>0).length;
+
+ // Počas aktívneho vyhľadávania nikdy nevymieňaj celý .app. Cloudové
+ // snapshoty môžu volať renderMembers() opakovane; input preto zostane
+ // tá istá DOM inštancia. Aktualizujeme iba výsledky zoznamu.
+ if(__searchIsActive && app && app.querySelector('.members-page')){
+   const list=document.getElementById('memberList');
+   const sx=normalizeMemberText(__memberSearchValue).toLowerCase();
+   const filteredForSearch=visibleMembers.filter(m=>normalizeMemberText((m.surname||'')+' '+(m.name||'')+' '+(m.phone||'')).toLowerCase().includes(sx));
+   if(list) list.innerHTML=memberRows(filteredForSearch);
+   return;
+ }
  app.innerHTML=`
  <header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand gt-brand-with-user">GUARD TRAINER<span class="logged-user-small">${getTopbarLoggedUserLabel()}</span></div></header>
  <main class="content members-page">
   <div class="members-head"><div><h2>ČLENOVIA <span class="member-count">(${active})</span></h2><small>Správa členov klubu</small></div><button onclick="createMemberFromMembers()">＋ NOVÝ ČLEN</button></div>
-  <div class="member-filters"><input id="memberSearchInput" type="search" placeholder="🔎 Hľadať člena..." autocomplete="off" oninput="filterMembers(this.value)"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
+  <div class="member-filters"><input id="memberSearchInput" type="search" placeholder="🔎 Hľadať člena..." autocomplete="off" oninput="window.__gtMemberSearchValue=this.value;filterMembers(this.value)"><button onclick="showMemberGroupFilter()">SKUPINA⌄${currentMemberGroupFilter!=='ALL'?` · ${escapeHtml(currentMemberGroupFilter)}`:''}</button>${currentMemberGroupFilter!=='ALL'?`<button type="button" class="pdf-action-btn" onclick="return saveGroupAttendanceRegisterPDF('${currentMemberGroupFilter}')" title="Prezenčka – aktuálny mesiac">PDF PREZENČKA</button>`:''}</div>
   <div class="member-list-head"><span>ČLEN</span><span>SKUPINA</span><span>PRIHLÁŠKA</span><span>ČLENSKÉ</span><span>REGISTRÁCIA</span></div>
   <div id="memberList">${memberRows(visibleMembers)}</div>
  </main>
  <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav active" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
  // Cloud môže prekresliť zoznam počas písania. Po novom renderi obnov
  // vyhľadávacie pole a jeho filtrovaný výsledok.
- if(__memberSearchValue){
-   try{
-     const inp=document.getElementById('memberSearchInput');
-     if(inp){ inp.value=__memberSearchValue; filterMembers(__memberSearchValue); }
-   }catch(e){}
- }
+ try{
+   const inp=document.getElementById('memberSearchInput');
+   if(inp){ inp.value=__memberSearchValue; window.__gtMemberSearchValue=__memberSearchValue; if(__memberSearchValue) filterMembers(__memberSearchValue); }
+ }catch(e){}
 }
 
 
@@ -8029,6 +8040,7 @@ function saveGroupAttendanceRegisterPDF(group){
 
 function filterMembers(q){
  const input=document.getElementById('memberSearchInput');
+ window.__gtMemberSearchValue=String(q||'');
  const x=normalizeMemberText(q||'').toLowerCase();
  const source=currentMemberGroupFilter==='ALL'?membersData:membersData.filter(m=>(m.groups||[m.group]).map(g=>String(g).trim()).includes(String(currentMemberGroupFilter).trim()));
  const filtered=source.filter(m=>normalizeMemberText((m.surname||'')+' '+(m.name||'')+' '+(m.phone||'')).toLowerCase().includes(x));

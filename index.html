@@ -46,10 +46,10 @@ try {
     // Najprv oprav spoločný základ na 191 členov. Až potom spusti realtime
     // listener, aby sa starých 206 členov nestihlo načítať späť do zariadení.
     // Oprava je iba pre administrátora a iba vtedy, keď má lokálne presne 191 členov.
-    (async()=>{
-      try{ await repairMemberCloudBaselineOnce(); }catch(e){ console.warn('Guard Trainer: baseline repair failed',e); }
-      try{ initCloudSync(); }catch(e){ console.warn('Guard Trainer: cloud sync init failed',e); }
-    })();
+    // Oprava 191-členového základu už bola vykonaná. Nesmie sa spúšťať
+    // pri každom otvorení aplikácie, lebo zapisovanie celého zoznamu
+    // zbytočne blokovalo štart a predlžovalo orla. Cloud sync spusti okamžite.
+    try{ initCloudSync(); }catch(e){ console.warn('Guard Trainer: cloud sync init failed',e); }
     // Priamy V2 kanál je ponechaný iba ako zapisovací kanál; pri štarte sa z neho
     // nesmie načítať starý zoznam, lebo by mohol vrátiť už odstránených členov.
   }).catch(e=>console.warn("Auth fail", e));
@@ -489,6 +489,7 @@ function initCloudSync(){
     // vykresliť aktuálne dáta.
     cloudInitialSnapshotReceived = true;
     let changed = false;
+    let paymentDataChanged = false;
     isApplyingRemote = true;
     try {
       // v896: Dochádzka za konkrétny deň nesmie byť prepísaná starším
@@ -557,9 +558,15 @@ function initCloudSync(){
             registration:mergePayments(lp.registration,rp.registration,'registration')
           };
           const raw=JSON.stringify(mergedPay);
-          if(raw!==originalGetItem(PAYMENT_HISTORY_KEY)){originalSetItem(PAYMENT_HISTORY_KEY,raw);localStorage.setItem(PAYMENT_HISTORY_KEY,raw);changed=true;}
+          if(raw!==originalGetItem(PAYMENT_HISTORY_KEY)){
+            originalSetItem(PAYMENT_HISTORY_KEY,raw);
+            localStorage.setItem(PAYMENT_HISTORY_KEY,raw);
+            changed=true;
+            paymentDataChanged=true;
+          }
           membershipPayments.splice(0,membershipPayments.length,...mergedPay.membership);
           registrationPayments.splice(0,registrationPayments.length,...mergedPay.registration);
+          gtInitialPaymentsLoaded=true;
           return;
         }
         if(k==='gt-attendance-delete-order-v1'){
@@ -904,6 +911,12 @@ function initCloudSync(){
           }
           if(memberDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
             setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member list cloud refresh failed:',e); }},0);
+          }
+          // Platby sa načítajú cez shared-db listener. Ak je Zoznam členov
+          // otvorený už pred príchodom cloudu, prekresli ho hneď po prijatí
+          // platobnej histórie. Dochádzka už nesmie byť spúšťačom.
+          if(paymentDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
+            setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member payment cloud refresh failed:',e); }},0);
           }
         }catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
@@ -7649,31 +7662,17 @@ function deleteMemberFromList(id){
 
 
 async function renderMembers(){
- // V zozname ČLENOVIA nesmie byť prvý render založený na starej localStorage
- // histórii. Dochádzka predtým náhodou spustila cloudový sync, preto sa platby
- // objavili až po jej otvorení. Pri otvorení zoznamu si ich načítame priamo zo
- // servera a až potom vykreslíme riadky.
+ // Zoznam členov sa nesmie blokovať čakaním na Firestore. Lokálny zoznam
+ // sa vykreslí okamžite a shared-db listener ho po doručení aktuálnych platieb
+ // automaticky prekreslí. Tým sa odstráni dlhé čakanie pri orlovi.
  try{
-   if(typeof ensureInitialPaymentHistoryLoaded==='function' && !gtInitialPaymentsLoaded){
-     const ok=await ensureInitialPaymentHistoryLoaded();
-     if(!ok && typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled){
-       // Druhý pokus priamo zo servera – bez použitia lokálnej cache.
-       let snap=null;
-       try{ snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get({source:'server'}); }catch(e){}
-       const raw=snap?.exists ? snap.data()?.[PAYMENT_HISTORY_KEY] : null;
-       if(raw){
-         try{
-           const remote=JSON.parse(raw);
-           if(Array.isArray(remote?.membership) && Array.isArray(remote?.registration)){
-             membershipPayments.splice(0,membershipPayments.length,...remote.membership);
-             registrationPayments.splice(0,registrationPayments.length,...remote.registration);
-             const exact=JSON.stringify({membership:remote.membership,registration:remote.registration});
-             originalSetItem(PAYMENT_HISTORY_KEY,exact); localStorage.setItem(PAYMENT_HISTORY_KEY,exact);
-             gtInitialPaymentsLoaded=true;
-           }
-         }catch(e){}
+   if(typeof ensureInitialPaymentHistoryLoaded==='function' && !gtInitialPaymentsLoaded && db && cloudEnabled){
+     // Len na pozadí – nikdy nečakaj na túto Promise pred vykreslením zoznamu.
+     ensureInitialPaymentHistoryLoaded().then(ok=>{
+       if(ok && location.hash==='#members' && typeof renderMembers==='function'){
+         setTimeout(()=>{try{renderMembers();}catch(e){}},0);
        }
-     }
+     }).catch(()=>{});
    }
  }catch(e){ console.warn('Guard Trainer: platby pri otvorení ČLENOVIA',e); }
  membersData.sort((a,b)=>{const x=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});return x||(a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});});

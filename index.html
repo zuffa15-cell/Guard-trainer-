@@ -924,6 +924,11 @@ function initCloudSync(){
     }
     try{ applyMemberApplicationFiles(); }catch(e){}
     cloudInitialSnapshotReady = true;
+    // Po spracovaní všetkých cloudových kľúčov je billing/Dochádzka zdrojom pravdy.
+    // Premietni jej paymentSnapshot do profilu ešte pred prvým renderom ČLENOV.
+    let attendanceTruthChanged=false;
+    try{ attendanceTruthChanged=syncMemberProfilesFromAttendanceTruth(); }catch(e){}
+    if(attendanceTruthChanged) changed=true;
 
         if(changed) {
       window.dispatchEvent(new Event('cloud-sync-update'));
@@ -7781,6 +7786,8 @@ function deleteMemberFromList(id){
 
 
 async function renderMembers(){
+  // Pred vykreslením zoznamu vždy zober pravdu z uložených Dochádzok/vyúčtovaní.
+  try{ syncMemberProfilesFromAttendanceTruth(); }catch(e){}
  // ČLENOVIA používajú rovnaké údaje, ktoré tréner zapisuje v DOCHÁDZKE.
  // Neštartuj tu druhé samostatné čítanie platieb. Autoritatívny stav príde
  // cez jediný shared-db snapshot a ten následne prekreslí otvorený zoznam.
@@ -12622,6 +12629,108 @@ window.manualBillingSync=function(){
 function getBillingRecords(){
   return Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
 }
+
+
+// ===== JEDINÝ ZDROJ PRAVDY: DOCHÁDZKA -> PROFIL ČLENA =====
+// Platby, ktoré tréner vidí a zapíše v Dochádzke, sú autoritatívne.
+// Vyúčtovanie uchováva paymentSnapshot spolu s konkrétnym tréningom.
+// Pri prijatí cloudových vyúčtovaní preto vždy premietneme tieto platby
+// späť do membersData a do paymentHistory. Zoznam ČLENOV už potom iba
+// zobrazuje uložený stav profilu a nemusí otvárať Dochádzku ako spúšťač.
+function syncMemberProfilesFromAttendanceTruth(){
+  try{
+    if(!Array.isArray(monthlyBillingRecords) || !Array.isArray(membersData)) return false;
+    const memberByName=new Map();
+    membersData.forEach(m=>{
+      memberByName.set(String(m.surname||'').trim().toUpperCase()+'|'+String(m.name||'').trim().toUpperCase(),m);
+    });
+    const membershipTruth=new Map(); // member|year|period -> newest attendance payment
+    const registrationTruth=new Map(); // member -> newest attendance registration
+    const keyFor=(x)=>String(x.surname||'').trim().toUpperCase()+'|'+String(x.name||'').trim().toUpperCase();
+    const dateIso=(v)=>{
+      const d=parsePaymentDate(v); if(!d) return String(v||'');
+      return `${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    };
+    (monthlyBillingRecords||[]).forEach(r=>{
+      if(!Array.isArray(r?.paymentSnapshot)) return;
+      const d=parsePaymentDate(r.date); if(!d) return;
+      const iso=dateIso(r.date);
+      const period=d.month<=6?1:2;
+      r.paymentSnapshot.forEach(x=>{
+        const m=memberByName.get(keyFor(x));
+        if(!m) return;
+        const amount=Number(x.membership||0);
+        const reg=Number(x.registration||0);
+        const stamp=Number(r.savedAt||r.updatedAt||0);
+        const mk=`${m.id}|${d.year}|${period}`;
+        if(amount>0){
+          const prev=membershipTruth.get(mk);
+          if(!prev || stamp>=prev.stamp || iso>=prev.date){
+            membershipTruth.set(mk,{member:m,amount,date:iso,group:String(r.group||''),year:d.year,period,stamp});
+          }
+        }
+        if(reg>0){
+          const mkReg=String(m.id);
+          const prev=registrationTruth.get(mkReg);
+          if(!prev || stamp>=prev.stamp || iso>=prev.date){
+            registrationTruth.set(mkReg,{member:m,amount:reg,date:iso,group:String(r.group||''),year:d.year,stamp});
+          }
+        }
+      });
+    });
+    if(!membershipTruth.size && !registrationTruth.size) return false;
+    let changed=false;
+    // Aktualizuj profil podľa dochádzky – nikdy neprepisuj existujúcu pravdivú
+    // hodnotu nulou len preto, že starší billing záznam nemal snapshot.
+    membershipTruth.forEach(v=>{
+      const m=v.member;
+      if(Number(m.membershipAmount||0)!==Number(v.amount)||String(m.membershipDate||'')!==v.date||String(m.membershipPaidGroup||'')!==v.group||m.membership!==true){
+        m.membership=true;
+        m.membershipAmount=Number(v.amount);
+        m.membershipDate=v.date;
+        m.membershipPaidGroup=v.group;
+        changed=true;
+      }
+      const exists=membershipPayments.some(p=>Number(p.memberId)===Number(m.id)&&Number(p.year||String(p.date||'').slice(0,4))===Number(v.year)&&Number(p.period)===Number(v.period));
+      if(!exists){
+        membershipPayments.push({memberId:m.id,surname:m.surname,name:m.name,groups:v.group?[v.group]:[],paidGroup:v.group,date:v.date,amount:Number(v.amount),period:Number(v.period),year:Number(v.year),source:'attendanceSnapshot',collectorTrainer:String(v.member?.collectorTrainer||'')});
+        changed=true;
+      }else{
+        // Dochádzka má prednosť pred starým/nesprávnym záznamom rovnakej periódy.
+        const idx=membershipPayments.findIndex(p=>Number(p.memberId)===Number(m.id)&&Number(p.year||String(p.date||'').slice(0,4))===Number(v.year)&&Number(p.period)===Number(v.period));
+        if(idx>=0 && (Number(membershipPayments[idx].amount||0)!==Number(v.amount)||String(membershipPayments[idx].date||'')!==v.date||String(membershipPayments[idx].paidGroup||'')!==v.group)){
+          membershipPayments[idx]={...membershipPayments[idx],memberId:m.id,surname:m.surname,name:m.name,groups:v.group?[v.group]:[],paidGroup:v.group,date:v.date,amount:Number(v.amount),period:Number(v.period),year:Number(v.year),source:'attendanceSnapshot'};
+          changed=true;
+        }
+      }
+    });
+    registrationTruth.forEach(v=>{
+      const m=v.member;
+      if(m.registration!==true||String(m.registrationDate||'')!==v.date||Number(m.registrationAmount||0)!==Number(v.amount)||String(m.registrationPaidGroup||'')!==v.group){
+        m.registration=true; m.registrationPaid=true; m.registrationDate=v.date; m.registrationAmount=Number(v.amount); m.registrationPaidGroup=v.group; changed=true;
+      }
+      const idx=registrationPayments.findIndex(p=>Number(p.memberId)===Number(m.id));
+      if(idx<0){
+        registrationPayments.push({memberId:m.id,surname:m.surname,name:m.name,paidGroup:v.group,date:v.date,amount:Number(v.amount),year:Number(v.year),source:'attendanceSnapshot'}); changed=true;
+      }else if(String(registrationPayments[idx].date||'')!==v.date||Number(registrationPayments[idx].amount||0)!==Number(v.amount)||String(registrationPayments[idx].paidGroup||'')!==v.group){
+        registrationPayments[idx]={...registrationPayments[idx],memberId:m.id,surname:m.surname,name:m.name,paidGroup:v.group,date:v.date,amount:Number(v.amount),year:Number(v.year),source:'attendanceSnapshot'}; changed=true;
+      }
+    });
+    if(changed){
+      try{
+        const ph=JSON.stringify({membership:membershipPayments,registration:registrationPayments});
+        originalSetItem(PAYMENT_HISTORY_KEY,ph);
+        localStorage.setItem(PAYMENT_HISTORY_KEY,ph);
+        originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+        localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+      }catch(e){}
+      console.log('📥 DOCHÁDZKA -> PROFILY ČLENOV: platby synchronizované',membershipTruth.size,registrationTruth.size);
+    }
+    return changed;
+  }catch(e){ console.warn('Synchronizácia platieb z Dochádzky do profilov zlyhala',e); return false; }
+}
+window.syncMemberProfilesFromAttendanceTruth=syncMemberProfilesFromAttendanceTruth;
+
 
 
 // Potvrdenie odovzdania peňazí hlavného trénera.

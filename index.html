@@ -7648,7 +7648,34 @@ function deleteMemberFromList(id){
 }
 
 
-function renderMembers(){
+async function renderMembers(){
+ // V zozname ČLENOVIA nesmie byť prvý render založený na starej localStorage
+ // histórii. Dochádzka predtým náhodou spustila cloudový sync, preto sa platby
+ // objavili až po jej otvorení. Pri otvorení zoznamu si ich načítame priamo zo
+ // servera a až potom vykreslíme riadky.
+ try{
+   if(typeof ensureInitialPaymentHistoryLoaded==='function' && !gtInitialPaymentsLoaded){
+     const ok=await ensureInitialPaymentHistoryLoaded();
+     if(!ok && typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled){
+       // Druhý pokus priamo zo servera – bez použitia lokálnej cache.
+       let snap=null;
+       try{ snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get({source:'server'}); }catch(e){}
+       const raw=snap?.exists ? snap.data()?.[PAYMENT_HISTORY_KEY] : null;
+       if(raw){
+         try{
+           const remote=JSON.parse(raw);
+           if(Array.isArray(remote?.membership) && Array.isArray(remote?.registration)){
+             membershipPayments.splice(0,membershipPayments.length,...remote.membership);
+             registrationPayments.splice(0,registrationPayments.length,...remote.registration);
+             const exact=JSON.stringify({membership:remote.membership,registration:remote.registration});
+             originalSetItem(PAYMENT_HISTORY_KEY,exact); localStorage.setItem(PAYMENT_HISTORY_KEY,exact);
+             gtInitialPaymentsLoaded=true;
+           }
+         }catch(e){}
+       }
+     }
+   }
+ }catch(e){ console.warn('Guard Trainer: platby pri otvorení ČLENOVIA',e); }
  membersData.sort((a,b)=>{const x=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});return x||(a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});});
  normalizeAllMembers();
  const app=document.querySelector('.app');

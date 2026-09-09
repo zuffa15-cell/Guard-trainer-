@@ -7405,6 +7405,54 @@ try{
 }catch(e){}
 const membershipPayments=paymentHistoryStore.membership;
 const registrationPayments=paymentHistoryStore.registration;
+
+// v957 – Platby musia byť načítané už pri otvorení aplikácie, nie až po otvorení Dochádzky.
+// Zdieľaný Firestore je zdrojom pravdy pre členské/registračné platby. Pri štarte
+// ešte raz načítame iba platobnú históriu priamo zo shared-db a okamžite ju premietneme
+// do lokálnych polí, aby Zoznam členov zobrazil správne stavy hneď na prvé otvorenie.
+let gtInitialPaymentsLoaded=false;
+async function ensureInitialPaymentHistoryLoaded(){
+  try{
+    if(gtInitialPaymentsLoaded || !db || !cloudEnabled) return;
+    const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
+    if(!snap.exists) return;
+    const data=snap.data()||{};
+    const raw=data[PAYMENT_HISTORY_KEY];
+    if(!raw) { gtInitialPaymentsLoaded=true; return; }
+    let remote={membership:[],registration:[]};
+    try{ remote=JSON.parse(raw)||remote; }catch(e){ return; }
+    if(!Array.isArray(remote.membership) || !Array.isArray(remote.registration)) return;
+
+    const merge=(localRows,remoteRows,type)=>{
+      const map=new Map();
+      const put=p=>{
+        if(!p || p.memberId==null) return;
+        const year=Number(p.year||String(p.date||'').slice(0,4)||0);
+        const period=type==='membership'?Number(p.period||0):0;
+        const key=`${type}|${Number(p.memberId)}|${year}|${period}|${p.date||''}|${p.paidGroup||''}`;
+        const prev=map.get(key);
+        if(!prev || Number(p.updatedAt||p.savedAt||0)>=Number(prev.updatedAt||prev.savedAt||0)) map.set(key,p);
+      };
+      (Array.isArray(localRows)?localRows:[]).forEach(put);
+      (Array.isArray(remoteRows)?remoteRows:[]).forEach(put);
+      return Array.from(map.values());
+    };
+    const mergedMembership=merge(membershipPayments,remote.membership,'membership');
+    const mergedRegistration=merge(registrationPayments,remote.registration,'registration');
+    membershipPayments.splice(0,membershipPayments.length,...mergedMembership);
+    registrationPayments.splice(0,registrationPayments.length,...mergedRegistration);
+    try{
+      originalSetItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:mergedMembership,registration:mergedRegistration}));
+      localStorage.setItem(PAYMENT_HISTORY_KEY,JSON.stringify({membership:mergedMembership,registration:mergedRegistration}));
+    }catch(e){}
+    gtInitialPaymentsLoaded=true;
+    console.log('💳 Platby načítané zo servera už pri otvorení aplikácie:',mergedMembership.length,'členských,',mergedRegistration.length,'registračných');
+    try{ applyMemberApplicationFiles(); }catch(e){}
+    try{
+      if(location.hash==='#members' && typeof renderMembers==='function') renderMembers();
+    }catch(e){}
+  }catch(e){ console.warn('Guard Trainer: úvodné načítanie platieb z cloudu zlyhalo',e); }
+}
 function persistPaymentHistory(){
   try{
     const payload=JSON.stringify({membership:membershipPayments,registration:registrationPayments});
@@ -16484,7 +16532,7 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
 (function(){
   function app(){return document.querySelector('.app')}
   function splash(){return document.getElementById('gtSplashV319')||document.getElementById('gtSplash')||document.querySelector('[id*="Splash"]')}
-  function showApp(){
+  async function showApp(){
     // Po prihlásení počkaj na prvý Firebase snapshot. Bez tohto kroku sa na
     // prvý pohľad zobrazí stará dochádzka z localStorage a cloud ju dorovná
     // až neskôr; používateľ potom musí robiť veľký refresh.
@@ -16504,6 +16552,8 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
       cloudInitialSnapshotReady=true;
     }
     try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}
+    // Platobná história musí byť pripravená ešte pred prvým vykreslením zoznamu členov.
+    try{ await ensureInitialPaymentHistoryLoaded(); }catch(e){}
     console.log('🚀 GUARD TRAINER: otvorenie aplikácie podľa prihlásenej roly');
     localStorage.setItem('gt-auth-initialized','true');
 

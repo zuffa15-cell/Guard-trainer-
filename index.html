@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
+<!-- Guard Trainer v957: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
@@ -8685,21 +8685,24 @@ function setMemberGroup(group,id){
 // zmenou jeho profilu. Napr. A -> B znamená, že profil obsahuje A aj B.
 // B sa nesmie uložiť iba do dnešnej dochádzky.
 function addMemberToAttendanceGroupProfile(member,targetGroup){
+ // Existujúci člen z inej skupiny musí byť skutočne pridaný aj do profilu člena.
+ // Dôležité: zmenu najprv zapíšeme do lokálneho kanonického profilu a až potom
+ // prekreslíme dochádzku. Tým sa člen nestratí pri následnej synchronizácii.
  const m=member;
  if(!m)return false;
- const code=String(targetGroup||'').trim().toUpperCase();
+ const code=normalizeGroupCode(targetGroup);
  if(!code)return false;
  const old=Array.isArray(m.groups)?m.groups:[m.group];
- const groups=old.map(g=>String(g||'').trim().toUpperCase()).filter(Boolean);
+ const groups=old.map(g=>normalizeGroupCode(g)).filter(Boolean);
  if(!groups.includes(code)) groups.push(code);
  m.groups=[...new Set(groups)];
- // Zachovaj prvú/hlavnú skupinu; ostatné skupiny sú ďalšie skupiny člena.
+ // Prvá skupina ostáva hlavná; ostatné sú ďalšie skupiny člena.
  m.group=m.groups[0]||code;
  normalizeMember(m);
  markMemberSaved(m.id);
  persistMembersData(m.id);
- try{syncMemberDirectV2(m,false);}catch(e){}
- try{if(typeof pushToCloud==='function') setTimeout(()=>pushToCloud(true),50);}catch(e){}
+ try{ syncMemberDirectV2(m.id); }catch(e){}
+ try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
  return true;
 }
 function getAvailableMemberGroups(){
@@ -11989,23 +11992,26 @@ async function addNewMember(){
    }
 
    if(choice.type==='active'){
-     const existingMember=choice.member;
-     const target=String(attendanceState.group||'').trim().toUpperCase();
-     const already=(existingMember.groups||[]).some(g=>String(g).trim().toUpperCase()===target);
-     if(!already){
-       addMemberToAttendanceGroupProfile(existingMember,attendanceState.group);
-     }else{
-       // Aj keď už skupina existuje, zabezpeč, že profil a cloud obsahujú
-       // rovnaký kanonický zoznam skupín.
-       addMemberToAttendanceGroupProfile(existingMember,attendanceState.group);
-     }
+     // Pracuj s aktuálnym objektom z membersData podľa ID. Nie s kópiou z
+     // modálneho okna, aby sa zmena skupiny vždy zapísala do kanonického profilu.
+     const existingMember=membersData.find(x=>Number(x.id)===Number(choice.member?.id)) || choice.member;
+     if(!existingMember){ toast('Člena sa nepodarilo nájsť'); return; }
 
-     const existingAttendance=attendanceState.members.find(x=>memberSameName(x,existingMember));
+     const target=normalizeGroupCode(attendanceState.group);
+     if(!target){ toast('Táto dochádzka nemá určenú skupinu'); return; }
+
+     // 1. Profil člena: pridaj cieľovú skupinu (A -> B, B -> C atď.).
+     // 2. Dochádzka: vytvor/aktualizuj riadok pre dnešný tréning.
+     // 3. Až potom ulož obe vrstvy.
+     addMemberToAttendanceGroupProfile(existingMember,target);
+
+     let existingAttendance=attendanceState.members.find(x=>memberSameName(x,existingMember));
      if(existingAttendance){
        existingAttendance.training=true;
        existingAttendance.newMember=true;
+       existingAttendance.newMemberDate=attendanceState.date;
      }else{
-       attendanceState.members.push({
+       existingAttendance={
          surname:existingMember.surname,name:existingMember.name,
          training:true,newMember:true,newMemberDate:attendanceState.date,
          membershipAmount:Number(existingMember.membershipAmount||0),
@@ -12013,15 +12019,26 @@ async function addNewMember(){
          membershipPaidGroup:existingMember.membershipPaidGroup||'',
          registration:!!existingMember.registration,
          registrationDate:existingMember.registrationDate||'',
+         registrationAccountAmount:Number(existingMember.registrationAccountAmount||0),
+         registrationAccountDate:existingMember.registrationAccountDate||'',
+         membershipAccountAmount:Number(existingMember.membershipAccountAmount||0),
+         membershipAccountDate:existingMember.membershipAccountDate||'',
          debt:Number(existingMember.debt||0),debtReason:existingMember.debtReason||'',
          application:!!existingMember.application,
          applicationDate:existingMember.applicationDate||'',
          applicationFile:existingMember.applicationFile||'',
          applicationFileName:existingMember.applicationFileName||''
-       });
+       };
+       attendanceState.members.push(existingAttendance);
      }
+
      attendanceState.members.sort((a,b)=>a.surname.localeCompare(b.surname,'sk'));
-     saveCurrentTrainingAttendance(); refreshAttendance();
+     // Uloženie dochádzky až po pridaní člena zabráni tomu, aby ho ďalší render
+     // okamžite vyhodil ako člena inej skupiny.
+     saveCurrentTrainingAttendance();
+     try{ persistMembersData(existingMember.id); }catch(e){}
+     try{ syncMemberDirectV2(existingMember.id); }catch(e){}
+     refreshAttendance();
      returnToAttendanceAfterNewMember();
      toast(`${existingMember.surname} ${existingMember.name} bol pridaný do skupiny ${attendanceState.group}`);
      return;

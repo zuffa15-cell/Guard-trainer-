@@ -460,7 +460,9 @@ function initCloudSync(){
               try{
                 const st=history.state||{};
                 const id=Number(st.gtId||window.__gtOpenMemberId||0);
-                if(location.hash==='#memberProfile' && id && typeof renderMemberProfile==='function') renderMemberProfile(id);
+                if(location.hash==='#memberProfile' && id && typeof renderMemberProfile==='function') {
+                  if(!document.getElementById('member-training-stats-overlay')) renderMemberProfile(id);
+                }
                 else if(location.hash==='#memberPayments' && id && typeof renderMemberPaymentHistory==='function') renderMemberPaymentHistory(id);
                 else if(location.hash==='#members' && typeof renderMembers==='function') renderMembers();
               }catch(e){}
@@ -993,7 +995,9 @@ function initCloudSync(){
               try{
                 const st=history.state||{};
                 const id=Number(st.gtId||window.__gtOpenMemberId||0);
-                if(location.hash==='#memberProfile' && id && typeof renderMemberProfile==='function') renderMemberProfile(id);
+                if(location.hash==='#memberProfile' && id && typeof renderMemberProfile==='function') {
+                  if(!document.getElementById('member-training-stats-overlay')) renderMemberProfile(id);
+                }
                 else if(location.hash==='#memberPayments' && id && typeof renderMemberPaymentHistory==='function') renderMemberPaymentHistory(id);
                 else if(location.hash==='#members' && typeof renderMembers==='function') renderMembers();
               }catch(e){ console.warn('Member payment cloud refresh failed:',e); }
@@ -1225,7 +1229,9 @@ window.addEventListener('cloud-sync-update',()=>{
       }
       else if(hash==='#memberProfile'){
         const id=Number(history.state?.gtId||0);
-        if(id && typeof renderMemberProfile==='function') renderMemberProfile(id);
+        // Počas otvorenej štatistiky tréningov neprekresľuj celý profil.
+        // Inak cloud-sync po približne sekunde odstráni práve otvorené okno.
+        if(id && typeof renderMemberProfile==='function' && !document.getElementById('member-training-stats-overlay')) renderMemberProfile(id);
       }
     }
   }catch(e){ console.warn('Realtime redraw členov zlyhal',e); }

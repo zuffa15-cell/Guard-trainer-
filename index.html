@@ -7786,6 +7786,10 @@ function deleteMemberFromList(id){
 
 
 async function renderMembers(){
+  // Pri cloudovej synchronizácii sa ČLENOVIA môžu prekresliť aj počas písania
+  // do vyhľadávania. Zachovaj preto aktuálny text vyhľadávania ešte pred
+  // nahradením app.innerHTML, aby sa po synchronizácii vyhľadávanie nezrušilo.
+  const __memberSearchValue = String(document.getElementById('memberSearchInput')?.value || '');
   // Pred vykreslením zoznamu vždy zober pravdu z uložených Dochádzok/vyúčtovaní.
   try{ syncMemberProfilesFromAttendanceTruth(); }catch(e){}
  // ČLENOVIA používajú rovnaké údaje, ktoré tréner zapisuje v DOCHÁDZKE.
@@ -7812,6 +7816,14 @@ async function renderMembers(){
   <div id="memberList">${memberRows(visibleMembers)}</div>
  </main>
  <nav class="bottom"><a class="nav" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a><a class="nav" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a><a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a><a class="nav active" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a><a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a><a class="nav" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a></nav>`;
+ // Cloud môže prekresliť zoznam počas písania. Po novom renderi obnov
+ // vyhľadávacie pole a jeho filtrovaný výsledok.
+ if(__memberSearchValue){
+   try{
+     const inp=document.getElementById('memberSearchInput');
+     if(inp){ inp.value=__memberSearchValue; filterMembers(__memberSearchValue); }
+   }catch(e){}
+ }
 }
 
 
@@ -8016,11 +8028,14 @@ function saveGroupAttendanceRegisterPDF(group){
 }
 
 function filterMembers(q){
+ const input=document.getElementById('memberSearchInput');
  const x=normalizeMemberText(q||'').toLowerCase();
  const source=currentMemberGroupFilter==='ALL'?membersData:membersData.filter(m=>(m.groups||[m.group]).map(g=>String(g).trim()).includes(String(currentMemberGroupFilter).trim()));
  const filtered=source.filter(m=>normalizeMemberText((m.surname||'')+' '+(m.name||'')+' '+(m.phone||'')).toLowerCase().includes(x));
  const el=document.getElementById('memberList');
  if(el) el.innerHTML=memberRows(filtered);
+ const restored=document.getElementById('memberSearchInput');
+ if(restored && restored.value!==String(q||'')) restored.value=String(q||'');
 }
 function getMemberAge(m){
  const raw=String(m?.dob||'').trim();

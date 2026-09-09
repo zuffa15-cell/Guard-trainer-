@@ -7426,7 +7426,7 @@ async function ensureInitialPaymentHistoryLoaded(){
     let snap=null, data=null, raw=null;
     for(let attempt=0;attempt<8;attempt++){
       try{
-        snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
+        snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get({source:'server'});
         data=snap.exists?(snap.data()||{}):{};
         raw=data[PAYMENT_HISTORY_KEY];
         if(raw) break;
@@ -16557,11 +16557,11 @@ document.addEventListener('DOMContentLoaded',syncAppDateInputs);
         window._gtCloudWaitStartedAt=Number(cloudSyncStartedAt||Date.now());
       }
       const elapsed=Date.now()-Number(window._gtCloudWaitStartedAt||cloudSyncStartedAt||Date.now());
-      if(elapsed<5000){
+      if(elapsed<20000){
         setTimeout(showApp,150);
         return;
       }
-      console.warn('Firebase prvý snapshot neprišiel do 5 s – pokračujem z lokálnych dát');
+      console.warn('Firebase prvý snapshot neprišiel do 20 s – pokračujem z lokálnych dát');
       cloudInitialSnapshotReady=true;
     }
     try{if(window._gtCloudLoadingTimer){clearInterval(window._gtCloudLoadingTimer);window._gtCloudLoadingTimer=null;}}catch(e){}

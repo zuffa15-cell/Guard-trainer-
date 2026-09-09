@@ -445,7 +445,30 @@ function initCloudSync(){
     // robí iba pri skutočnom lokálnom uložení člena, aby nevznikala race slučka.
     if(!data) return;
     if(data._lastUpdateBy && data._lastUpdateBy === myUid) {
-      // moje vlastné zmeny - ignoruj
+      // Vlastný snapshot nesmie ignorovať PLATBY. Práve tu bola hlavná chyba:
+      // tréner zapísal platbu v DOCHÁDZKE, shared-db ju obsahoval, ale profil
+      // ju nedostal, pretože celý vlastný snapshot sa zahodil ešte pred blokom
+      // PAYMENT_HISTORY_KEY.
+      try{
+        const ownPaymentRaw=data[PAYMENT_HISTORY_KEY];
+        if(ownPaymentRaw){
+          let ownPayment=null;
+          try{ ownPayment=JSON.parse(ownPaymentRaw)||null; }catch(e){}
+          if(applyCloudPaymentHistoryToMemberProfiles(ownPayment)){
+            window.dispatchEvent(new Event('cloud-payment-update'));
+            setTimeout(()=>{
+              try{
+                const st=history.state||{};
+                const id=Number(st.gtId||window.__gtOpenMemberId||0);
+                if(location.hash==='#memberProfile' && id && typeof renderMemberProfile==='function') renderMemberProfile(id);
+                else if(location.hash==='#memberPayments' && id && typeof renderMemberPaymentHistory==='function') renderMemberPaymentHistory(id);
+                else if(location.hash==='#members' && typeof renderMembers==='function') renderMembers();
+              }catch(e){}
+            },0);
+          }
+        }
+      }catch(e){ console.warn('Vlastný cloud snapshot – platby sa nepodarilo premietnuť',e); }
+      // Ostatné vlastné položky nemusíme znovu aplikovať.
       return;
     }
     if(data._updatedAt && data._updatedAt <= lastCloudUpdate) {
@@ -960,8 +983,16 @@ function initCloudSync(){
           // Platby sa načítajú cez shared-db listener. Ak je Zoznam členov
           // otvorený už pred príchodom cloudu, prekresli ho hneď po prijatí
           // platobnej histórie. Dochádzka už nesmie byť spúšťačom.
-          if(paymentDataChanged && location.hash==='#members' && typeof renderMembers==='function'){
-            setTimeout(()=>{try{ renderMembers(); }catch(e){ console.warn('Member payment cloud refresh failed:',e); }},0);
+          if(paymentDataChanged){
+            setTimeout(()=>{
+              try{
+                const st=history.state||{};
+                const id=Number(st.gtId||window.__gtOpenMemberId||0);
+                if(location.hash==='#memberProfile' && id && typeof renderMemberProfile==='function') renderMemberProfile(id);
+                else if(location.hash==='#memberPayments' && id && typeof renderMemberPaymentHistory==='function') renderMemberPaymentHistory(id);
+                else if(location.hash==='#members' && typeof renderMembers==='function') renderMembers();
+              }catch(e){ console.warn('Member payment cloud refresh failed:',e); }
+            },0);
           }
         }catch(e){}
         try{if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview();}catch(e){}
@@ -7464,6 +7495,49 @@ try{
 const membershipPayments=paymentHistoryStore.membership;
 const registrationPayments=paymentHistoryStore.registration;
 
+// v958 – PLATBY Z DOCHÁDZKY SÚ JEDINÝ ŽIVÝ ZDROJ PRE PROFIL ČLENA.
+// Ak shared-db pošle snapshot, musíme ho premietnuť do membersData aj vtedy,
+// keď je snapshot náš vlastný. Predchádzajúci kód vlastný snapshot ignoroval
+// ešte pred spracovaním platobnej histórie. Preto sa platba objavila až po
+// otvorení DOCHÁDZKY, ktorá históriu načítala znova.
+function applyCloudPaymentHistoryToMemberProfiles(remoteHistory){
+  try{
+    if(!remoteHistory || !Array.isArray(remoteHistory.membership) || !Array.isArray(remoteHistory.registration)) return false;
+    membershipPayments.splice(0,membershipPayments.length,...remoteHistory.membership);
+    registrationPayments.splice(0,registrationPayments.length,...remoteHistory.registration);
+    const currentYear=appToday().year;
+    membersData.forEach(m=>{
+      const reg=registrationPayments.find(p=>Number(p.memberId)===Number(m.id) && Number(p.amount||30)>0);
+      if(reg){
+        m.registration=true;
+        m.registrationPaid=true;
+        m.registrationDate=reg.date||m.registrationDate||'';
+        m.registrationAmount=Number(reg.amount||30);
+        m.registrationPaidGroup=reg.paidGroup||m.registrationPaidGroup||'';
+      }
+      const p2=membershipPayments.find(p=>Number(p.memberId)===Number(m.id) && Number(p.period)===2 && Number(p.year||String(p.date||'').slice(0,4))===currentYear);
+      const p1=membershipPayments.find(p=>Number(p.memberId)===Number(m.id) && Number(p.period)===1 && Number(p.year||String(p.date||'').slice(0,4))===currentYear);
+      const pay=p2||p1;
+      if(pay){
+        m.membership=true;
+        m.membershipAmount=Number(pay.amount||30);
+        m.membershipDate=pay.date||m.membershipDate||'';
+        m.membershipPaidGroup=pay.paidGroup||m.membershipPaidGroup||'';
+      }
+    });
+    const exact=JSON.stringify({membership:membershipPayments,registration:registrationPayments});
+    originalSetItem(PAYMENT_HISTORY_KEY,exact);
+    localStorage.setItem(PAYMENT_HISTORY_KEY,exact);
+    originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+    localStorage.setItem(MEMBERS_STORAGE_KEY,JSON.stringify(membersData));
+    gtInitialPaymentsLoaded=true;
+    return true;
+  }catch(e){
+    console.warn('Premietnutie cloudových platieb do profilov zlyhalo',e);
+    return false;
+  }
+}
+
 // v957 – Platby musia byť načítané už pri otvorení aplikácie, nie až po otvorení Dochádzky.
 // Zdieľaný Firestore je zdrojom pravdy pre členské/registračné platby. Pri štarte
 // ešte raz načítame iba platobnú históriu priamo zo shared-db a okamžite ju premietneme
@@ -7986,6 +8060,7 @@ function memberApplicationReceived(m){
 
 function renderMemberProfile(id, backTarget){
  const m=membersData.find(x=>x.id===id); if(!m)return;
+ window.__gtOpenMemberId=Number(id);
  // Pri otvorení profilu vytvor samostatný histórický krok. Tým horná aj
  // systémová šípka vždy vrátia presne na obrazovku, z ktorej bol profil otvorený.
  const currentRoute=(location.hash||'').replace('#','')||'home';
@@ -8498,6 +8573,7 @@ function renderMemberAttendance(id){
 
 function renderMemberPaymentHistory(id){
  const m=membersData.find(x=>x.id===id); if(!m)return;
+ window.__gtOpenMemberId=Number(id);
  if((location.hash||'')!=='#memberPayments'){
    try{ history.pushState({gtRoute:'memberPayments',gtParent:'memberProfile',gtId:Number(id)},'',location.pathname+location.search+'#memberPayments'); }catch(e){ location.hash='memberPayments'; }
  }

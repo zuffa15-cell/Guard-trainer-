@@ -8368,27 +8368,11 @@ function getSavedMemberTrainingData(member){
     }
   }catch(e){ console.warn('member training history read failed',e); }
 
-  // DOPLNENIE: posledné uložené tréningy môžu byť ešte iba v konkrétnom
-  // zázname dochádzky/vyúčtovania a ešte nemusia byť v lokálnom
-  // gt-training-attendance-history. Dochádzka je stále zdroj pravdy:
-  // attendanceSnapshot vzniká priamo z attendanceState.members.filter(m=>m.training).
-  // Použi ho iba pre dni, ktoré už nemáme v hlavnej histórii, aby sa jeden
-  // tréning nezapočítal dvakrát. Toto rieši najmä včerajší a dnešný tréning.
-  try{
-    const memberKey=normName(member?.surname)+'|'+normName(member?.name);
-    const billingRows=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
-    billingRows.forEach(r=>{
-      const d=parsePaymentDate(r?.date); if(!d) return;
-      const key=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-      if(seen.has(key)) return;
-      const snap=Array.isArray(r?.attendanceSnapshot)?r.attendanceSnapshot:[];
-      const present=snap.some(v=>normName(String(v).split('|')[0])===surname &&
-        normName(String(v).split('|').slice(1).join('|'))===name);
-      if(!present) return;
-      if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(r.date,r.group)) return;
-      addRow(r.date,r.group,'');
-    });
-  }catch(e){ console.warn('member recent attendance fallback failed',e); }
+  // DÔLEŽITÉ: Vyúčtovanie nie je zdrojom osobnej účasti.
+  // attendanceSnapshot v mesačnom vyúčtovaní môže obsahovať starší stav a jeho
+  // použitie tu spôsobovalo, že člen dostal tréning aj v deň, keď v Dochádzke
+  // nebol. Osobná štatistika preto používa iba reálne uloženú Dochádzku
+  // (gt-training-attendance-history) a prípadne práve otvorenú Dochádzku.
 
   // Ak je práve otvorená konkrétna dochádzka a profil sa otvorí z nej,
   // použi aj jej aktuálny stav. Aj tu platí pravidlo jeden deň = jeden tréning.

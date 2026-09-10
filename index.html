@@ -8175,14 +8175,6 @@ function renderMemberProfile(id, backTarget){
   <a class="nav" href="#billing" onclick="return openMyBilling()" data-nav="billing"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
   <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
  </nav>`;
- // Po vykreslení profilu okamžite načítaj skutočný počet z platnej Dochádzky.
- // Profil už potom nečerpá nesprávny lokálny počet z vyúčtovania/snapshotu.
- try{
-   getAuthoritativeMemberTrainingData(m).then(rows=>{
-     const tile=document.querySelector('.member-profile-training-count .member-stats-btn strong');
-     if(tile && Number(window.__gtOpenMemberId)===Number(m.id)) tile.textContent=String(rows.length);
-   }).catch(()=>{});
- }catch(e){}
 }
 function openMemberPaymentEditor(memberId,type,period){
  const m=membersData.find(x=>Number(x.id)===Number(memberId)); if(!m)return;
@@ -8328,51 +8320,14 @@ function getSavedMemberTrainingData(member){
     const d=parsePaymentDate(dateValue);
     if(!d)return;
     const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    // PRE AKTUÁLNY DEŇ A BUDÚCNOSŤ je rozvrh nadradený historickému
-    // attendance záznamu. Ak skupina v daný deň podľa aktuálneho rozvrhu
-    // nemala tréning, nesmie sa jej starý/nesprávny attendance záznam
-    // započítať. Toto rieši napr. B na 10.09.2026, keď B v ten deň
-    // tréning nemala. Pre minulé dni zostáva zdrojom pravdy uložená Dochádzka,
-    // aby zmena aktuálneho rozvrhu spätne nevymazala historické tréningy.
-    try{
-      const todayIso=appToday().iso;
-      if(dateKey>=todayIso){
-        const gc=String(groupValue||'').trim().toUpperCase();
-        if(gc){
-          const scheduled=(typeof scheduleItemsForDate==='function' ? scheduleItemsForDate(dateKey) : [])||[];
-          const hasGroup=scheduled.some(x=>String(x?.code||'').trim().toUpperCase()===gc);
-          if(!hasGroup) return;
-          // Zrušený dnešný/budúci tréning sa tiež nesmie rátať.
-          const cancelled=(typeof isTrainingCancelled==='function') ? scheduled.some(x=>
-            String(x?.code||'').trim().toUpperCase()===gc && isTrainingCancelled(dateKey,x?.code,x?.time,x?.name)) : false;
-          if(cancelled) return;
-        }
-      }
-    }catch(e){}
     // Osobná štatistika počíta jedného člena maximálne raz za kalendárny deň.
     // Tým sa odstránia duplicitné historické záznamy B/C pre ten istý deň.
     if(seen.has(dateKey))return;
     seen.add(dateKey);
-    let group=String(groupValue||'').trim();
-    // Staršie trénerove záznamy mohli mať kľúč iba dátum| bez skupiny.
-    // Skupinu preto iba zobrazíme z oficiálneho profilu/schedule; účasť ani počet
-    // tým nevytvárame. Ak má člen jedinú skupinu, je to jednoznačné.
-    if(!group){
-      try{
-        const mm=membersData.find(z=>Number(z.id)===Number(member?.id));
-        const gs=Array.isArray(mm?.groups)?mm.groups.filter(Boolean):[];
-        if(gs.length===1) group=String(gs[0]).trim();
-        if(!group && typeof scheduleItemsForDate==='function'){
-          const candidates=(scheduleItemsForDate(canonicalAttendanceDate(dateValue))||[]).map(x=>String(x.code||'').trim()).filter(Boolean);
-          const allowed=new Set(gs.map(x=>String(x).trim().toUpperCase()));
-          const hit=candidates.find(x=>allowed.has(x.toUpperCase()));
-          if(hit) group=hit;
-        }
-      }catch(e){}
-    }
+    const group=String(groupValue||'').trim();
     rows.push({
       date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-      group:group||'—',
+      group:group||'',
       name:nameValue||'',
       dateObj:new Date(d.year,d.month-1,d.day)
     });
@@ -8399,12 +8354,7 @@ function getSavedMemberTrainingData(member){
           }
           return false;
         });
-        // IBA SKUTOČNÁ PRÍTOMNOSŤ je tréning.
-        // Stav NEW (nový člen pridaný do dochádzky) sa NESMIE započítať ako tréning.
-        // Predtým sa používalo (!training && !newMember), čo spôsobilo, že člen,
-        // ktorý bol iba označený ako NOVÝ, dostal tréning aj v deň bez tréningu
-        // jeho skupiny (napr. B).
-        if(!memberState || memberState.training !== true)return;
+        if(!memberState || (!memberState.training && !memberState.newMember))return;
         // Admin môže vymazať iba účasť konkrétneho člena. Tento tombstone má
         // prednosť pred lokálnym history, aby sa údaj okamžite prestal rátať.
         try{
@@ -8418,11 +8368,27 @@ function getSavedMemberTrainingData(member){
     }
   }catch(e){ console.warn('member training history read failed',e); }
 
-  // DÔLEŽITÉ: Vyúčtovanie nie je zdrojom osobnej účasti.
-  // attendanceSnapshot v mesačnom vyúčtovaní môže obsahovať starší stav a jeho
-  // použitie tu spôsobovalo, že člen dostal tréning aj v deň, keď v Dochádzke
-  // nebol. Osobná štatistika preto používa iba reálne uloženú Dochádzku
-  // (gt-training-attendance-history) a prípadne práve otvorenú Dochádzku.
+  // DOPLNENIE: posledné uložené tréningy môžu byť ešte iba v konkrétnom
+  // zázname dochádzky/vyúčtovania a ešte nemusia byť v lokálnom
+  // gt-training-attendance-history. Dochádzka je stále zdroj pravdy:
+  // attendanceSnapshot vzniká priamo z attendanceState.members.filter(m=>m.training).
+  // Použi ho iba pre dni, ktoré už nemáme v hlavnej histórii, aby sa jeden
+  // tréning nezapočítal dvakrát. Toto rieši najmä včerajší a dnešný tréning.
+  try{
+    const memberKey=normName(member?.surname)+'|'+normName(member?.name);
+    const billingRows=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
+    billingRows.forEach(r=>{
+      const d=parsePaymentDate(r?.date); if(!d) return;
+      const key=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      if(seen.has(key)) return;
+      const snap=Array.isArray(r?.attendanceSnapshot)?r.attendanceSnapshot:[];
+      const present=snap.some(v=>normName(String(v).split('|')[0])===surname &&
+        normName(String(v).split('|').slice(1).join('|'))===name);
+      if(!present) return;
+      if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(r.date,r.group)) return;
+      addRow(r.date,r.group,'');
+    });
+  }catch(e){ console.warn('member recent attendance fallback failed',e); }
 
   // Ak je práve otvorená konkrétna dochádzka a profil sa otvorí z nej,
   // použi aj jej aktuálny stav. Aj tu platí pravidlo jeden deň = jeden tréning.
@@ -8443,113 +8409,14 @@ function getSavedMemberTrainingData(member){
   rows.sort((a,b)=>b.dateObj-a.dateObj);
   return rows;
 }
-// Autoritatívna osobná štatistika: číta priamo platnú Dochádzku z
-// guard-trainer-attendance. Vyúčtovanie ani lokálny trénerov snapshot tu nie
-// sú zdrojom pravdy. Ak je pre konkrétny dátum/skupinu uložený priamy záznam,
-// jeho stav je rozhodujúci.
-async function getAuthoritativeMemberTrainingData(member){
-  const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
-  const surname=norm(member?.surname), name=norm(member?.name);
-  const rows=[];
-  const seen=new Set();
-  const add=(key,history,memberDeletes={})=>{
-    const parts=String(key||'').split('|');
-    const dateValue=parts.shift()||'';
-    const groupValue=parts.join('|')||'';
-    const d=parsePaymentDate(dateValue);
-    if(!d || !history || typeof history!=='object') return;
-    const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    const canonicalKey=canonicalAttendanceHistoryKey(`${dateKey}|${groupValue}`);
-    if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateKey,groupValue)) return;
-    const memberDeleteAt=Number(memberDeletes[String(Number(member?.id||0))]||0);
-    const state=Object.keys(history).map(k=>[k,history[k]]).find(([k])=>{
-      const kp=String(k).split('|');
-      return norm(kp[0])===surname && norm(kp.slice(1).join('|'))===name;
-    })?.[1];
-    if(!state || state.training!==true || memberDeleteAt>0) return;
-    if(seen.has(dateKey)) return;
-    seen.add(dateKey);
-    rows.push({
-      date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-      group:String(groupValue||'').trim()||'—',
-      name:'', dateObj:new Date(d.year,d.month-1,d.day), key:canonicalKey
-    });
-  };
-
-  // JEDINÝ ZDROJ PRAVDY PRE POČET TRÉNINGOV JE SPOLOČNÁ ULOŽENÁ DOCHÁDZKA.
-  // Dôležité: pri bežnom trénerovi NESMIEME používať ATTENDANCE_DIRECT_COLLECTION,
-  // pretože tento samostatný kanál obsahuje iba administrátorské kópie a môže
-  // byť starší než dnešná/včerajšia dochádzka trénera. Práve to spôsobovalo,
-  // že posledné dni v profile chýbali.
-  try{
-    if(typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled &&
-       typeof CLOUD_COLLECTION!=='undefined' && typeof CLOUD_DOC!=='undefined'){
-      const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get({source:'server'});
-      if(snap && snap.exists){
-        const data=snap.data()||{};
-        let hist={};
-        try{ hist=data['gt-training-attendance-history']?JSON.parse(data['gt-training-attendance-history']):{}; }catch(e){ hist={}; }
-        let deletes={};
-        try{ deletes=data['gt-attendance-delete-order-v1']?JSON.parse(data['gt-attendance-delete-order-v1']):{}; }catch(e){ deletes={}; }
-        const canonicalHist={};
-        Object.keys(hist||{}).forEach(k=>{ canonicalHist[canonicalAttendanceHistoryKey(k)]=hist[k]||{}; });
-        Object.keys(canonicalHist).forEach(k=>add(k,canonicalHist[k],deletes));
-        rows.sort((a,b)=>b.dateObj-a.dateObj);
-        return rows;
-      }
-    }
-  }catch(e){ console.warn('Spoločnú dochádzku zo servera sa nepodarilo načítať',e); }
-
-  // Offline fallback – iba lokálne uložená Dochádzka, nikdy nie vyúčtovanie.
-  try{return getSavedMemberTrainingData(member);}catch(e){return [];}
-}
-
 function getMemberTrainingCount(member){
-  // Po načítaní autoritatívnej dochádzky sa počet prepíše asynchrónne v profile.
   return getSavedMemberTrainingData(member).length;
 }
 
-async function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=0, skipServerRefresh=false){
+function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=0){
   window.__gtMemberStatsView={id:Number(id),monthOffset:Number(monthOffset||0),view:String(view||'months'),yearOffset:Number(yearOffset||0)};
-  // U BEZNEHO TRENERA je zdrojom osobnej statistiky rovnaka cloudova dochadzka,
-  // aku vidi hlavny trener. Lokalny snapshot moze byt pri trenérovi starší,
-  // nekompletný alebo môže obsahovať staré B-záznamy bez skupiny. Pred prvým
-  // vykreslením preto raz načítame autoritatívny shared-db priamo zo SERVERA.
-  // Nečakáme na to pred otvorením aplikácie; robí sa to iba po kliknutí na
-  // štatistiku konkrétneho člena. Lokálne novšie uloženie trénera zostáva zachované.
-  try{
-    if(!skipServerRefresh && typeof isTrainer==='function' && isTrainer() &&
-       typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled){
-      const serverDoc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get({source:'server'});
-      if(serverDoc && serverDoc.exists){
-        const remoteData=serverDoc.data()||{};
-        let remoteHist={};
-        try{ remoteHist=remoteData['gt-training-attendance-history']?JSON.parse(remoteData['gt-training-attendance-history']):{}; }catch(e){ remoteHist={}; }
-        const canonicalize=(obj)=>{
-          const out={};
-          Object.keys(obj||{}).forEach(rawKey=>{
-            const key=canonicalAttendanceHistoryKey(rawKey);
-            out[key]=Object.assign(out[key]||{},obj[rawKey]&&typeof obj[rawKey]==='object'?obj[rawKey]:{});
-          });
-          return out;
-        };
-        const remote=canonicalize(remoteHist);
-        // U BEZNEHO TRÉNERA JE PRI ZOBRAZENÍ ŠTATISTIKY ZDROJOM PRAVDY
-        // VÝHRADNE AKTUÁLNA SERVEROVÁ DOCHÁDZKA. Lokálny history trénera
-        // sa NESMIE primiešať, pretože môže obsahovať starý B-záznam alebo
-        // záznam bez skupiny, ktorý hlavný tréner už na serveri nemá.
-        Object.keys(trainingAttendanceByGroup).forEach(k=>delete trainingAttendanceByGroup[k]);
-        Object.keys(remote).forEach(k=>trainingAttendanceByGroup[k]=remote[k]||{});
-        try{ persistTrainingAttendanceHistory(); }catch(e){}
-      }
-      // Druhé vykreslenie už používa presne rovnaké dáta ako hlavný tréner.
-      return renderMemberTrainingStats(id,monthOffset,view,yearOffset,true);
-    }
-  }catch(e){ console.warn('Štatistika trénera: serverová dochádzka sa nepodarila načítať',e); }
-
  const m=membersData.find(x=>x.id===id); if(!m)return;
- // Štatistika člena sa počíta výhradne z platnej Dochádzky.
- const all=await getAuthoritativeMemberTrainingData(m);
+ const all=getSavedMemberTrainingData(m);
  const today=appToday();
  const selected=new Date(today.year,today.month-1+monthOffset,1);
  const y=selected.getFullYear(), mo=selected.getMonth();

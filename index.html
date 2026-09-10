@@ -8472,37 +8472,36 @@ async function getAuthoritativeMemberTrainingData(member){
     rows.push({
       date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
       group:String(groupValue||'').trim()||'—',
-      name:'',
-      dateObj:new Date(d.year,d.month-1,d.day),
-      key:canonicalKey
+      name:'', dateObj:new Date(d.year,d.month-1,d.day), key:canonicalKey
     });
   };
 
-  // Priamy kanál dochádzky je jediný autoritatívny zdroj.
-  if(typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled &&
-     typeof ATTENDANCE_DIRECT_COLLECTION!=='undefined'){
-    try{
-      const snap=await db.collection(ATTENDANCE_DIRECT_COLLECTION).get();
-      snap.forEach(doc=>{
-        const data=doc.data()||{};
-        const key=String(data.key||'');
-        if(!key || data.deleted===true) return;
-        add(key,data.history||{},data.memberDeletes||{});
-      });
-      rows.sort((a,b)=>b.dateObj-a.dateObj);
-      // Ak sa priamy kanál podarilo načítať, NEPRIDÁVAME starý shared-db
-      // snapshot. Práve ten bol príčinou falošného B tréningu.
-      return rows;
-    }catch(e){
-      console.warn('Autoritatívna Dochádzka sa nepodarila načítať',e);
-    }
-  }
-
-  // Offline fallback: použijeme lokálnu dochádzku iba vtedy, keď serverový
-  // priamy kanál nie je dostupný vôbec. Ani tu sa nesmie použiť vyúčtovanie.
+  // JEDINÝ ZDROJ PRAVDY PRE POČET TRÉNINGOV JE SPOLOČNÁ ULOŽENÁ DOCHÁDZKA.
+  // Dôležité: pri bežnom trénerovi NESMIEME používať ATTENDANCE_DIRECT_COLLECTION,
+  // pretože tento samostatný kanál obsahuje iba administrátorské kópie a môže
+  // byť starší než dnešná/včerajšia dochádzka trénera. Práve to spôsobovalo,
+  // že posledné dni v profile chýbali.
   try{
-    return getSavedMemberTrainingData(member);
-  }catch(e){ return []; }
+    if(typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled &&
+       typeof CLOUD_COLLECTION!=='undefined' && typeof CLOUD_DOC!=='undefined'){
+      const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get({source:'server'});
+      if(snap && snap.exists){
+        const data=snap.data()||{};
+        let hist={};
+        try{ hist=data['gt-training-attendance-history']?JSON.parse(data['gt-training-attendance-history']):{}; }catch(e){ hist={}; }
+        let deletes={};
+        try{ deletes=data['gt-attendance-delete-order-v1']?JSON.parse(data['gt-attendance-delete-order-v1']):{}; }catch(e){ deletes={}; }
+        const canonicalHist={};
+        Object.keys(hist||{}).forEach(k=>{ canonicalHist[canonicalAttendanceHistoryKey(k)]=hist[k]||{}; });
+        Object.keys(canonicalHist).forEach(k=>add(k,canonicalHist[k],deletes));
+        rows.sort((a,b)=>b.dateObj-a.dateObj);
+        return rows;
+      }
+    }
+  }catch(e){ console.warn('Spoločnú dochádzku zo servera sa nepodarilo načítať',e); }
+
+  // Offline fallback – iba lokálne uložená Dochádzka, nikdy nie vyúčtovanie.
+  try{return getSavedMemberTrainingData(member);}catch(e){return [];}
 }
 
 function getMemberTrainingCount(member){

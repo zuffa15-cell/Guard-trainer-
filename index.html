@@ -8308,106 +8308,58 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
-  // ŠTATISTIKA ČLENA = VÝHRADNE Z REÁLNE ULOŽENEJ DOCHÁDZKY.
-  // Vyúčtovanie/snapshot už nesmie byť záložným zdrojom, pretože môže obsahovať
-  // starý alebo opravený stav a potom by sa tréning započítal aj napriek tomu,
-  // že člen v skutočnej uloženej dochádzke nebol.
+  // PROFIL ČLENA = PRESNE TEN ISTÝ ZDROJ A PRAVIDLÁ AKO ŠTATISTIKY.
+  // Štatistiky používajú uložené vyúčtovania a ich attendanceStateSnapshot.
+  // Preto profil nesmie používať lokálny attendance history ani aktuálnu
+  // rozpracovanú dochádzku ako samostatný zdroj – inak by sa počty rozchádzali.
   const normName=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
   const surname=normName(member?.surname), name=normName(member?.name);
-  const rows=[];
-  const seen=new Set();
-  const addRow=(dateValue,groupValue,nameValue='')=>{
-    const d=parsePaymentDate(dateValue);
-    if(!d)return;
-    const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    // Osobná štatistika počíta jedného člena maximálne raz za kalendárny deň.
-    // Tým sa odstránia duplicitné historické záznamy B/C pre ten istý deň.
-    if(seen.has(dateKey))return;
-    seen.add(dateKey);
-    const group=String(groupValue||'').trim();
-    rows.push({
-      date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-      group:group||'',
-      name:nameValue||'',
-      dateObj:new Date(d.year,d.month-1,d.day)
-    });
-  };
+  const entryMap=new Map();
 
   try{
-    if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
-      Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
-        // Zmazaná dochádzka je autoritatívne vylúčená aj vtedy, keď sa jej
-        // starý záznam ešte nachádza v lokálnom history.
-        const parts=String(histKey).split('|');
-        const dateValue=parts[0]||'';
-        const groupValue=parts.slice(1).join('|')||'';
-        if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateValue,groupValue)) return;
-        const hist=trainingAttendanceByGroup[histKey];
-        if(!hist || typeof hist!=='object')return;
+    (getBillingRecords()||[]).forEach(r=>{
+      const d=parsePaymentDate(r?.date);
+      if(!d) return;
+      if(!Array.isArray(r?.attendanceStateSnapshot)) return;
 
-        let memberState=null;
-        Object.keys(hist).some(k=>{
-          const kp=String(k).split('|');
-          if(normName(kp[0])===surname && normName(kp.slice(1).join('|'))===name){
-            memberState=hist[k];
-            return true;
-          }
-          return false;
-        });
-        if(!memberState || (!memberState.training && !memberState.newMember))return;
-        // Admin môže vymazať iba účasť konkrétneho člena. Tento tombstone má
-        // prednosť pred lokálnym history, aby sa údaj okamžite prestal rátať.
-        try{
-          const edits=JSON.parse(originalGetItem('gt-attendance-admin-edits-v1')||'{}')||{};
-          const memberObj=membersData.find(x=>normName(x.surname)===surname && normName(x.name)===name);
-          const mk=`${canonicalAttendanceHistoryKey(histKey)}|${Number(memberObj?.id||0)}`;
-          if(Number(edits[mk]||0)>0) return;
-        }catch(e){}
-        addRow(dateValue,groupValue,'');
-      });
-    }
-  }catch(e){ console.warn('member training history read failed',e); }
+      const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
+      const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+      const savedAt=Number(r?.savedAt||r?.updatedAt||r?.createdAt||0);
+      if(deletedAt>0 && deletedAt>=savedAt) return;
 
-  // DOPLNENIE: posledné uložené tréningy môžu byť ešte iba v konkrétnom
-  // zázname dochádzky/vyúčtovania a ešte nemusia byť v lokálnom
-  // gt-training-attendance-history. Dochádzka je stále zdroj pravdy:
-  // attendanceSnapshot vzniká priamo z attendanceState.members.filter(m=>m.training).
-  // Použi ho iba pre dni, ktoré už nemáme v hlavnej histórii, aby sa jeden
-  // tréning nezapočítal dvakrát. Toto rieši najmä včerajší a dnešný tréning.
-  try{
-    const memberKey=normName(member?.surname)+'|'+normName(member?.name);
-    const billingRows=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
-    billingRows.forEach(r=>{
-      const d=parsePaymentDate(r?.date); if(!d) return;
-      const key=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-      if(seen.has(key)) return;
-      const snap=Array.isArray(r?.attendanceSnapshot)?r.attendanceSnapshot:[];
-      const present=snap.some(v=>normName(String(v).split('|')[0])===surname &&
-        normName(String(v).split('|').slice(1).join('|'))===name);
-      if(!present) return;
-      if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(r.date,r.group)) return;
-      addRow(r.date,r.group,'');
-    });
-  }catch(e){ console.warn('member recent attendance fallback failed',e); }
+      const group=quickGroupCode(r?.group||'');
+      if(!group) return;
 
-  // Ak je práve otvorená konkrétna dochádzka a profil sa otvorí z nej,
-  // použi aj jej aktuálny stav. Aj tu platí pravidlo jeden deň = jeden tréning.
-  try{
-    if(typeof attendanceState!=='undefined' && attendanceState && attendanceState.date &&
-       Array.isArray(attendanceState.members)){
-      const a=attendanceState.members.find(x=>normName(x?.surname)===surname &&
-        normName(x?.name)===name);
-      if(a?.training){
-        const g=String(attendanceState.group||'').trim();
-        if(!(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(attendanceState.date,g))){
-          addRow(attendanceState.date,g,'');
+      const snapshot=r.attendanceStateSnapshot;
+      let memberPresent=false;
+      let memberNew=false;
+      snapshot.forEach(x=>{
+        if(!x) return;
+        const sx=normName(x.surname), nx=normName(x.name);
+        if(sx===surname && nx===name){
+          // Rovnaké pravidlo ako v renderStatistics:
+          // training alebo newMember znamená účasť v uloženom tréningu.
+          if(x.training) memberPresent=true;
+          if(x.newMember) memberNew=true;
         }
-      }
-    }
-  }catch(e){}
+      });
+      if(!memberPresent && !memberNew) return;
 
-  rows.sort((a,b)=>b.dateObj-a.dateObj);
-  return rows;
+      const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+      const uniqueKey=`${iso}|${group}`;
+      const row={
+        date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
+        group:r.group||'',
+        name:'',
+        dateObj:new Date(d.year,d.month-1,d.day),
+        savedAt
+      };
+      const prev=entryMap.get(uniqueKey);
+      if(!prev || savedAt>=Number(prev.savedAt||0)) entryMap.set(uniqueKey,row);
+    });
+  }catch(e){ console.warn('member training statistics read failed',e); }
+
+  return Array.from(entryMap.values()).sort((a,b)=>b.dateObj-a.dateObj);
 }
 function getMemberTrainingCount(member){
   return getSavedMemberTrainingData(member).length;

@@ -8324,10 +8324,26 @@ function getSavedMemberTrainingData(member){
     // Tým sa odstránia duplicitné historické záznamy B/C pre ten istý deň.
     if(seen.has(dateKey))return;
     seen.add(dateKey);
-    const group=String(groupValue||'').trim();
+    let group=String(groupValue||'').trim();
+    // Staršie trénerove záznamy mohli mať kľúč iba dátum| bez skupiny.
+    // Skupinu preto iba zobrazíme z oficiálneho profilu/schedule; účasť ani počet
+    // tým nevytvárame. Ak má člen jedinú skupinu, je to jednoznačné.
+    if(!group){
+      try{
+        const mm=membersData.find(z=>Number(z.id)===Number(member?.id));
+        const gs=Array.isArray(mm?.groups)?mm.groups.filter(Boolean):[];
+        if(gs.length===1) group=String(gs[0]).trim();
+        if(!group && typeof scheduleItemsForDate==='function'){
+          const candidates=(scheduleItemsForDate(canonicalAttendanceDate(dateValue))||[]).map(x=>String(x.code||'').trim()).filter(Boolean);
+          const allowed=new Set(gs.map(x=>String(x).trim().toUpperCase()));
+          const hit=candidates.find(x=>allowed.has(x.toUpperCase()));
+          if(hit) group=hit;
+        }
+      }catch(e){}
+    }
     rows.push({
       date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-      group:group||'',
+      group:group||'—',
       name:nameValue||'',
       dateObj:new Date(d.year,d.month-1,d.day)
     });
@@ -8397,8 +8413,53 @@ function getMemberTrainingCount(member){
   return getSavedMemberTrainingData(member).length;
 }
 
-function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=0){
+async function renderMemberTrainingStats(id, monthOffset=0, view='months', yearOffset=0, skipServerRefresh=false){
   window.__gtMemberStatsView={id:Number(id),monthOffset:Number(monthOffset||0),view:String(view||'months'),yearOffset:Number(yearOffset||0)};
+  // U BEZNEHO TRENERA je zdrojom osobnej statistiky rovnaka cloudova dochadzka,
+  // aku vidi hlavny trener. Lokalny snapshot moze byt pri trenérovi starší,
+  // nekompletný alebo môže obsahovať staré B-záznamy bez skupiny. Pred prvým
+  // vykreslením preto raz načítame autoritatívny shared-db priamo zo SERVERA.
+  // Nečakáme na to pred otvorením aplikácie; robí sa to iba po kliknutí na
+  // štatistiku konkrétneho člena. Lokálne novšie uloženie trénera zostáva zachované.
+  try{
+    if(!skipServerRefresh && typeof isTrainer==='function' && isTrainer() &&
+       typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled){
+      const serverDoc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get({source:'server'});
+      if(serverDoc && serverDoc.exists){
+        const remoteData=serverDoc.data()||{};
+        let remoteHist={};
+        try{ remoteHist=remoteData['gt-training-attendance-history']?JSON.parse(remoteData['gt-training-attendance-history']):{}; }catch(e){ remoteHist={}; }
+        const canonicalize=(obj)=>{
+          const out={};
+          Object.keys(obj||{}).forEach(rawKey=>{
+            const key=canonicalAttendanceHistoryKey(rawKey);
+            out[key]=Object.assign(out[key]||{},obj[rawKey]&&typeof obj[rawKey]==='object'?obj[rawKey]:{});
+          });
+          return out;
+        };
+        const remote=canonicalize(remoteHist);
+        let local={};
+        try{ const raw=originalGetItem('gt-training-attendance-history'); const p=raw?JSON.parse(raw):{}; local=canonicalize(p); }catch(e){ local={}; }
+        let localOrder={},remoteOrder={};
+        try{ const p=JSON.parse(originalGetItem('gt-attendance-save-order-v1')||'{}')||{}; Object.keys(p).forEach(k=>localOrder[canonicalAttendanceHistoryKey(k)]=Math.max(Number(localOrder[canonicalAttendanceHistoryKey(k)]||0),Number(p[k]||0))); }catch(e){}
+        try{ const p=remoteData['gt-attendance-save-order-v1']?JSON.parse(remoteData['gt-attendance-save-order-v1']):{}; Object.keys(p).forEach(k=>remoteOrder[canonicalAttendanceHistoryKey(k)]=Math.max(Number(remoteOrder[canonicalAttendanceHistoryKey(k)]||0),Number(p[k]||0))); }catch(e){}
+        const merged={};
+        const keys=new Set([...Object.keys(remote),...Object.keys(local)]);
+        keys.forEach(key=>{
+          const la=Number(localOrder[key]||0), ra=Number(remoteOrder[key]||0);
+          if(la>ra && local[key]) merged[key]=local[key];
+          else if(remote[key]) merged[key]=remote[key];
+          else if(local[key]) merged[key]=local[key];
+        });
+        Object.keys(trainingAttendanceByGroup).forEach(k=>delete trainingAttendanceByGroup[k]);
+        Object.keys(merged).forEach(k=>trainingAttendanceByGroup[k]=merged[k]||{});
+        try{ persistTrainingAttendanceHistory(); }catch(e){}
+      }
+      // Druhé vykreslenie už používa presne rovnaké dáta ako hlavný tréner.
+      return renderMemberTrainingStats(id,monthOffset,view,yearOffset,true);
+    }
+  }catch(e){ console.warn('Štatistika trénera: serverová dochádzka sa nepodarila načítať',e); }
+
  const m=membersData.find(x=>x.id===id); if(!m)return;
  const all=getSavedMemberTrainingData(m);
  const today=appToday();

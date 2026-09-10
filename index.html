@@ -17222,6 +17222,98 @@ setTimeout(set,80);setTimeout(set,300)})();
   },true);
 })();
 </script>
+
+<style id="gt-head-billing-horizontal-scroll-v8">
+/* v8: Tabuľka Vyúčtovanie hlavného trénera musí byť na mobile vodorovne posúvateľná. */
+.head-billing .head-table-wrap,
+.head-billing .year-head-wrap{
+  display:block !important;
+  width:100% !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  box-sizing:border-box !important;
+  overflow-x:auto !important;
+  overflow-y:hidden !important;
+  -webkit-overflow-scrolling:touch !important;
+  overscroll-behavior-x:contain !important;
+  touch-action:pan-x pan-y !important;
+  scrollbar-width:auto !important;
+}
+.head-billing .head-table,
+.head-billing .year-head-table{
+  display:table !important;
+  width:max-content !important;
+  min-width:980px !important;
+  max-width:none !important;
+  table-layout:auto !important;
+}
+</style>
+<script id="gt-head-billing-horizontal-scroll-v8">
+(function(){
+  if(window.__gtHeadBillingHorizontalV8) return;
+  window.__gtHeadBillingHorizontalV8=true;
+  var drag=null, touch=null;
+  function wrapOf(e){
+    var t=e && e.target;
+    return t && t.closest ? t.closest('.head-billing .head-table-wrap, .head-billing .year-head-wrap') : null;
+  }
+  document.addEventListener('pointerdown',function(e){
+    var w=wrapOf(e); if(!w) return;
+    drag={w:w,x:e.clientX,y:e.clientY,start:w.scrollLeft,id:e.pointerId,active:false};
+    try{w.setPointerCapture(e.pointerId);}catch(_){}
+  },{passive:true});
+  document.addEventListener('pointermove',function(e){
+    if(!drag || drag.id!==e.pointerId) return;
+    var dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+    if(!drag.active){
+      if(Math.abs(dx)<5 && Math.abs(dy)<5)return;
+      if(Math.abs(dx)<=Math.abs(dy)){drag=null;return;}
+      drag.active=true;
+    }
+    if(drag.active){e.preventDefault();drag.w.scrollLeft=drag.start-dx;}
+  },{passive:false});
+  document.addEventListener('pointerup',function(e){
+    if(!drag || drag.id!==e.pointerId)return;
+    var w=drag.w;
+    if(drag.active){
+      w.__gtHeadBillingMoved=true;
+      setTimeout(function(){if(w)w.__gtHeadBillingMoved=false;},450);
+    }
+    try{w.releasePointerCapture(e.pointerId);}catch(_){}
+    drag=null;
+  },{passive:true});
+  document.addEventListener('touchstart',function(e){
+    var w=wrapOf(e); if(!w || !e.touches.length)return;
+    var t=e.touches[0];
+    touch={w:w,x:t.clientX,y:t.clientY,start:w.scrollLeft,active:false};
+  },{passive:true});
+  document.addEventListener('touchmove',function(e){
+    if(!touch || !e.touches.length)return;
+    var t=e.touches[0],dx=t.clientX-touch.x,dy=t.clientY-touch.y;
+    if(!touch.active){
+      if(Math.abs(dx)<5 && Math.abs(dy)<5)return;
+      if(Math.abs(dx)<=Math.abs(dy)){touch=null;return;}
+      touch.active=true;
+    }
+    if(touch.active){e.preventDefault();touch.w.scrollLeft=touch.start-dx;}
+  },{passive:false});
+  document.addEventListener('touchend',function(){
+    if(touch && touch.active){
+      var w=touch.w;w.__gtHeadBillingMoved=true;
+      setTimeout(function(){if(w)w.__gtHeadBillingMoved=false;},450);
+    }
+    touch=null;
+  },{passive:true});
+  document.addEventListener('click',function(e){
+    var w=wrapOf(e);
+    if(w && w.__gtHeadBillingMoved){
+      e.preventDefault();e.stopPropagation();
+      if(e.stopImmediatePropagation)e.stopImmediatePropagation();
+      w.__gtHeadBillingMoved=false;
+    }
+  },true);
+})();
+</script>
 </body>
 
 <style id="v650-statistika-fit-final">

@@ -8443,21 +8443,12 @@ async function renderMemberTrainingStats(id, monthOffset=0, view='months', yearO
           return out;
         };
         const remote=canonicalize(remoteHist);
-        let local={};
-        try{ const raw=originalGetItem('gt-training-attendance-history'); const p=raw?JSON.parse(raw):{}; local=canonicalize(p); }catch(e){ local={}; }
-        let localOrder={},remoteOrder={};
-        try{ const p=JSON.parse(originalGetItem('gt-attendance-save-order-v1')||'{}')||{}; Object.keys(p).forEach(k=>localOrder[canonicalAttendanceHistoryKey(k)]=Math.max(Number(localOrder[canonicalAttendanceHistoryKey(k)]||0),Number(p[k]||0))); }catch(e){}
-        try{ const p=remoteData['gt-attendance-save-order-v1']?JSON.parse(remoteData['gt-attendance-save-order-v1']):{}; Object.keys(p).forEach(k=>remoteOrder[canonicalAttendanceHistoryKey(k)]=Math.max(Number(remoteOrder[canonicalAttendanceHistoryKey(k)]||0),Number(p[k]||0))); }catch(e){}
-        const merged={};
-        const keys=new Set([...Object.keys(remote),...Object.keys(local)]);
-        keys.forEach(key=>{
-          const la=Number(localOrder[key]||0), ra=Number(remoteOrder[key]||0);
-          if(la>ra && local[key]) merged[key]=local[key];
-          else if(remote[key]) merged[key]=remote[key];
-          else if(local[key]) merged[key]=local[key];
-        });
+        // U BEZNEHO TRÉNERA JE PRI ZOBRAZENÍ ŠTATISTIKY ZDROJOM PRAVDY
+        // VÝHRADNE AKTUÁLNA SERVEROVÁ DOCHÁDZKA. Lokálny history trénera
+        // sa NESMIE primiešať, pretože môže obsahovať starý B-záznam alebo
+        // záznam bez skupiny, ktorý hlavný tréner už na serveri nemá.
         Object.keys(trainingAttendanceByGroup).forEach(k=>delete trainingAttendanceByGroup[k]);
-        Object.keys(merged).forEach(k=>trainingAttendanceByGroup[k]=merged[k]||{});
+        Object.keys(remote).forEach(k=>trainingAttendanceByGroup[k]=remote[k]||{});
         try{ persistTrainingAttendanceHistory(); }catch(e){}
       }
       // Druhé vykreslenie už používa presne rovnaké dáta ako hlavný tréner.

@@ -8370,7 +8370,12 @@ function getSavedMemberTrainingData(member){
           }
           return false;
         });
-        if(!memberState || (!memberState.training && !memberState.newMember))return;
+        // IBA SKUTOČNÁ PRÍTOMNOSŤ je tréning.
+        // Stav NEW (nový člen pridaný do dochádzky) sa NESMIE započítať ako tréning.
+        // Predtým sa používalo (!training && !newMember), čo spôsobilo, že člen,
+        // ktorý bol iba označený ako NOVÝ, dostal tréning aj v deň bez tréningu
+        // jeho skupiny (napr. B).
+        if(!memberState || memberState.training !== true)return;
         // Admin môže vymazať iba účasť konkrétneho člena. Tento tombstone má
         // prednosť pred lokálnym history, aby sa údaj okamžite prestal rátať.
         try{

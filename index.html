@@ -8175,6 +8175,14 @@ function renderMemberProfile(id, backTarget){
   <a class="nav" href="#billing" onclick="return openMyBilling()" data-nav="billing"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
   <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
  </nav>`;
+ // Po vykreslení profilu okamžite načítaj skutočný počet z platnej Dochádzky.
+ // Profil už potom nečerpá nesprávny lokálny počet z vyúčtovania/snapshotu.
+ try{
+   getAuthoritativeMemberTrainingData(m).then(rows=>{
+     const tile=document.querySelector('.member-profile-training-count .member-stats-btn strong');
+     if(tile && Number(window.__gtOpenMemberId)===Number(m.id)) tile.textContent=String(rows.length);
+   }).catch(()=>{});
+ }catch(e){}
 }
 function openMemberPaymentEditor(memberId,type,period){
  const m=membersData.find(x=>Number(x.id)===Number(memberId)); if(!m)return;
@@ -8435,7 +8443,70 @@ function getSavedMemberTrainingData(member){
   rows.sort((a,b)=>b.dateObj-a.dateObj);
   return rows;
 }
+// Autoritatívna osobná štatistika: číta priamo platnú Dochádzku z
+// guard-trainer-attendance. Vyúčtovanie ani lokálny trénerov snapshot tu nie
+// sú zdrojom pravdy. Ak je pre konkrétny dátum/skupinu uložený priamy záznam,
+// jeho stav je rozhodujúci.
+async function getAuthoritativeMemberTrainingData(member){
+  const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
+  const surname=norm(member?.surname), name=norm(member?.name);
+  const rows=[];
+  const seen=new Set();
+  const add=(key,history,memberDeletes={})=>{
+    const parts=String(key||'').split('|');
+    const dateValue=parts.shift()||'';
+    const groupValue=parts.join('|')||'';
+    const d=parsePaymentDate(dateValue);
+    if(!d || !history || typeof history!=='object') return;
+    const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    const canonicalKey=canonicalAttendanceHistoryKey(`${dateKey}|${groupValue}`);
+    if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateKey,groupValue)) return;
+    const memberDeleteAt=Number(memberDeletes[String(Number(member?.id||0))]||0);
+    const state=Object.keys(history).map(k=>[k,history[k]]).find(([k])=>{
+      const kp=String(k).split('|');
+      return norm(kp[0])===surname && norm(kp.slice(1).join('|'))===name;
+    })?.[1];
+    if(!state || state.training!==true || memberDeleteAt>0) return;
+    if(seen.has(dateKey)) return;
+    seen.add(dateKey);
+    rows.push({
+      date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
+      group:String(groupValue||'').trim()||'—',
+      name:'',
+      dateObj:new Date(d.year,d.month-1,d.day),
+      key:canonicalKey
+    });
+  };
+
+  // Priamy kanál dochádzky je jediný autoritatívny zdroj.
+  if(typeof db!=='undefined' && db && typeof cloudEnabled!=='undefined' && cloudEnabled &&
+     typeof ATTENDANCE_DIRECT_COLLECTION!=='undefined'){
+    try{
+      const snap=await db.collection(ATTENDANCE_DIRECT_COLLECTION).get();
+      snap.forEach(doc=>{
+        const data=doc.data()||{};
+        const key=String(data.key||'');
+        if(!key || data.deleted===true) return;
+        add(key,data.history||{},data.memberDeletes||{});
+      });
+      rows.sort((a,b)=>b.dateObj-a.dateObj);
+      // Ak sa priamy kanál podarilo načítať, NEPRIDÁVAME starý shared-db
+      // snapshot. Práve ten bol príčinou falošného B tréningu.
+      return rows;
+    }catch(e){
+      console.warn('Autoritatívna Dochádzka sa nepodarila načítať',e);
+    }
+  }
+
+  // Offline fallback: použijeme lokálnu dochádzku iba vtedy, keď serverový
+  // priamy kanál nie je dostupný vôbec. Ani tu sa nesmie použiť vyúčtovanie.
+  try{
+    return getSavedMemberTrainingData(member);
+  }catch(e){ return []; }
+}
+
 function getMemberTrainingCount(member){
+  // Po načítaní autoritatívnej dochádzky sa počet prepíše asynchrónne v profile.
   return getSavedMemberTrainingData(member).length;
 }
 
@@ -8478,7 +8549,8 @@ async function renderMemberTrainingStats(id, monthOffset=0, view='months', yearO
   }catch(e){ console.warn('Štatistika trénera: serverová dochádzka sa nepodarila načítať',e); }
 
  const m=membersData.find(x=>x.id===id); if(!m)return;
- const all=getSavedMemberTrainingData(m);
+ // Štatistika člena sa počíta výhradne z platnej Dochádzky.
+ const all=await getAuthoritativeMemberTrainingData(m);
  const today=appToday();
  const selected=new Date(today.year,today.month-1+monthOffset,1);
  const y=selected.getFullYear(), mo=selected.getMonth();

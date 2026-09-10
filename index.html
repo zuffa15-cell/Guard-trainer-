@@ -8320,6 +8320,27 @@ function getSavedMemberTrainingData(member){
     const d=parsePaymentDate(dateValue);
     if(!d)return;
     const dateKey=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    // PRE AKTUÁLNY DEŇ A BUDÚCNOSŤ je rozvrh nadradený historickému
+    // attendance záznamu. Ak skupina v daný deň podľa aktuálneho rozvrhu
+    // nemala tréning, nesmie sa jej starý/nesprávny attendance záznam
+    // započítať. Toto rieši napr. B na 10.09.2026, keď B v ten deň
+    // tréning nemala. Pre minulé dni zostáva zdrojom pravdy uložená Dochádzka,
+    // aby zmena aktuálneho rozvrhu spätne nevymazala historické tréningy.
+    try{
+      const todayIso=appToday().iso;
+      if(dateKey>=todayIso){
+        const gc=String(groupValue||'').trim().toUpperCase();
+        if(gc){
+          const scheduled=(typeof scheduleItemsForDate==='function' ? scheduleItemsForDate(dateKey) : [])||[];
+          const hasGroup=scheduled.some(x=>String(x?.code||'').trim().toUpperCase()===gc);
+          if(!hasGroup) return;
+          // Zrušený dnešný/budúci tréning sa tiež nesmie rátať.
+          const cancelled=(typeof isTrainingCancelled==='function') ? scheduled.some(x=>
+            String(x?.code||'').trim().toUpperCase()===gc && isTrainingCancelled(dateKey,x?.code,x?.time,x?.name)) : false;
+          if(cancelled) return;
+        }
+      }
+    }catch(e){}
     // Osobná štatistika počíta jedného člena maximálne raz za kalendárny deň.
     // Tým sa odstránia duplicitné historické záznamy B/C pre ten istý deň.
     if(seen.has(dateKey))return;

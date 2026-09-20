@@ -121,36 +121,46 @@ try {
 <script>
 /* One-time cleanup: remove all existing participant names from the current schedule. */
 (function(){
-  var KEY='supersaas_trainings_v2', FLAG='fyzio_participants_cleared_v1';
+  var KEY='supersaas_trainings_v2', FLAG='fyzio_participants_cleared_v3';
   function cleanLocal(){
     try{
       var x=JSON.parse(localStorage.getItem(KEY)||'[]');
       if(Array.isArray(x)){
-        x=x.map(function(t){return Object.assign({},t,{ucastnici:[]})});
+        x=x.map(function(t){return Object.assign({},t,{ucastnici:[],obsadenych:0})});
         localStorage.setItem(KEY,JSON.stringify(x));
       }
     }catch(e){}
   }
-  cleanLocal();
   function cleanRemote(){
     try{
-      if(!window.FyzioFirebase||!window.FyzioFirebase.db||!window.FyzioFirebase.authPromise)return;
-      window.FyzioFirebase.authPromise.then(function(){
+      if(!window.FyzioFirebase||!window.FyzioFirebase.db||!window.FyzioFirebase.authPromise)return Promise.resolve(false);
+      return window.FyzioFirebase.authPromise.then(function(){
         var db=window.FyzioFirebase.db;
         var flagRef=db.collection('fyziogym').doc('settings');
         return flagRef.get().then(function(flagSnap){
-          if(flagSnap.exists&&flagSnap.data()&&flagSnap.data().participantsClearedV1)return;
+          if(flagSnap.exists&&flagSnap.data()&&flagSnap.data()[FLAG])return false;
           return db.collection('fyziogym').doc('rozvrh').get().then(function(snap){
-            if(!snap.exists||!Array.isArray(snap.data().trainings))return;
-            var clean=snap.data().trainings.map(function(t){return Object.assign({},t,{ucastnici:[]})});
-            return db.collection('fyziogym').doc('rozvrh').set({trainings:clean,updatedAt:firebase.firestore.FieldValue.serverTimestamp()})
-              .then(function(){return flagRef.set({participantsClearedV1:true,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true})});
+            if(!snap.exists||!Array.isArray(snap.data().trainings))return false;
+            var clean=snap.data().trainings.map(function(t){return Object.assign({},t,{ucastnici:[],obsadenych:0})});
+            return db.collection('fyziogym').doc('rozvrh').set({trainings:clean,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true})
+              .then(function(){return flagRef.set((function(){var o={};o[FLAG]=true;o.updatedAt=firebase.firestore.FieldValue.serverTimestamp();return o})(),{merge:true}).then(function(){return true})});
           });
         });
-      }).catch(function(e){console.warn('Participant cleanup failed',e)});
-    }catch(e){}
+      });
+    }catch(e){return Promise.resolve(false)}
   }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',cleanRemote);else setTimeout(cleanRemote,100);
+  cleanLocal();
+  function run(){
+    cleanRemote().then(function(changed){
+      try{
+        if(changed&&!sessionStorage.getItem('fyzio_participants_reload_v3')){
+          sessionStorage.setItem('fyzio_participants_reload_v3','1');
+          location.reload();
+        }
+      }catch(e){}
+    }).catch(function(e){console.warn('Participant cleanup failed',e)});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run);else setTimeout(run,300);
 })();
 </script>
 </body>

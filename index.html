@@ -1092,7 +1092,7 @@ function pushToCloud(force = false){
   SYNC_KEYS.forEach(k=>{
     // Vyúčtovanie má vlastný realtime dokument guard-trainer-billing/all.
     // Nikdy ho neposielaj do shared-db, kde by stará kópia mohla prepísať novú.
-    if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY) return;
+    if(k==='gt-monthly-billing-v221' || k==='gt-billing' || k===BILLING_DELETE_ORDER_KEY || k===PAYMENT_HISTORY_KEY) return;
     let v = originalGetItem(k);
     if(k==='gt-members-real-2026-v847' && v){
       try{ const arr=JSON.parse(v); if(Array.isArray(arr)) v=JSON.stringify(arr.map(m=>{const x={...m};delete x.applicationFile;delete x.applicationFileName;return x;})); }catch(e){}
@@ -1209,44 +1209,8 @@ function pushToCloud(force = false){
       }
     }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
 
-    // PLATBY ČLENSKÉ/REGISTRAČNÉ: nikdy neposielaj iba lokálny snapshot.
-    // Najprv zlúč lokálnu a aktuálnu serverovú históriu, aby zariadenie so
-    // novšou platbou nemohlo byť neskôr prepísané starou cache iného zariadenia.
-    // Toto je dôležité najmä pri registračnom poplatku zapísanom trénerom/adminom.
-    try{
-      let lp={membership:[],registration:[]}, rp={membership:[],registration:[]};
-      try{ const x=payload[PAYMENT_HISTORY_KEY]?JSON.parse(payload[PAYMENT_HISTORY_KEY]):{}; if(x&&typeof x==='object'){ lp.membership=Array.isArray(x.membership)?x.membership:[]; lp.registration=Array.isArray(x.registration)?x.registration:[]; } }catch(e){}
-      try{ const x=remote[PAYMENT_HISTORY_KEY]?JSON.parse(remote[PAYMENT_HISTORY_KEY]):{}; if(x&&typeof x==='object'){ rp.membership=Array.isArray(x.membership)?x.membership:[]; rp.registration=Array.isArray(x.registration)?x.registration:[]; } }catch(e){}
-      const mergePaymentRows=(localRows,remoteRows,type)=>{
-        const map=new Map();
-        const keyOf=p=>{
-          if(!p || p.memberId==null) return null;
-          const year=Number(p.year||String(p.date||'').slice(0,4)||0);
-          if(type==='registration') return `registration|${Number(p.memberId)}|${year}|${String(p.date||'')}|${String(p.paidGroup||'')}`;
-          return `membership|${Number(p.memberId)}|${year}|${Number(p.period||0)}`;
-        };
-        const put=p=>{
-          const key=keyOf(p); if(!key) return;
-          const prev=map.get(key);
-          if(!prev){ map.set(key,p); return; }
-          const pt=Number(prev.updatedAt||prev.savedAt||0), nt=Number(p.updatedAt||p.savedAt||0);
-          // Pri novej platbe rozhoduje timestamp. Pri starých záznamoch bez
-          // timestampu ponechaj existujúci záznam a nikdy ho nemaž.
-          if(nt>pt || (!pt && nt && p.date)) map.set(key,p);
-        };
-        (Array.isArray(remoteRows)?remoteRows:[]).forEach(put);
-        (Array.isArray(localRows)?localRows:[]).forEach(put);
-        return Array.from(map.values());
-      };
-      const mergedPayments={
-        membership:mergePaymentRows(lp.membership,rp.membership,'membership'),
-        registration:mergePaymentRows(lp.registration,rp.registration,'registration')
-      };
-      payload[PAYMENT_HISTORY_KEY]=JSON.stringify(mergedPayments);
-    }catch(e){
-      console.warn('Payment cloud merge before push failed',e);
-    }
-
+    // Platby sa zapisujú samostatne ATOMICKOU Firestore transakciou.
+    // Všeobecný pushToCloud ich zámerne neobsahuje.
     // VYÚČTOVANIE sa do shared-db NEZAPISUJE. Autoritatívny zdroj je guard-trainer-billing/all.
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
   }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
@@ -7647,17 +7611,48 @@ async function ensureInitialPaymentHistoryLoaded(){
     return false;
   }
 }
+let paymentCloudWriteSeq=0;
+async function savePaymentHistoryToCloudAtomic(){
+  try{
+    if(typeof db==='undefined' || !db || !cloudEnabled) return false;
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    const local={membership:Array.isArray(membershipPayments)?membership:[],registration:Array.isArray(registrationPayments)?registrationPayments:[]};
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      let remote={membership:[],registration:[]};
+      try{
+        const raw=snap.exists?snap.data()?.[PAYMENT_HISTORY_KEY]:null;
+        if(raw){const x=JSON.parse(raw)||{};remote.membership=Array.isArray(x.membership)?x.membership:[];remote.registration=Array.isArray(x.registration)?x.registration:[];}
+      }catch(e){}
+      const mergeRows=(a,b,type)=>{
+        const map=new Map();
+        const key=p=>{
+          if(!p || p.memberId==null)return null;
+          const y=Number(p.year||String(p.date||'').slice(0,4)||0);
+          return type==='registration' ? `registration|${Number(p.memberId)}|${y}|${String(p.date||'')}|${String(p.paidGroup||'')}` : `membership|${Number(p.memberId)}|${y}|${Number(p.period||0)}`;
+        };
+        const put=p=>{
+          const k=key(p); if(!k)return;
+          const old=map.get(k); if(!old){map.set(k,p);return;}
+          const ot=Number(old.updatedAt||old.savedAt||0), nt=Number(p.updatedAt||p.savedAt||0);
+          if(nt>ot || (!ot && nt && p.date)) map.set(k,p);
+        };
+        (Array.isArray(a)?a:[]).forEach(put); (Array.isArray(b)?b:[]).forEach(put);
+        return Array.from(map.values());
+      };
+      const merged={membership:mergeRows(remote.membership,local.membership,'membership'),registration:mergeRows(remote.registration,local.registration,'registration')};
+      tx.set(ref,{[PAYMENT_HISTORY_KEY]:JSON.stringify(merged),_lastPaymentUpdate:Date.now()},{merge:true});
+    });
+    paymentCloudWriteSeq++;
+    console.log('💳 ATOMICKY uložená platobná história',paymentCloudWriteSeq);
+    return true;
+  }catch(e){ console.warn('Atomic payment cloud write failed',e); return false; }
+}
 function persistPaymentHistory(){
   try{
     const payload=JSON.stringify({membership:membershipPayments,registration:registrationPayments});
     localStorage.setItem(PAYMENT_HISTORY_KEY,payload);
-    // Platby členského/registračného musia byť spoločné pre všetky zariadenia.
-    // Bez tohto zápisu ostal report 'ZAPLATENÉ ČLENSKÉ' iba na zariadení,
-    // na ktorom bola platba zapísaná.
-    try{ if(typeof pushToCloud==='function' && typeof db!=='undefined' && db) {
-      pushToCloud(true);
-      setTimeout(()=>{try{pushToCloud(true);}catch(e){}},300);
-    }}catch(e){}
+    try{ savePaymentHistoryToCloudAtomic(); }catch(e){}
   }catch(e){}
 }
 function recordMembershipPayment(member,amount,date,group,period=membershipPeriodForDate(date)){
@@ -8261,7 +8256,7 @@ function saveMemberPaymentFromProfile(memberId,type,period){
    m.membership=true; m.membershipDate=date; m.membershipAmount=amount; m.membershipPaidGroup=group;
  }else{
    const idx=registrationPayments.findIndex(x=>Number(x.memberId)===Number(memberId));
-   const rec={memberId:m.id,surname:m.surname,name:m.name,paidGroup:group,date,amount,source:'admin'};
+   const rec={memberId:m.id,surname:m.surname,name:m.name,paidGroup:group,date,amount,year,savedAt:Date.now(),updatedAt:Date.now(),source:'admin'};
    if(idx>=0) registrationPayments[idx]=rec; else registrationPayments.push(rec);
    m.registration=true; m.registrationDate=date; m.registrationAmount=amount; m.registrationPaidGroup=group;
  }

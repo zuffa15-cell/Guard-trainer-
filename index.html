@@ -1209,6 +1209,44 @@ function pushToCloud(force = false){
       }
     }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
 
+    // PLATBY ČLENSKÉ/REGISTRAČNÉ: nikdy neposielaj iba lokálny snapshot.
+    // Najprv zlúč lokálnu a aktuálnu serverovú históriu, aby zariadenie so
+    // novšou platbou nemohlo byť neskôr prepísané starou cache iného zariadenia.
+    // Toto je dôležité najmä pri registračnom poplatku zapísanom trénerom/adminom.
+    try{
+      let lp={membership:[],registration:[]}, rp={membership:[],registration:[]};
+      try{ const x=payload[PAYMENT_HISTORY_KEY]?JSON.parse(payload[PAYMENT_HISTORY_KEY]):{}; if(x&&typeof x==='object'){ lp.membership=Array.isArray(x.membership)?x.membership:[]; lp.registration=Array.isArray(x.registration)?x.registration:[]; } }catch(e){}
+      try{ const x=remote[PAYMENT_HISTORY_KEY]?JSON.parse(remote[PAYMENT_HISTORY_KEY]):{}; if(x&&typeof x==='object'){ rp.membership=Array.isArray(x.membership)?x.membership:[]; rp.registration=Array.isArray(x.registration)?x.registration:[]; } }catch(e){}
+      const mergePaymentRows=(localRows,remoteRows,type)=>{
+        const map=new Map();
+        const keyOf=p=>{
+          if(!p || p.memberId==null) return null;
+          const year=Number(p.year||String(p.date||'').slice(0,4)||0);
+          if(type==='registration') return `registration|${Number(p.memberId)}|${year}|${String(p.date||'')}|${String(p.paidGroup||'')}`;
+          return `membership|${Number(p.memberId)}|${year}|${Number(p.period||0)}`;
+        };
+        const put=p=>{
+          const key=keyOf(p); if(!key) return;
+          const prev=map.get(key);
+          if(!prev){ map.set(key,p); return; }
+          const pt=Number(prev.updatedAt||prev.savedAt||0), nt=Number(p.updatedAt||p.savedAt||0);
+          // Pri novej platbe rozhoduje timestamp. Pri starých záznamoch bez
+          // timestampu ponechaj existujúci záznam a nikdy ho nemaž.
+          if(nt>pt || (!pt && nt && p.date)) map.set(key,p);
+        };
+        (Array.isArray(remoteRows)?remoteRows:[]).forEach(put);
+        (Array.isArray(localRows)?localRows:[]).forEach(put);
+        return Array.from(map.values());
+      };
+      const mergedPayments={
+        membership:mergePaymentRows(lp.membership,rp.membership,'membership'),
+        registration:mergePaymentRows(lp.registration,rp.registration,'registration')
+      };
+      payload[PAYMENT_HISTORY_KEY]=JSON.stringify(mergedPayments);
+    }catch(e){
+      console.warn('Payment cloud merge before push failed',e);
+    }
+
     // VYÚČTOVANIE sa do shared-db NEZAPISUJE. Autoritatívny zdroj je guard-trainer-billing/all.
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
   }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
@@ -7639,7 +7677,8 @@ function recordMembershipPayment(member,amount,date,group,period=membershipPerio
 function recordRegistrationPayment(member,date,group){
   registrationPayments.push({
     memberId:member.id,surname:member.surname,name:member.name,
-    paidGroup:group||attendanceState.group,date,amount:30
+    paidGroup:group||attendanceState.group,date,amount:30,
+    savedAt:Date.now(),updatedAt:Date.now()
   });
   persistPaymentHistory();
 }
@@ -11699,6 +11738,7 @@ function toggleRegistration(i){
    registrationPayments.push({
      memberId:m.id,surname:m.surname,name:m.name,paidGroup:regGroup,date:regDate,
      amount:30,year:Number(String(regDate).slice(0,4))||appToday().year,
+     savedAt:Date.now(),updatedAt:Date.now(),
      source:(activeUserRole==='admin'?'admin':'trainer'),
      collectorTrainer:activeUserRole==='trainer'?String(getCurrentTrainerDisplayName?.()||'').trim():'',
      collectorTrainerId:activeUserRole==='trainer'&&typeof currentTrainerAccountId==='function'&&currentTrainerAccountId()!=null?Number(currentTrainerAccountId()):null

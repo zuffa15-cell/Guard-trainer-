@@ -7840,116 +7840,96 @@ async function showMemberApplication(id){
  if(!m){toast('Člena sa nepodarilo nájsť.');return;}
  const key=String(id);
  const cached=memberApplicationFiles[key]||{};
- let name=String(m.applicationFileName||cached.name||'Prihláška');
+ const name=String(m.applicationFileName||cached.name||'Prihláška');
 
- const openViewer=async(source,fileName)=>{
-   if(!source)return false;
-   const raw=String(source);
-   const old=document.getElementById('gtApplicationViewer');if(old)old.remove();
-   const v=document.createElement('div');v.id='gtApplicationViewer';v.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#000;display:flex;flex-direction:column;overflow:hidden;';
-   const h=document.createElement('div');h.style.cssText='height:64px;min-height:64px;display:flex;align-items:center;padding:0 12px;background:#111;border-bottom:1px solid #555;box-sizing:border-box;';
-   const t=document.createElement('div');t.textContent=fileName||'Prihláška';t.style.cssText='color:#fff;font-size:18px;font-weight:700;flex:1;';
-   const c=document.createElement('button');c.type='button';c.textContent='✕';c.style.cssText='width:48px;height:48px;border:0;border-radius:10px;background:#333;color:#fff;font-size:30px;';
-   c.onclick=()=>{try{if(v._objectUrl)URL.revokeObjectURL(v._objectUrl);}catch(e){}v.remove();};
-   h.append(t,c);v.appendChild(h);
-   const b=document.createElement('div');b.style.cssText='position:relative;flex:1;min-height:0;overflow:auto;background:#222;display:flex;align-items:center;justify-content:center;';v.appendChild(b);document.body.appendChild(v);
-   const loading=document.createElement('div');loading.textContent='NAČÍTAVAM PRIHLÁŠKU…';loading.style.cssText='color:#fff;font-size:18px;font-weight:700;';b.appendChild(loading);
+ // Viewer sa vytvorí OKAMŽITE – nesmie závisieť od Firebase ani od async načítania.
+ const old=document.getElementById('gtApplicationViewer');if(old)old.remove();
+ const v=document.createElement('div');v.id='gtApplicationViewer';
+ v.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#111;display:flex;flex-direction:column;overflow:hidden;';
+ const h=document.createElement('div');h.style.cssText='height:58px;min-height:58px;background:#000;color:#fff;display:flex;align-items:center;padding:0 10px;gap:10px;';
+ const t=document.createElement('div');t.textContent=name;t.style.cssText='font-weight:800;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+ const c=document.createElement('button');c.type='button';c.textContent='✕';c.style.cssText='width:46px;height:42px;border:0;border-radius:8px;background:#333;color:#fff;font-size:22px;';
+ c.onclick=()=>{try{if(v._url)URL.revokeObjectURL(v._url)}catch(e){}v.remove();};
+ h.append(t,c);v.appendChild(h);
+ const body=document.createElement('div');body.style.cssText='position:relative;flex:1;min-height:0;overflow:auto;background:#222;display:flex;align-items:center;justify-content:center;padding:8px;';
+ const msg=document.createElement('div');msg.textContent='NAČÍTAVAM PRIHLÁŠKU…';msg.style.cssText='color:#fff;font-size:17px;font-weight:700;';body.appendChild(msg);v.appendChild(body);document.body.appendChild(v);
 
+ const renderRaw=async(raw,fileName)=>{
+   if(!raw)return false;
    try{
-     let blob=null;
-     let mime='';
-     if(/^data:/i.test(raw)){
-       const m1=raw.match(/^data:([^;,]+)/i);mime=m1?m1[1]:'';
-       const comma=raw.indexOf(',');
-       if(comma>0){
-         const meta=raw.slice(0,comma),body=raw.slice(comma+1);
-         if(/;base64/i.test(meta)){
-           const bin=atob(body);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);blob=new Blob([bytes],{type:mime||'application/octet-stream'});
-         }else blob=new Blob([decodeURIComponent(body)],{type:mime||'text/plain'});
-       }
+     raw=String(raw);
+     let blob;
+     if(raw.startsWith('blob:')){const r=await fetch(raw);blob=await r.blob();}
+     else if(raw.startsWith('data:')){
+       const r=await fetch(raw);blob=await r.blob();
      }else if(/^https?:\/\//i.test(raw)){
-       try{
-         const resp=await fetch(raw,{mode:'cors'});
-         if(resp.ok){mime=resp.headers.get('content-type')||'';blob=await resp.blob();}
-       }catch(e){}
+       try{const r=await fetch(raw,{mode:'cors'});if(r.ok)blob=await r.blob();}catch(e){}
        if(!blob){
-         loading.remove();
-         const link=document.createElement('a');link.href=raw;link.target='_blank';link.rel='noopener';link.textContent='OTVORIŤ SÚBOR';link.style.cssText='background:#ffd12b;color:#111;padding:14px 22px;border-radius:10px;font-weight:800;text-decoration:none;';b.appendChild(link);return true;
+         body.innerHTML='';
+         const a=document.createElement('a');a.href=raw;a.target='_blank';a.rel='noopener';a.textContent='OTVORIŤ PRIHLÁŠKU';
+         a.style.cssText='background:#ffd12b;color:#111;padding:14px 20px;border-radius:10px;font-weight:900;text-decoration:none;';body.appendChild(a);return true;
        }
-     }
-     if(!blob)throw new Error('unsupported source');
-     if(!mime)mime=blob.type||'';
-     const objectUrl=URL.createObjectURL(blob);v._objectUrl=objectUrl;loading.remove();
-     const isPdf=/pdf/i.test(mime)||/\.pdf(?:$|[?#])/i.test(String(fileName||''));
-     if(isPdf){
-       const frame=document.createElement('iframe');frame.src=objectUrl;frame.title='Prihláška';frame.style.cssText='width:100%;height:100%;border:0;background:#fff;';b.appendChild(frame);
-       const link=document.createElement('a');link.href=objectUrl;link.target='_blank';link.rel='noopener';link.textContent='OTVORIŤ PDF';link.style.cssText='position:absolute;z-index:2;bottom:16px;left:50%;transform:translateX(-50%);background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none;';b.appendChild(link);
+     }else return false;
+     const type=blob.type||((String(fileName).toLowerCase().endsWith('.pdf'))?'application/pdf':'image/*');
+     const url=URL.createObjectURL(blob);v._url=url;body.innerHTML='';
+     if(type.includes('pdf')||String(fileName).toLowerCase().endsWith('.pdf')){
+       const frame=document.createElement('iframe');frame.src=url;frame.style.cssText='width:100%;height:100%;border:0;background:#fff;';body.appendChild(frame);
+       const a=document.createElement('a');a.href=url;a.target='_blank';a.textContent='OTVORIŤ PDF';a.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:900;text-decoration:none;';body.appendChild(a);
      }else{
-       const im=document.createElement('img');im.src=objectUrl;im.alt='Prihláška';im.style.cssText='display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#fff;';
-       im.onerror=()=>{b.innerHTML='';const msg=document.createElement('div');msg.textContent='Súbor sa nepodarilo zobraziť.';msg.style.cssText='color:#fff;font-size:18px;padding:30px;';b.appendChild(msg);};b.appendChild(im);
+       const img=document.createElement('img');img.src=url;img.alt='Prihláška';img.style.cssText='max-width:100%;max-height:100%;object-fit:contain;background:#fff;';body.appendChild(img);
      }
      return true;
-   }catch(e){
-     console.warn('Guard Trainer: viewer error',e);
-     b.innerHTML='<div style="color:#fff;text-align:center;padding:30px;font-size:18px">Súbor sa nepodarilo zobraziť.</div>';
-     return false;
-   }
+   }catch(e){return false;}
  };
 
- const candidates=[];
- const add=(src,n)=>{if(src){const s=String(src);if(!candidates.some(x=>x.s===s))candidates.push({s,n:n||name});}};
- add(m.applicationFile,m.applicationFileName);add(m.applicationFileUrl,name);add(cached.data,cached.name);add(cached.url,cached.name);
+ // 1. Lokálne uloženie / priamo v profile.
+ if(await renderRaw(m.applicationFile,name)||await renderRaw(cached.data,cached.name||name))return;
 
- // Staré lokálne úložiská – vrátane historických názvov.
- const oldKeys=[MEMBER_APPLICATION_FILES_KEY,'gt-member-application-files','memberApplicationFiles','gt-application-files-v1','gt-member-applications-v1'];
- for(const k of oldKeys){
-   try{
-     const raw=originalGetItem(k);if(!raw)continue;const obj=JSON.parse(raw);const f=obj&&obj[key];
-     if(f){add(f.data,f.name);add(f.url,f.name);}
-   }catch(e){}
- }
- for(const c of candidates){if(await openViewer(c.s,c.n))return;}
-
- // Priamy Firestore dokument podľa ID.
+ // 2. Presný starý Firestore dokument podľa ID.
  try{
    const f=await loadApplicationFileFromCloud(id);
-   if(f){
-     add(f.data,f.name);add(f.url,f.name);
-     for(let i=0;i<candidates.length;i++){if(candidates[i].s===String(f.data||f.url)){if(await openViewer(candidates[i].s,candidates[i].n))return;}}
+   if(f&&f.data){
+     memberApplicationFiles[key]=f;persistMemberApplicationFiles();m.applicationFile=f.data;m.applicationFileName=f.name||name;
+     if(await renderRaw(f.data,f.name||name))return;
    }
- }catch(e){console.warn('application direct cloud',e);}
+ }catch(e){console.warn('application exact load',e);}
 
- // Staré verzie mohli mať správne memberId, ale iné ID dokumentu.
+ // 3. LEGACY: prehľadaj celú kolekciu. Staršie verzie mohli mať iné ID člena.
  try{
-   if(db){
-     const col=db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION);
-     const qs=await col.where('memberId','==',String(id)).get();
-     for(const doc of qs.docs){
-       const d=doc.data()||{};add(d.data,d.name);add(d.url,d.name);
+   if(db&&typeof db.collection==='function'){
+     const snap=await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).get();
+     const docs=[];snap.forEach(d=>docs.push({id:String(d.id),data:d.data()||{}}));
+     // Najprv presná zhoda ID, potom zhoda s ID uloženým v dokumente.
+     const candidates=docs.sort((a,b)=>Number(b.data.updatedAt||0)-Number(a.data.updatedAt||0));
+     const exact=candidates.find(x=>x.id===key||String(x.data.memberId||'')===key);
+     const pick=exact||null;
+     if(pick&&pick.data.data){
+       const f={data:String(pick.data.data),name:String(pick.data.name||name),updatedAt:Number(pick.data.updatedAt||0)};
+       memberApplicationFiles[key]=f;persistMemberApplicationFiles();m.applicationFile=f.data;m.applicationFileName=f.name;
+       if(await renderRaw(f.data,f.name))return;
      }
-     const qn=await col.where('memberId','==',Number(id)).get();
-     for(const doc of qn.docs){
-       const d=doc.data()||{};add(d.data,d.name);add(d.url,d.name);
-     }
-     for(const c of candidates.slice()){if(await openViewer(c.s,c.n))return;}
    }
- }catch(e){console.warn('application collection fallback',e);}
+ }catch(e){console.warn('application legacy collection load',e);}
 
- // Starý shared-db – všetky historické kľúče.
+ // 4. Starý shared-db formát.
  try{
-   if(db){
-     const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
-     const d=snap.exists?(snap.data()||{}):{};
-     for(const k of oldKeys){
-       let files=d[k];if(typeof files==='string'){try{files=JSON.parse(files);}catch(e){files=null;}}
-       const f=files&&files[key];if(f){add(f.data,f.name);add(f.url,f.name);}
-     }
-     for(const c of candidates.slice()){if(await openViewer(c.s,c.n))return;}
+   if(db&&typeof db.collection==='function'){
+     const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
+     const d=doc.exists?(doc.data()||{}):{};
+     const raw=d[MEMBER_APPLICATION_FILES_KEY];
+     let files=raw;
+     if(typeof raw==='string'){try{files=JSON.parse(raw)}catch(e){files=null}}
+     const f=files&&files[key];
+     if(f&&f.data&&await renderRaw(f.data,f.name||name))return;
    }
- }catch(e){console.warn('application shared-db fallback',e);}
+ }catch(e){console.warn('application shared-db legacy load',e);}
 
- toast('Prihláška je evidovaná, ale súbor sa nenašiel v starom ani novom úložisku.');
+ body.innerHTML='';
+ const box=document.createElement('div');box.style.cssText='color:#fff;text-align:center;padding:25px;max-width:420px;';
+ box.innerHTML='<div style="font-size:42px;margin-bottom:12px">📄</div><b style="font-size:18px">Prihlášku sa nepodarilo načítať</b><div style="margin-top:10px;color:#bbb">Záznam o odovzdaní existuje, ale súbor sa v dostupných starých úložiskách nenašiel.</div>';
+ body.appendChild(box);
 }
+
 function getSavedMemberTrainingData(member){
   // Štatistika člena vychádza z uloženej dochádzky. Pri čítaní používame
   // normalizované meno, aby zmena veľkosti písmen/medzier v profile

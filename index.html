@@ -7841,67 +7841,115 @@ async function showMemberApplication(id){
  const key=String(id);
  const cached=memberApplicationFiles[key]||{};
  let name=String(m.applicationFileName||cached.name||'Prihláška');
- let opened=false;
- const openViewer=(source,fileName)=>{
+
+ const openViewer=async(source,fileName)=>{
    if(!source)return false;
    const raw=String(source);
    const old=document.getElementById('gtApplicationViewer');if(old)old.remove();
    const v=document.createElement('div');v.id='gtApplicationViewer';v.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#000;display:flex;flex-direction:column;overflow:hidden;';
    const h=document.createElement('div');h.style.cssText='height:64px;min-height:64px;display:flex;align-items:center;padding:0 12px;background:#111;border-bottom:1px solid #555;box-sizing:border-box;';
    const t=document.createElement('div');t.textContent=fileName||'Prihláška';t.style.cssText='color:#fff;font-size:18px;font-weight:700;flex:1;';
-   const c=document.createElement('button');c.type='button';c.textContent='✕';c.style.cssText='width:48px;height:48px;border:0;border-radius:10px;background:#333;color:#fff;font-size:30px;';c.onclick=()=>{try{if(v._objectUrl)URL.revokeObjectURL(v._objectUrl);}catch(e){}v.remove();};
+   const c=document.createElement('button');c.type='button';c.textContent='✕';c.style.cssText='width:48px;height:48px;border:0;border-radius:10px;background:#333;color:#fff;font-size:30px;';
+   c.onclick=()=>{try{if(v._objectUrl)URL.revokeObjectURL(v._objectUrl);}catch(e){}v.remove();};
    h.append(t,c);v.appendChild(h);
    const b=document.createElement('div');b.style.cssText='position:relative;flex:1;min-height:0;overflow:auto;background:#222;display:flex;align-items:center;justify-content:center;';v.appendChild(b);document.body.appendChild(v);
-   const pdf=/^data:application\/pdf/i.test(raw)||/\.pdf(?:$|[?#])/i.test(String(fileName||''))||/\.pdf(?:$|[?#])/i.test(raw);
-   const err=()=>{b.innerHTML='<div style="color:#fff;text-align:center;padding:30px;font-size:18px">Súbor sa nepodarilo zobraziť.</div>';};
-   if(/^data:/i.test(raw)){
-     if(pdf){const f=document.createElement('iframe');f.src=raw;f.style.cssText='width:100%;height:100%;border:0;background:#fff';b.appendChild(f);}
-     else{const im=document.createElement('img');im.src=raw;im.alt='Prihláška';im.style.cssText='max-width:100%;max-height:100%;object-fit:contain;background:#fff';im.onerror=err;b.appendChild(im);}
+   const loading=document.createElement('div');loading.textContent='NAČÍTAVAM PRIHLÁŠKU…';loading.style.cssText='color:#fff;font-size:18px;font-weight:700;';b.appendChild(loading);
+
+   try{
+     let blob=null;
+     let mime='';
+     if(/^data:/i.test(raw)){
+       const m1=raw.match(/^data:([^;,]+)/i);mime=m1?m1[1]:'';
+       const comma=raw.indexOf(',');
+       if(comma>0){
+         const meta=raw.slice(0,comma),body=raw.slice(comma+1);
+         if(/;base64/i.test(meta)){
+           const bin=atob(body);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);blob=new Blob([bytes],{type:mime||'application/octet-stream'});
+         }else blob=new Blob([decodeURIComponent(body)],{type:mime||'text/plain'});
+       }
+     }else if(/^https?:\/\//i.test(raw)){
+       try{
+         const resp=await fetch(raw,{mode:'cors'});
+         if(resp.ok){mime=resp.headers.get('content-type')||'';blob=await resp.blob();}
+       }catch(e){}
+       if(!blob){
+         loading.remove();
+         const link=document.createElement('a');link.href=raw;link.target='_blank';link.rel='noopener';link.textContent='OTVORIŤ SÚBOR';link.style.cssText='background:#ffd12b;color:#111;padding:14px 22px;border-radius:10px;font-weight:800;text-decoration:none;';b.appendChild(link);return true;
+       }
+     }
+     if(!blob)throw new Error('unsupported source');
+     if(!mime)mime=blob.type||'';
+     const objectUrl=URL.createObjectURL(blob);v._objectUrl=objectUrl;loading.remove();
+     const isPdf=/pdf/i.test(mime)||/\.pdf(?:$|[?#])/i.test(String(fileName||''));
+     if(isPdf){
+       const frame=document.createElement('iframe');frame.src=objectUrl;frame.title='Prihláška';frame.style.cssText='width:100%;height:100%;border:0;background:#fff;';b.appendChild(frame);
+       const link=document.createElement('a');link.href=objectUrl;link.target='_blank';link.rel='noopener';link.textContent='OTVORIŤ PDF';link.style.cssText='position:absolute;z-index:2;bottom:16px;left:50%;transform:translateX(-50%);background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none;';b.appendChild(link);
+     }else{
+       const im=document.createElement('img');im.src=objectUrl;im.alt='Prihláška';im.style.cssText='display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#fff;';
+       im.onerror=()=>{b.innerHTML='';const msg=document.createElement('div');msg.textContent='Súbor sa nepodarilo zobraziť.';msg.style.cssText='color:#fff;font-size:18px;padding:30px;';b.appendChild(msg);};b.appendChild(im);
+     }
      return true;
+   }catch(e){
+     console.warn('Guard Trainer: viewer error',e);
+     b.innerHTML='<div style="color:#fff;text-align:center;padding:30px;font-size:18px">Súbor sa nepodarilo zobraziť.</div>';
+     return false;
    }
-   if(/^https?:\/\//i.test(raw)){
-     if(pdf){const f=document.createElement('iframe');f.src=raw;f.style.cssText='width:100%;height:100%;border:0;background:#fff';b.appendChild(f);}
-     else{const im=document.createElement('img');im.src=raw;im.alt='Prihláška';im.style.cssText='max-width:100%;max-height:100%;object-fit:contain;background:#fff';im.onerror=err;b.appendChild(im);}
-     return true;
-   }
-   err();return true;
  };
- // Najprv všetky lokálne staré aj nové formy.
- const localData=String(m.applicationFile||cached.data||'');
- const localUrl=String(m.applicationFileUrl||cached.url||'');
- if(localData){openViewer(localData,name);return;}
- if(localUrl){openViewer(localUrl,name);return;}
- // Záložný lokálny kľúč – staršie verzie aplikácie mohli používať iný názov.
- try{
-   const oldKeys=['gt-member-application-files','memberApplicationFiles','gt-application-files-v1'];
-   for(const k of oldKeys){
-     const raw=originalGetItem(k);if(!raw)continue;
-     const obj=JSON.parse(raw);const f=obj&&obj[key];
-     if(f&&(f.data||f.url)){name=String(f.name||name);memberApplicationFiles[key]=f;persistMemberApplicationFiles();openViewer(f.data||f.url,name);return;}
-   }
- }catch(e){}
- // Cloud dokument podľa ID.
+
+ const candidates=[];
+ const add=(src,n)=>{if(src){const s=String(src);if(!candidates.some(x=>x.s===s))candidates.push({s,n:n||name});}};
+ add(m.applicationFile,m.applicationFileName);add(m.applicationFileUrl,name);add(cached.data,cached.name);add(cached.url,cached.name);
+
+ // Staré lokálne úložiská – vrátane historických názvov.
+ const oldKeys=[MEMBER_APPLICATION_FILES_KEY,'gt-member-application-files','memberApplicationFiles','gt-application-files-v1','gt-member-applications-v1'];
+ for(const k of oldKeys){
+   try{
+     const raw=originalGetItem(k);if(!raw)continue;const obj=JSON.parse(raw);const f=obj&&obj[key];
+     if(f){add(f.data,f.name);add(f.url,f.name);}
+   }catch(e){}
+ }
+ for(const c of candidates){if(await openViewer(c.s,c.n))return;}
+
+ // Priamy Firestore dokument podľa ID.
  try{
    const f=await loadApplicationFileFromCloud(id);
-   if(f&&(f.data||f.url)){memberApplicationFiles[key]=f;persistMemberApplicationFiles();m.applicationFile=f.data||'';m.applicationFileUrl=f.url||'';m.applicationFileName=f.name||name;openViewer(f.data||f.url,f.name||name);return;}
+   if(f){
+     add(f.data,f.name);add(f.url,f.name);
+     for(let i=0;i<candidates.length;i++){if(candidates[i].s===String(f.data||f.url)){if(await openViewer(candidates[i].s,candidates[i].n))return;}}
+   }
  }catch(e){console.warn('application direct cloud',e);}
- // Starý shared-db – skontroluj viac historických kľúčov.
+
+ // Staré verzie mohli mať správne memberId, ale iné ID dokumentu.
+ try{
+   if(db){
+     const col=db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION);
+     const qs=await col.where('memberId','==',String(id)).get();
+     for(const doc of qs.docs){
+       const d=doc.data()||{};add(d.data,d.name);add(d.url,d.name);
+     }
+     const qn=await col.where('memberId','==',Number(id)).get();
+     for(const doc of qn.docs){
+       const d=doc.data()||{};add(d.data,d.name);add(d.url,d.name);
+     }
+     for(const c of candidates.slice()){if(await openViewer(c.s,c.n))return;}
+   }
+ }catch(e){console.warn('application collection fallback',e);}
+
+ // Starý shared-db – všetky historické kľúče.
  try{
    if(db){
      const snap=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
      const d=snap.exists?(snap.data()||{}):{};
-     const keys=[MEMBER_APPLICATION_FILES_KEY,'gt-member-application-files','memberApplicationFiles','gt-application-files-v1'];
-     for(const k of keys){
-       let files=d[k];
-       if(typeof files==='string'){try{files=JSON.parse(files);}catch(e){files=null;}}
-       const f=files&&files[key];
-       if(f&&(f.data||f.url)){memberApplicationFiles[key]=f;persistMemberApplicationFiles();m.applicationFile=f.data||'';m.applicationFileUrl=f.url||'';m.applicationFileName=f.name||name;openViewer(f.data||f.url,f.name||name);return;}
+     for(const k of oldKeys){
+       let files=d[k];if(typeof files==='string'){try{files=JSON.parse(files);}catch(e){files=null;}}
+       const f=files&&files[key];if(f){add(f.data,f.name);add(f.url,f.name);}
      }
+     for(const c of candidates.slice()){if(await openViewer(c.s,c.n))return;}
    }
  }catch(e){console.warn('application shared-db fallback',e);}
- toast('Prihláška je evidovaná, ale starý súbor sa nenašiel.');
-}
 
+ toast('Prihláška je evidovaná, ale súbor sa nenašiel v starom ani novom úložisku.');
+}
 function getSavedMemberTrainingData(member){
   // Štatistika člena vychádza z uloženej dochádzky. Pri čítaní používame
   // normalizované meno, aby zmena veľkosti písmen/medzier v profile

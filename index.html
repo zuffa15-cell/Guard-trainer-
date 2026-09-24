@@ -8,6 +8,7 @@
 <!-- FIREBASE SYNC v2 - FIXED (no reload loop) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
 const firebaseConfig = {
@@ -21,6 +22,7 @@ const firebaseConfig = {
 };
 
 let db = null;
+let storage = null;
 let cloudEnabled = false;
 let syncEnabled = false;
 let isApplyingRemote = false;
@@ -40,6 +42,7 @@ let cloudSyncStartedAt = Date.now();
 try {
   firebase.initializeApp(firebaseConfig);
   db = firebase.firestore();
+  try{ storage = firebase.storage(); }catch(e){ console.warn("Firebase Storage init fail",e); }
   firebase.auth().signInAnonymously().then(()=>{
     cloudEnabled = true;
     console.log("✅ Firebase pripojené - sync zapnutý");
@@ -7074,17 +7077,27 @@ function persistMemberApplicationFiles(){
   catch(e){ console.warn('Guard Trainer: application files could not be persisted',e); }
 }
 const MEMBER_APPLICATION_CLOUD_COLLECTION='guard-trainer-applications';
+const MEMBER_APPLICATION_STORAGE_PATH='guard-trainer-applications';
 async function saveApplicationFileToCloud(memberId, fileRec){
   try{
-    if(!db || !fileRec || !fileRec.data) return false;
+    if(!fileRec || !fileRec.data) return false;
     const data=String(fileRec.data);
-    if(data.length>900*1024){
-      console.warn('Guard Trainer: prihláška je stále príliš veľká pre Firestore',data.length);
-      return false;
+    // Primárne ulož do Firebase Storage – Firestore 1 MB limit už nesmie blokovať prihlášky.
+    if(storage){
+      const safeName=String(fileRec.name||'Prihlaska').replace(/[^a-zA-Z0-9._-]+/g,'_');
+      const path=`${MEMBER_APPLICATION_STORAGE_PATH}/${String(memberId)}/${Date.now()}_${safeName}`;
+      const ref=storage.ref().child(path);
+      await ref.putString(data,'data_url',{contentType:(data.match(/^data:([^;,]+)/i)||[])[1]||'application/octet-stream'});
+      const url=await ref.getDownloadURL();
+      const rec={data,url,name:String(fileRec.name||'Prihláška'),updatedAt:Date.now()};
+      memberApplicationFiles[String(memberId)]=rec;
+      persistMemberApplicationFiles();
+      if(db){ await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(memberId)).set({memberId:String(memberId),url,name:rec.name,updatedAt:rec.updatedAt},{merge:true}); }
+      return true;
     }
-    await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(memberId)).set({
-      memberId:String(memberId), data, name:String(fileRec.name||'Prihláška'), updatedAt:Number(fileRec.updatedAt||Date.now())
-    },{merge:true});
+    // Záloha: menšie súbory môžu zostať vo Firestore.
+    if(!db || data.length>900*1024) return false;
+    await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(memberId)).set({memberId:String(memberId),data,name:String(fileRec.name||'Prihláška'),updatedAt:Number(fileRec.updatedAt||Date.now())},{merge:true});
     return true;
   }catch(e){ console.warn('Guard Trainer: application file cloud save failed',e); return false; }
 }
@@ -7094,6 +7107,7 @@ async function loadApplicationFileFromCloud(memberId){
     const doc=await db.collection(MEMBER_APPLICATION_CLOUD_COLLECTION).doc(String(memberId)).get();
     if(!doc.exists) return null;
     const d=doc.data()||{};
+    if(d.url) return {url:String(d.url),name:String(d.name||'Prihláška'),updatedAt:Number(d.updatedAt||0)};
     return d.data ? {data:String(d.data),name:String(d.name||'Prihláška'),updatedAt:Number(d.updatedAt||0)} : null;
   }catch(e){ console.warn('Guard Trainer: application file cloud load failed',e); return null; }
 }
@@ -7824,95 +7838,51 @@ function deleteMemberPaymentFromProfile(memberId,type,period){
 async function showMemberApplication(id){
  const m=membersData.find(x=>Number(x.id)===Number(id));
  if(!m){toast('Člena sa nepodarilo nájsť.');return;}
-
- // Viewer sa vytvorí HNEĎ. Predtým sa čakalo na Firestore a na mobile
- // to vyzeralo, že tlačidlo vôbec nereaguje.
- const old=document.getElementById('gtApplicationViewer'); if(old)old.remove();
- const viewer=document.createElement('div'); viewer.id='gtApplicationViewer';
- viewer.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#000;display:flex;flex-direction:column;overflow:hidden;';
- const head=document.createElement('div'); head.style.cssText='height:56px;min-height:56px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#111;border-bottom:1px solid #555;box-sizing:border-box;';
- const title=document.createElement('div'); title.textContent=m.applicationFileName||'Prihláška'; title.style.cssText='color:#fff;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
- const close=document.createElement('button'); close.type='button'; close.textContent='✕'; close.style.cssText='width:44px;height:40px;border:0;border-radius:8px;background:#333;color:#fff;font-size:21px;font-weight:700;';
- close.onclick=()=>{if(viewer._url)URL.revokeObjectURL(viewer._url);viewer.remove();};
- head.append(title,close); viewer.appendChild(head);
- const body=document.createElement('div'); body.style.cssText='flex:1;min-height:0;overflow:auto;background:#222;display:flex;align-items:center;justify-content:center;padding:8px;box-sizing:border-box;position:relative;';
- body.innerHTML='<div style="color:#fff;font-size:18px;font-weight:700;text-align:center;padding:30px">Načítavam prihlášku…</div>';
- viewer.appendChild(body);
- document.body.appendChild(viewer);
-
  const show=(data,name)=>{
-   if(!data){
-     body.innerHTML='<div style="color:#fff;text-align:center;padding:30px;font-size:17px">Prihláška nemá uložený súbor.</div>';
-     return;
-   }
-   title.textContent=name||'Prihláška';
-   body.innerHTML='';
-   const raw=String(data);
-   const lowerName=String(name||'').toLowerCase();
-   const isPdf=raw.toLowerCase().startsWith('data:application/pdf') || lowerName.endsWith('.pdf');
+   if(!data){toast('Prihláška nemá uložený súbor.');return;}
+   const old=document.getElementById('gtApplicationViewer'); if(old)old.remove();
+   const viewer=document.createElement('div'); viewer.id='gtApplicationViewer';
+   viewer.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;background:#000;display:flex;flex-direction:column;overflow:hidden;';
+   const head=document.createElement('div'); head.style.cssText='height:56px;min-height:56px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#111;border-bottom:1px solid #555;box-sizing:border-box;';
+   const title=document.createElement('div'); title.textContent=name||'Prihláška'; title.style.cssText='color:#fff;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+   const close=document.createElement('button'); close.type='button'; close.textContent='✕'; close.style.cssText='width:44px;height:40px;border:0;border-radius:8px;background:#333;color:#fff;font-size:21px;font-weight:700;'; close.onclick=()=>{if(viewer._url)URL.revokeObjectURL(viewer._url);viewer.remove();};
+   head.append(title,close); viewer.appendChild(head);
+   const body=document.createElement('div'); body.style.cssText='flex:1;min-height:0;overflow:auto;background:#222;display:flex;align-items:center;justify-content:center;padding:8px;box-sizing:border-box;'; viewer.appendChild(body);
+   const raw=String(data||'');
+   const source=String(data||'');
+   const isPdf=source.toLowerCase().startsWith('data:application/pdf') || String(name||'').toLowerCase().endsWith('.pdf');
    try{
-     let url=raw;
-     if(raw.startsWith('data:')){
-       const comma=raw.indexOf(',');
-       if(comma>0){
-         const meta=raw.slice(5,comma);
-         const payload=raw.slice(comma+1);
-         const mime=(meta.split(';')[0]||'application/octet-stream');
-         let bytes;
-         if(meta.includes(';base64')){
-           const bin=atob(payload);
-           bytes=new Uint8Array(bin.length);
-           for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-         }else{
-           bytes=new TextEncoder().encode(decodeURIComponent(payload));
-         }
-         const blob=new Blob([bytes],{type:mime});
-         url=URL.createObjectURL(blob);
-         viewer._url=url;
-       }
-     }
      if(isPdf){
-       const iframe=document.createElement('iframe');
-       iframe.title='Prihláška PDF'; iframe.src=url;
-       iframe.style.cssText='width:100%;height:100%;border:0;background:#fff;';
-       body.appendChild(iframe);
-       const open=document.createElement('a');
-       open.href=url; open.target='_blank'; open.rel='noopener'; open.textContent='OTVORIŤ PDF';
-       open.style.cssText='position:absolute;bottom:16px;left:50%;transform:translateX(-50%);z-index:3;background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none;box-shadow:0 2px 8px #000;';
-       body.appendChild(open);
+       const embed=document.createElement('embed'); embed.type='application/pdf'; embed.src=source; embed.style.cssText='width:100%;height:100%;border:0;background:#fff;'; body.appendChild(embed);
+       const fallback=document.createElement('a'); fallback.href=source; fallback.target='_blank'; fallback.rel='noopener'; fallback.textContent='OTVORIŤ PDF'; fallback.style.cssText='position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none;'; viewer.appendChild(fallback);
      }else{
-       const img=document.createElement('img'); img.alt='Prihláška';
-       img.style.cssText='display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#fff;';
-       img.onerror=()=>{body.innerHTML='<div style="color:#fff;text-align:center;padding:25px;font-size:17px">Obrázok prihlášky sa nepodarilo zobraziť.<br><br><a href="'+url+'" target="_blank" rel="noopener" style="display:inline-block;background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none">OTVORIŤ SÚBOR</a></div>';};
-       img.src=url; body.appendChild(img);
+       const img=document.createElement('img'); img.alt='Prihláška'; img.style.cssText='display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#fff;';
+       img.onload=()=>{};
+       img.onerror=()=>{body.innerHTML=''; const msg=document.createElement('div'); msg.textContent='Obrázok prihlášky sa nepodarilo zobraziť.'; msg.style.cssText='color:#fff;text-align:center;padding:25px;font-size:16px;'; body.appendChild(msg); const a=document.createElement('a'); a.href=source; a.target='_blank'; a.rel='noopener'; a.textContent='OTVORIŤ SÚBOR'; a.style.cssText='position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none;'; viewer.appendChild(a);};
+       img.src=source; body.appendChild(img);
      }
-   }catch(e){
-     console.error('Guard Trainer: application viewer error',e);
-     body.innerHTML='<div style="color:#fff;text-align:center;padding:30px;font-size:17px">Prihlášku sa nepodarilo zobraziť.</div>';
-   }
+   }catch(e){ toast('Prihlášku sa nepodarilo zobraziť.'); viewer.remove(); return; }
+   document.body.appendChild(viewer);
  };
-
- // 1. Aktuálny profil
  let data=m.applicationFile||'';
- let name=m.applicationFileName||'Prihláška';
- // 2. Lokálna cache súboru
- if(!data){
-   const cached=memberApplicationFiles[String(id)];
-   if(cached&&cached.data){data=cached.data;name=cached.name||name;}
- }
+ let url=m.applicationFileUrl||memberApplicationFiles[String(id)]?.url||'';
+ let name=m.applicationFileName||memberApplicationFiles[String(id)]?.name||'Prihláška';
  if(data){show(data,name);return;}
-
- // 3. Vlastný Firestore dokument podľa ID člena
+ if(url){show(url,name);return;}
+ // Stav profilu môže byť na inom zariadení starší než samotný súbor.
+ // Preto sa cloudový súbor načíta podľa ID člena aj pri m.application=false.
+ // Druhé zariadenie: prihlášku načítaj z vlastného Firestore dokumentu.
+ // Je to zámerne oddelené od veľkého spoločného dokumentu, aby sa obrázok
+ // nestratil kvôli limitu veľkosti shared-db.
  try{
    const f=await loadApplicationFileFromCloud(id);
-   if(f&&f.data){
+   if(f&&(f.data||f.url)){
      memberApplicationFiles[String(id)]=f; persistMemberApplicationFiles();
-     m.application=true; m.applicationFile=f.data; m.applicationFileName=f.name||name;
-     show(f.data,f.name||name); return;
+     m.application=true; m.applicationFile=f.data||''; m.applicationFileUrl=f.url||''; m.applicationFileName=f.name||name;
+     show(f.url||f.data,f.name||name); return;
    }
  }catch(e){console.warn('Guard Trainer: načítanie prihlášky z cloudu zlyhalo',e);}
-
- // 4. Spätná kompatibilita – starý spoločný dokument
+ // Spätná kompatibilita: skús ešte starý spoločný dokument.
  try{
    if(typeof db!=='undefined' && db && typeof db.collection==='function'){
      const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
@@ -7920,14 +7890,14 @@ async function showMemberApplication(id){
      let files=raw;
      if(typeof raw==='string'){try{files=JSON.parse(raw);}catch(e){files=null;}}
      const f=files&&files[String(id)];
-     if(f&&f.data){
+     if(f&&(f.data||f.url)){
        memberApplicationFiles[String(id)]=f; persistMemberApplicationFiles();
-       m.application=true; m.applicationFile=f.data; m.applicationFileName=f.name||name;
-       show(f.data,f.name||name); return;
+       m.application=true; m.applicationFile=f.data||''; m.applicationFileUrl=f.url||''; m.applicationFileName=f.name||name;
+       show(f.url||f.data,f.name||name); return;
      }
    }
  }catch(e){console.warn('Guard Trainer: spätné načítanie prihlášky zlyhalo',e);}
- body.innerHTML='<div style="color:#fff;text-align:center;padding:30px;font-size:17px">Prihláška je evidovaná, ale súbor sa nepodarilo načítať.</div>';
+ toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');
 }
 
 function getSavedMemberTrainingData(member){

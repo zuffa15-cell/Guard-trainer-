@@ -7838,51 +7838,138 @@ function deleteMemberPaymentFromProfile(memberId,type,period){
 async function showMemberApplication(id){
  const m=membersData.find(x=>Number(x.id)===Number(id));
  if(!m){toast('Člena sa nepodarilo nájsť.');return;}
- const show=(data,name)=>{
-   if(!data){toast('Prihláška nemá uložený súbor.');return;}
+
+ // Najprv použijeme všetko, čo už máme lokálne. Dôležité: súbor môže byť
+ // uložený v memberApplicationFiles, aj keď cloudový člen už applicationFile
+ // neobsahuje (pri synchronizácii sa applicationFile zámerne oddeľuje).
+ const cached=memberApplicationFiles[String(id)]||{};
+ let data=String(m.applicationFile||cached.data||'');
+ let url=String(m.applicationFileUrl||cached.url||'');
+ let name=String(m.applicationFileName||cached.name||'Prihláška');
+
+ const openViewer=(source,fileName)=>{
+   if(!source){return false;}
    const old=document.getElementById('gtApplicationViewer'); if(old)old.remove();
-   const viewer=document.createElement('div'); viewer.id='gtApplicationViewer';
-   viewer.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;background:#000;display:flex;flex-direction:column;overflow:hidden;';
-   const head=document.createElement('div'); head.style.cssText='height:56px;min-height:56px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#111;border-bottom:1px solid #555;box-sizing:border-box;';
-   const title=document.createElement('div'); title.textContent=name||'Prihláška'; title.style.cssText='color:#fff;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-   const close=document.createElement('button'); close.type='button'; close.textContent='✕'; close.style.cssText='width:44px;height:40px;border:0;border-radius:8px;background:#333;color:#fff;font-size:21px;font-weight:700;'; close.onclick=()=>{if(viewer._url)URL.revokeObjectURL(viewer._url);viewer.remove();};
-   head.append(title,close); viewer.appendChild(head);
-   const body=document.createElement('div'); body.style.cssText='flex:1;min-height:0;overflow:auto;background:#222;display:flex;align-items:center;justify-content:center;padding:8px;box-sizing:border-box;'; viewer.appendChild(body);
-   const raw=String(data||'');
-   const source=String(data||'');
-   const isPdf=source.toLowerCase().startsWith('data:application/pdf') || String(name||'').toLowerCase().endsWith('.pdf');
-   try{
-     if(isPdf){
-       const embed=document.createElement('embed'); embed.type='application/pdf'; embed.src=source; embed.style.cssText='width:100%;height:100%;border:0;background:#fff;'; body.appendChild(embed);
-       const fallback=document.createElement('a'); fallback.href=source; fallback.target='_blank'; fallback.rel='noopener'; fallback.textContent='OTVORIŤ PDF'; fallback.style.cssText='position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none;'; viewer.appendChild(fallback);
-     }else{
-       const img=document.createElement('img'); img.alt='Prihláška'; img.style.cssText='display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#fff;';
-       img.onload=()=>{};
-       img.onerror=()=>{body.innerHTML=''; const msg=document.createElement('div'); msg.textContent='Obrázok prihlášky sa nepodarilo zobraziť.'; msg.style.cssText='color:#fff;text-align:center;padding:25px;font-size:16px;'; body.appendChild(msg); const a=document.createElement('a'); a.href=source; a.target='_blank'; a.rel='noopener'; a.textContent='OTVORIŤ SÚBOR'; a.style.cssText='position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:#ffd12b;color:#111;padding:12px 18px;border-radius:9px;font-weight:800;text-decoration:none;'; viewer.appendChild(a);};
-       img.src=source; body.appendChild(img);
-     }
-   }catch(e){ toast('Prihlášku sa nepodarilo zobraziť.'); viewer.remove(); return; }
+
+   const viewer=document.createElement('div');
+   viewer.id='gtApplicationViewer';
+   viewer.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#000;display:flex;flex-direction:column;overflow:hidden;';
+
+   const head=document.createElement('div');
+   head.style.cssText='height:64px;min-height:64px;display:flex;align-items:center;gap:10px;padding:0 12px;background:#111;color:#fff;border-bottom:1px solid #555;box-sizing:border-box;';
+   const title=document.createElement('div');
+   title.textContent=fileName||'Prihláška';
+   title.style.cssText='font-size:18px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+   const close=document.createElement('button');
+   close.type='button'; close.textContent='✕';
+   close.setAttribute('aria-label','Zavrieť');
+   close.style.cssText='width:48px;height:48px;border:0;border-radius:10px;background:#333;color:#fff;font-size:30px;line-height:1;';
+   close.onclick=()=>{try{if(viewer._objectUrl)URL.revokeObjectURL(viewer._objectUrl);}catch(e){} viewer.remove();};
+   head.append(title,close);
+
+   const body=document.createElement('div');
+   body.style.cssText='position:relative;flex:1;min-height:0;overflow:auto;background:#222;display:flex;align-items:center;justify-content:center;';
+   viewer.append(head,body);
    document.body.appendChild(viewer);
+
+   const raw=String(source);
+   const isPdf=/^data:application\/pdf/i.test(raw) || /\.pdf(?:$|[?#])/i.test(String(fileName||'')) || /\.pdf(?:$|[?#])/i.test(raw);
+
+   const showError=(msg)=>{
+     body.innerHTML='';
+     const box=document.createElement('div');
+     box.style.cssText='color:#fff;text-align:center;padding:30px;font-size:18px;max-width:420px;';
+     box.textContent=msg;
+     body.appendChild(box);
+   };
+
+   // data URL – zobraz priamo. Pri obrázku nepoužívame embed.
+   if(/^data:/i.test(raw)){
+     if(isPdf){
+       const iframe=document.createElement('iframe');
+       iframe.src=raw;
+       iframe.title='Prihláška PDF';
+       iframe.style.cssText='width:100%;height:100%;border:0;background:#fff;';
+       body.appendChild(iframe);
+       return true;
+     }
+     const img=document.createElement('img');
+     img.alt='Prihláška';
+     img.style.cssText='display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#fff;';
+     img.onload=()=>{};
+     img.onerror=()=>showError('Súbor prihlášky sa nepodarilo zobraziť.');
+     img.src=raw;
+     body.appendChild(img);
+     return true;
+   }
+
+   // HTTPS URL z Firebase Storage – načítaj ho ako blob. Toto obíde problémy
+   // mobilného prehliadača s priamym vložením download URL.
+   if(/^https?:\/\//i.test(raw)){
+     const loading=document.createElement('div');
+     loading.textContent='Načítavam prihlášku…';
+     loading.style.cssText='color:#fff;font-size:18px;';
+     body.appendChild(loading);
+     fetch(raw,{mode:'cors'}).then(r=>{
+       if(!r.ok)throw new Error('HTTP '+r.status);
+       return r.blob();
+     }).then(blob=>{
+       const objectUrl=URL.createObjectURL(blob);
+       viewer._objectUrl=objectUrl;
+       body.innerHTML='';
+       if(isPdf){
+         const iframe=document.createElement('iframe');
+         iframe.src=objectUrl;
+         iframe.title='Prihláška PDF';
+         iframe.style.cssText='width:100%;height:100%;border:0;background:#fff;';
+         body.appendChild(iframe);
+       }else{
+         const img=document.createElement('img');
+         img.alt='Prihláška';
+         img.style.cssText='display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;background:#fff;';
+         img.onerror=()=>showError('Súbor prihlášky sa nepodarilo zobraziť.');
+         img.src=objectUrl;
+         body.appendChild(img);
+       }
+     }).catch(err=>{
+       console.warn('Guard Trainer: priame načítanie prihlášky z URL zlyhalo',err);
+       // Druhý pokus: URL nechaj otvoriť priamo v novom okne.
+       body.innerHTML='';
+       const box=document.createElement('div');
+       box.style.cssText='display:flex;flex-direction:column;align-items:center;gap:16px;color:#fff;text-align:center;padding:30px;';
+       const msg=document.createElement('div');
+       msg.textContent='Súbor sa nepodarilo načítať priamo. Otvor ho tlačidlom nižšie.';
+       const a=document.createElement('a');
+       a.href=raw; a.target='_blank'; a.rel='noopener noreferrer';
+       a.textContent=isPdf?'OTVORIŤ PDF':'OTVORIŤ SÚBOR';
+       a.style.cssText='display:inline-flex;align-items:center;justify-content:center;background:#ffd12b;color:#111;padding:14px 22px;border-radius:10px;font-weight:800;text-decoration:none;';
+       box.append(msg,a); body.appendChild(box);
+     });
+     return true;
+   }
+   showError('Neznámy formát prihlášky.');
+   return true;
  };
- let data=m.applicationFile||'';
- let url=m.applicationFileUrl||memberApplicationFiles[String(id)]?.url||'';
- let name=m.applicationFileName||memberApplicationFiles[String(id)]?.name||'Prihláška';
- if(data){show(data,name);return;}
- if(url){show(url,name);return;}
- // Stav profilu môže byť na inom zariadení starší než samotný súbor.
- // Preto sa cloudový súbor načíta podľa ID člena aj pri m.application=false.
- // Druhé zariadenie: prihlášku načítaj z vlastného Firestore dokumentu.
- // Je to zámerne oddelené od veľkého spoločného dokumentu, aby sa obrázok
- // nestratil kvôli limitu veľkosti shared-db.
+
+ if(data && openViewer(data,name)) return;
+ if(url && openViewer(url,name)) return;
+
+ // Skús cloudový dokument s odkazom alebo starým data URL.
  try{
    const f=await loadApplicationFileFromCloud(id);
    if(f&&(f.data||f.url)){
-     memberApplicationFiles[String(id)]=f; persistMemberApplicationFiles();
-     m.application=true; m.applicationFile=f.data||''; m.applicationFileUrl=f.url||''; m.applicationFileName=f.name||name;
-     show(f.url||f.data,f.name||name); return;
+     memberApplicationFiles[String(id)]=f;
+     persistMemberApplicationFiles();
+     m.application=true;
+     m.applicationFile=f.data||'';
+     m.applicationFileUrl=f.url||'';
+     m.applicationFileName=f.name||name;
+     openViewer(f.url||f.data,f.name||name);
+     return;
    }
  }catch(e){console.warn('Guard Trainer: načítanie prihlášky z cloudu zlyhalo',e);}
- // Spätná kompatibilita: skús ešte starý spoločný dokument.
+
+ // Spätná kompatibilita so starým shared-db.
  try{
    if(typeof db!=='undefined' && db && typeof db.collection==='function'){
      const doc=await db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).get();
@@ -7891,15 +7978,20 @@ async function showMemberApplication(id){
      if(typeof raw==='string'){try{files=JSON.parse(raw);}catch(e){files=null;}}
      const f=files&&files[String(id)];
      if(f&&(f.data||f.url)){
-       memberApplicationFiles[String(id)]=f; persistMemberApplicationFiles();
-       m.application=true; m.applicationFile=f.data||''; m.applicationFileUrl=f.url||''; m.applicationFileName=f.name||name;
-       show(f.url||f.data,f.name||name); return;
+       memberApplicationFiles[String(id)]=f;
+       persistMemberApplicationFiles();
+       m.application=true;
+       m.applicationFile=f.data||'';
+       m.applicationFileUrl=f.url||'';
+       m.applicationFileName=f.name||name;
+       openViewer(f.url||f.data,f.name||name);
+       return;
      }
    }
  }catch(e){console.warn('Guard Trainer: spätné načítanie prihlášky zlyhalo',e);}
+
  toast('Prihláška je evidovaná, ale súbor sa nepodarilo načítať.');
 }
-
 function getSavedMemberTrainingData(member){
   // Štatistika člena vychádza z uloženej dochádzky. Pri čítaní používame
   // normalizované meno, aby zmena veľkosti písmen/medzier v profile

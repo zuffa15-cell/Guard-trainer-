@@ -17060,3 +17060,74 @@ body.head-readonly .bottom.head-billing-nav .nav-attendance { display: none !imp
   .photo-btn{left:51px!important;right:auto!important;}
 }
 </style>
+
+
+<!-- GT RESTORE INTRO: zachová pôvodné úvodné načítanie + orla -->
+<script id="gtRestoreOriginalIntroV1">
+(function(){
+  function restoreIntro(){
+    try{
+      var account=null;
+      try{ account=JSON.parse(localStorage.getItem('gt-simple-login-account')||'null'); }catch(e){}
+      var hasSession=!!(account && (account.role || account.trainer_id!=null));
+      if(!hasSession) return;
+      var splash=document.getElementById('gtSplashV319');
+      var video=document.getElementById('gtSplashExactVideo');
+      var app=document.querySelector('body>.app');
+      if(!splash || !video) return;
+
+      // Vráť presne pôvodný stav úvodu: čierne pozadie, orol/video v strede,
+      // aplikácia je počas načítania skrytá.
+      document.documentElement.classList.add('gtSplashV323Doc');
+      document.body.classList.add('gtSplashV323Active');
+      document.body.classList.remove('gtAppMode');
+      splash.classList.remove('hide');
+      splash.style.setProperty('display','block','important');
+      splash.style.setProperty('visibility','visible','important');
+      splash.style.setProperty('opacity','1','important');
+      splash.style.setProperty('pointer-events','auto','important');
+      if(app){
+        app.style.setProperty('display','none','important');
+        app.style.setProperty('visibility','hidden','important');
+        app.style.setProperty('opacity','0','important');
+        app.style.setProperty('pointer-events','none','important');
+      }
+      video.muted=true;
+      video.setAttribute('muted','');
+      video.setAttribute('playsinline','');
+      video.setAttribute('webkit-playsinline','');
+      try{ video.currentTime=0; }catch(e){}
+      try{ video.playbackRate=1.8; }catch(e){}
+      var playPromise=video.play();
+      if(playPromise && playPromise.catch) playPromise.catch(function(){});
+
+      var done=false;
+      function finish(){
+        if(done) return; done=true;
+        splash.classList.add('hide');
+        splash.style.setProperty('pointer-events','none','important');
+        setTimeout(function(){
+          try{
+            splash.style.setProperty('display','none','important');
+            splash.style.setProperty('visibility','hidden','important');
+            splash.remove();
+          }catch(e){}
+          document.body.classList.remove('gtSplashV323Active');
+          document.documentElement.classList.remove('gtSplashV323Doc');
+          document.body.classList.add('gtAppMode');
+          if(app){
+            app.style.setProperty('display','block','important');
+            app.style.setProperty('visibility','visible','important');
+            app.style.setProperty('opacity','1','important');
+            app.style.setProperty('pointer-events','auto','important');
+          }
+        },260);
+      }
+      // Krátky pôvodný úvod – nezdržiava aplikáciu dlhšie než cca 2,8 s.
+      setTimeout(finish,2800);
+    }catch(e){ console.warn('GT restore intro:',e); }
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',restoreIntro,{once:true});
+  else restoreIntro();
+})();
+</script>

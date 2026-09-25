@@ -5827,6 +5827,7 @@ function renderCalendar(){
       <a class="nav" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
     </nav><div id="toast" class="toast"></div>`;
+  try{ refreshCalendarAttendanceCountsFromCloud(); }catch(e){}
 }
 function getGroupColors(){
   try{return JSON.parse(localStorage.getItem('gt-group-colors')||'{}')||{};}catch(e){return {};}

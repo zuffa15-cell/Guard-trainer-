@@ -11819,6 +11819,44 @@ function initBillingDirectSync(){
           }catch(e){}
         });
         let merged=Array.from(seen.values());
+
+        // OCHRANA PROTI STRATE VYÚČTOVANIA:
+        // Ak príde zo servera neúplný snapshot, nesmie vymazať staršie záznamy
+        // uložené na tomto zariadení. Lokálny záznam sa zachová, pokiaľ preň
+        // neexistuje výslovná mazacia značka (billingDeleteOrder).
+        // Toto je dôležité najmä po prebudení mobilu alebo krátkom výpadku
+        // Firestore, keď môže realtime snapshot obsahovať iba časť zoznamu.
+        try{
+          const localRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
+          const localRows=JSON.parse(localRaw);
+          if(Array.isArray(localRows) && localRows.length>merged.length){
+            const remoteKeys=new Set(merged.map(r=>billingRecordCanonicalKey(r)));
+            localRows.forEach(r=>{
+              try{
+                const k=billingRecordCanonicalKey(r);
+                if(remoteKeys.has(k)) return;
+                const deletedAt=Number(billingDeleteOrder[k]||0);
+                const savedAt=Number(r.savedAt||r.updatedAt||0);
+                if(deletedAt && deletedAt>=savedAt) return;
+                merged.push(r);
+                remoteKeys.add(k);
+              }catch(e){}
+            });
+          }
+        }catch(e){ console.warn('Billing incomplete snapshot protection:',e); }
+
+        // Ak sme takto obnovili záznamy, oprav aj autoritatívny serverový dokument.
+        try{
+          if(Array.isArray(remote) && remote.length < merged.length && typeof db!=='undefined' && db && !window.__gtBillingRepairInFlight){
+            window.__gtBillingRepairInFlight=true;
+            const repairRows=merged.slice();
+            db.collection('guard-trainer-billing').doc('all').set({records:repairRows,billingDeleteOrder:{...billingDeleteOrder},updatedAt:Date.now()},{merge:false})
+              .then(()=>console.log('🛡️ Billing: obnovený neúplný serverový snapshot'))
+              .catch(e=>console.warn('Billing repair failed:',e))
+              .then(()=>{window.__gtBillingRepairInFlight=false;});
+          }
+        }catch(e){ window.__gtBillingRepairInFlight=false; }
+
         // Ak tréner práve uložil nový záznam, starší realtime snapshot ho môže
         // na chvíľu ešte neobsahovať. Zachovaj preto lokálny pending záznam až
         // do potvrdenia serverovej transakcie. Tým sa zobrazí v „Moje vyúčtovanie“

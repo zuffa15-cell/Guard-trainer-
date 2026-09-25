@@ -5016,11 +5016,14 @@ function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
  const me=getCurrentTrainerDisplayName();
- // Ponuky zastupovania musia byť viditeľné aj spätne.
- // Ak tréner dostane ponuku za starší tréning, musí ju vedieť nájsť
- // a potvrdiť aj dnes.
+ const todayIso=String(appToday().iso||'');
+ // Zastupovanie je aktuálne iba v deň konkrétneho tréningu.
+ // Po skončení daného dňa nesmie zostať na Domove ako aktívne upozornenie.
+ // Historické ponuky zostávajú dostupné cez obrazovku Zastupovanie, ale
+ // na Domove sa zobrazujú/blikajú iba ponuky patriace k dnešnému tréningu.
  const relevantOffers=substitutionOffers.filter(o=>
-   o.from===me || o.trainers.includes(me) || o.acceptedBy===me
+   String(o.date||'')===todayIso &&
+   (o.from===me || o.trainers.includes(me) || o.acceptedBy===me)
  );
  const incoming=relevantOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
  const outgoingWaiting=relevantOffers.filter(o=>o.from===me && !o.acceptedBy).length;

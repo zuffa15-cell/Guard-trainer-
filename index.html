@@ -5221,7 +5221,15 @@ function quickMemberList(type){
   // homeMyGroupMembers(), pretože tréner môže mať dnešný tréning cez zastupovanie.
   let arr=membersData.slice();
   if(paymentTypes && todayGroups && todayGroups.size){
-    arr=arr.filter(m=>(m.groups||[m.group]).some(g=>todayGroups.has(quickGroupCode(g))));
+    // B+C na Domove/Kalendári označuje spoločný tréning B + C.
+    // Pri rýchlom prehľade platieb preto nesmie byť B+C považované
+    // za samostatnú členskú skupinu. Jeho zoznam je UNION členov B a C.
+    const paymentGroups=new Set();
+    todayGroups.forEach(code=>{
+      const rosterCodes=groupMemberRosterCodes(code);
+      (rosterCodes.length?rosterCodes:[code]).forEach(c=>paymentGroups.add(quickGroupCode(c)));
+    });
+    arr=arr.filter(m=>(m.groups||[m.group]).some(g=>paymentGroups.has(quickGroupCode(g))));
   }
 
   const today=appToday();

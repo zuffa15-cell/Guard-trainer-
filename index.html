@@ -8142,6 +8142,18 @@ function deleteMemberTrainingFromStats(memberId,dateValue,groupValue){
       const targetSurname=String(member.surname||'').trim().toUpperCase();
       const targetName=String(member.name||'').trim().toUpperCase();
       const sameMember=x=>String(x?.surname||'').trim().toUpperCase()===targetSurname && String(x?.name||'').trim().toUpperCase()===targetName;
+      // Uložená dochádzka je v aktuálnom formáte objekt:
+      // {"PRIEZVISKO|Meno": {training:true,...}}.
+      // Starý kód mazal iba polia members/attendance/rows, takže pri tomto
+      // formáte sa reálne nič nevymazalo a tréning sa po prekreslení vrátil.
+      if(attendance && !Array.isArray(attendance) && typeof attendance==='object'){
+        Object.keys(attendance).forEach(k=>{
+          const kp=String(k).split('|');
+          const ks=String(kp[0]||'').trim().toUpperCase();
+          const kn=String(kp.slice(1).join('|')||'').trim().toUpperCase();
+          if(ks===targetSurname && kn===targetName) delete attendance[k];
+        });
+      }
       ['members','attendance','rows'].forEach(prop=>{
         if(Array.isArray(attendance[prop])) attendance[prop]=attendance[prop].filter(x=>!sameMember(x));
       });

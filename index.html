@@ -9029,17 +9029,44 @@ const GT_BACKUP_SETS = {
 function gtBackupRead(key){
   try{return localStorage.getItem(key);}catch(e){return null;}
 }
+function gtBackupApplicationStats(raw){
+  let files={};
+  try{ const p=raw?JSON.parse(raw):{}; if(p&&typeof p==='object') files=p; }catch(e){}
+  let count=0, bytes=0;
+  Object.keys(files).forEach(id=>{
+    const f=files[id];
+    if(!f||!f.data) return;
+    count++;
+    bytes += String(f.data).length;
+  });
+  return {files,count,bytes};
+}
+function gtFormatBytes(bytes){
+  const n=Number(bytes||0);
+  if(n<1024) return `${n} B`;
+  if(n<1024*1024) return `${(n/1024).toFixed(1)} kB`;
+  return `${(n/(1024*1024)).toFixed(2)} MB`;
+}
 function gtCreateBackupPayload(type){
   const set=GT_BACKUP_SETS[type];
   if(!set) throw new Error('Neznámy typ zálohy');
   const data={};
   set.keys.forEach(k=>{const raw=gtBackupRead(k); if(raw!==null) data[k]=raw;});
+  const appStats=type==='members' ? gtBackupApplicationStats(data['gt-member-application-files-v1']) : {files:{},count:0,bytes:0};
+  if(type==='members'){
+    // Prihlášky sú súčasťou zálohy členov aj samostatne čitateľným blokom.
+    // Pôvodný localStorage kľúč zostáva zachovaný kvôli spätnej kompatibilite.
+    data.applicationFiles=appStats.files;
+    data.applicationFilesCount=appStats.count;
+    data.applicationFilesBytes=appStats.bytes;
+  }
   return {
     guardTrainerBackup: true,
-    version: 1,
+    version: 2,
     type,
-    title: set.title,
+    title: type==='members' ? `Členovia + prihlášky (${appStats.count})` : set.title,
     createdAt:new Date().toISOString(),
+    stats:type==='members'?{memberCount:(()=>{try{const a=JSON.parse(data['gt-members-real-2026-v847']||'[]');return Array.isArray(a)?a.length:0;}catch(e){return 0;}})(),applicationCount:appStats.count,applicationBytes:appStats.bytes,applicationSize:gtFormatBytes(appStats.bytes)}:null,
     data
   };
 }
@@ -9175,6 +9202,12 @@ function gtDownloadFullBackup(){
       const set=GT_BACKUP_SETS[type];
       payload.data[type]={};
       set.keys.forEach(k=>{const raw=gtBackupRead(k); if(raw!==null) payload.data[type][k]=raw;});
+      if(type==='members'){
+        const st=gtBackupApplicationStats(payload.data[type]['gt-member-application-files-v1']);
+        payload.data[type].applicationFiles=st.files;
+        payload.data[type].applicationFilesCount=st.count;
+        payload.data[type].applicationFilesBytes=st.bytes;
+      }
     });
     const stamp=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
@@ -9256,7 +9289,14 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
 
 async function gtRestoreApplyData(data, type){
   if(!data || typeof data!=='object') throw new Error('Neplatné dáta zálohy');
-  const applySet=(setType,obj)=>{if(!obj||typeof obj!=='object')return;const set=GT_BACKUP_SETS[setType];if(!set)return;set.keys.forEach(k=>{if(Object.prototype.hasOwnProperty.call(obj,k))originalSetItem(k,String(obj[k]));});};
+  const applySet=(setType,obj)=>{
+    if(!obj||typeof obj!=='object')return;
+    const set=GT_BACKUP_SETS[setType];if(!set)return;
+    set.keys.forEach(k=>{if(Object.prototype.hasOwnProperty.call(obj,k))originalSetItem(k,String(obj[k]));});
+    if(setType==='members' && obj.applicationFiles && typeof obj.applicationFiles==='object'){
+      originalSetItem('gt-member-application-files-v1',JSON.stringify(obj.applicationFiles));
+    }
+  };
   if(type==='full'){applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
   if(type==='members'||type==='full'){
     try{

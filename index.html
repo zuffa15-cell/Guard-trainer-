@@ -8393,6 +8393,13 @@ function deleteMemberApplication(id){
  const btn=document.querySelector('.delete-application-btn'); if(btn)btn.remove();
  toast('Prihláška bola vymazaná');
 }
+function formatApplicationSize(bytes){
+ const n=Number(bytes||0);
+ if(n<1024) return n+' B';
+ if(n<1024*1024) return (n/1024).toFixed(1)+' kB';
+ return (n/(1024*1024)).toFixed(2)+' MB';
+}
+
 async function prepareApplicationFile(file){
  if(!file) return null;
  const original=await new Promise((resolve,reject)=>{
@@ -8429,9 +8436,14 @@ function previewMemberApplication(input){
  const preview=document.getElementById('applicationPreview');
  preview.textContent='⏳ Spracúvam prihlášku…';
  prepareApplicationFile(file).then(data=>{
-   preview.textContent='✓ Prihláška pripravená: '+file.name;
+   const compressedBytes=data && String(data).startsWith('data:') ? Math.round(String(data).split(',')[1].length*0.75) : file.size;
+   const saved=Math.max(0,file.size-compressedBytes);
+   const pct=file.size>0 ? Math.max(0,Math.round(saved/file.size*100)) : 0;
+   preview.textContent='✓ Prihláška pripravená: '+file.name+' • pôvodne '+formatApplicationSize(file.size)+' → po kompresii '+formatApplicationSize(compressedBytes)+' ('+pct+' % menšia)';
    preview.dataset.fileData=data;
    preview.dataset.fileName=file.name;
+   preview.dataset.originalSize=String(file.size);
+   preview.dataset.compressedSize=String(compressedBytes);
  }).catch(()=>{
    preview.textContent='⚠ Prihlášku sa nepodarilo spracovať';
  });

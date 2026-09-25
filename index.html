@@ -7971,6 +7971,10 @@ function getSavedMemberTrainingData(member){
     if(!d)return;
     const group=String(groupValue||'').trim();
     const groupKey=normGroup(group)||group;
+    // Do osobnej štatistiky patria iba skutočné záznamy dochádzky
+    // s identifikovanou skupinou. Osamelý záznam iba s dátumom (napr.
+    // 26. 9. bez skupiny) je neplatný/sirotský a nesmie sa započítať.
+    if(!groupKey)return;
     // Jeden člen má v osobnej štatistike maximálne JEDEN tréning za jeden
     // kalendárny deň. Staršie synchronizácie mohli uložiť rovnakú dochádzku
     // v dvoch skupinových záznamoch (napr. B aj C) a osobná štatistika by potom

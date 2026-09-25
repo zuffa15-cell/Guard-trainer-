@@ -665,6 +665,23 @@ function initCloudSync(){
           const raw=JSON.stringify(merged); if(raw!==originalGetItem(k)){originalSetItem(k,raw);changed=true;}
           return;
         }
+        if(k==='gt-substitution-offers'){
+          try{
+            const remoteOffers=JSON.parse(data[k]||'[]');
+            if(Array.isArray(remoteOffers)){
+              // Zástupy sú spoločné. Cloudový zoznam je autoritatívny pre ponuky,
+              // aby sa ponuka vytvorená na inom zariadení okamžite zobrazila.
+              substitutionOffers=remoteOffers;
+              originalSetItem(k,JSON.stringify(remoteOffers));
+              changed=true;
+              setTimeout(()=>{
+                try{updateSubstitutionQuick();}catch(e){}
+                try{if(typeof updateHomeQuickOverview==='function')updateHomeQuickOverview();}catch(e){}
+              },0);
+            }
+          }catch(e){ console.warn('Substitution cloud sync failed',e); }
+          return;
+        }
         if(k==='gt-member-application-files-v1'){
           let localObj={}, remoteObj={};
           try{ const x=originalGetItem(k); const p=x?JSON.parse(x):{}; if(p&&typeof p==='object') localObj=p; }catch(e){}
@@ -4819,7 +4836,7 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
  const card0=document.querySelector(`.training[data-group-code="${CSS.escape(code)}"]`);
  const meta0=card0?.querySelector('.meta')?.innerText||'';
  const lines0=meta0.split('\n').map(x=>x.trim()).filter(Boolean);
- const time0=(lines0[0]||'').replace('◷','').trim();
+ const time0=String(timeOverride||((lines0[0]||'').replace('◷','').trim()));
  const me0=getCurrentTrainerDisplayName();
  const duplicate=substitutionOffers.some(o=>o.from===me0 && o.date===today && String(o.code).toUpperCase()===String(code).toUpperCase() && String(o.time||'')===String(time0||''));
  if(duplicate){ toast('Tento tréning už bol ponúknutý na zastupovanie.'); return; }
@@ -4924,6 +4941,7 @@ function cancelSubstitution(id){
  if(o.from!==getCurrentTrainerDisplayName()){ toast('Túto ponuku môže zrušiť iba tréner, ktorý ju vytvoril.'); return false; }
  substitutionOffers=substitutionOffers.filter(x=>x.id!==id);
  persistSubstitutionOffers();
+ try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
  const modal=document.getElementById('substitutionOffersModal');
  if(modal) modal.remove();
  updateHomeQuickOverview();
@@ -4998,14 +5016,16 @@ function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
  const me=getCurrentTrainerDisplayName();
- const todayIso=String(appToday().iso||'');
- // Ponuka/prijatie zastupovania je upozornenie iba pre DEŇ konkrétneho tréningu.
- // Staršie ponuky už na Domove nesmú zostať visieť na ďalší deň.
- const todaysOffers=substitutionOffers.filter(o=>String(o.date||'')===todayIso);
- const incoming=todaysOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
- const outgoingWaiting=todaysOffers.filter(o=>o.from===me && !o.acceptedBy).length;
- const acceptedOutgoing=todaysOffers.filter(o=>o.from===me && o.acceptedBy).length;
- const acceptedIncoming=todaysOffers.filter(o=>o.acceptedBy===me).length;
+ // Ponuky zastupovania musia byť viditeľné aj spätne.
+ // Ak tréner dostane ponuku za starší tréning, musí ju vedieť nájsť
+ // a potvrdiť aj dnes.
+ const relevantOffers=substitutionOffers.filter(o=>
+   o.from===me || o.trainers.includes(me) || o.acceptedBy===me
+ );
+ const incoming=relevantOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
+ const outgoingWaiting=relevantOffers.filter(o=>o.from===me && !o.acceptedBy).length;
+ const acceptedOutgoing=relevantOffers.filter(o=>o.from===me && o.acceptedBy).length;
+ const acceptedIncoming=relevantOffers.filter(o=>o.acceptedBy===me).length;
  const acceptedTotal=acceptedOutgoing+acceptedIncoming;
  const pendingTotal=incoming+outgoingWaiting;
  const count=pendingTotal+acceptedTotal;

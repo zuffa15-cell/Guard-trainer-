@@ -5992,36 +5992,68 @@ function calendarDays(){
   return days;
 }
 function getCalendarAttendanceCounts(dateLabel, groupCode, groupName){
-  // The attendance screen is the authoritative source. In the 5-state cycle
-  // NEW is a separate state (newMember=true, training=false), so it must NOT
-  // be derived from the paid-training snapshot.
+  // KALENDÁR MUSÍ POUŽÍVAŤ PRESNE ROVNAKÚ DOCHÁDZKU AKO OBRAZOVKA DOCHÁDZKY.
+  // Zdrojom pravdy je uložený trainingAttendanceByGroup pre konkrétny dátum/skupinu.
+  // Počítame iba členov, ktorí patria do aktuálneho rosteru skupiny, takže staré
+  // záznamy po presune/odstránení člena nemôžu nafúknuť počet.
   try{
-    const hist=findAttendanceHistory(dateLabel,groupCode);
-    if(hist && typeof hist==='object' && Object.keys(hist).length){
-      let present=0, newCount=0;
-      Object.keys(hist).forEach(k=>{
-        const v=hist[k]||{};
-        if(v.training && !v.newMember) present++;
+    if(isAttendanceDeleted(dateLabel,groupCode)) return null;
+    const key=trainingAttendanceKey(groupCode,dateLabel);
+    let hist=(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup[key]) || null;
+
+    // Ak pamäť ešte nemá záznam, skús lokálne uloženú dochádzku. Toto je len
+    // načítanie rovnakého zdroja, nie výpočet z kalendára alebo rozvrhu.
+    if(!hist){
+      try{
+        const raw=originalGetItem('gt-training-attendance-history') || localStorage.getItem('gt-training-attendance-history');
+        const all=raw?JSON.parse(raw):{};
+        hist=all && all[key] ? all[key] : null;
+      }catch(e){}
+    }
+
+    if(hist && typeof hist==='object'){
+      const wanted=new Set(groupMemberRosterCodes(groupCode));
+      const roster=(membersData||[]).filter(m=>{
+        const gs=Array.isArray(m.groups)?m.groups:[m.group];
+        return gs.some(g=>wanted.has(String(g||'').trim().toUpperCase()));
+      });
+      let present=0,newCount=0;
+      roster.forEach(m=>{
+        const k=`${m.surname}|${m.name}`;
+        const v=hist[k]||hist[`${String(m.surname||'').trim()}|${String(m.name||'').trim()}`];
+        if(!v)return;
         if(v.newMember) newCount++;
+        else if(v.training) present++;
       });
       return {present,newCount};
     }
-  }catch(e){}
+  }catch(e){ console.warn('calendar attendance count',e); }
 
-  // Fallback for old records that predate the attendance-history store.
-  const records=(getBillingRecords()||[]).filter(r=>{
-    if(r.substituteReference) return false;
-    const d=parsePaymentDate(r.date);
-    const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-    if(iso!==String(dateLabel)) return false;
-    if(String(r.group||'').trim().toUpperCase()!==String(groupCode||'').trim().toUpperCase()) return false;
-    if(groupName && r.name && String(r.name)!==String(groupName)) return false;
-    return Array.isArray(r.attendanceSnapshot);
-  });
-  if(!records.length) return null;
-  const r=records[records.length-1];
-  const present=Number.isFinite(Number(r.presentCount)) ? Number(r.presentCount) : (Array.isArray(r.attendanceSnapshot)?r.attendanceSnapshot.length:0);
-  return {present,newCount:Number(r.newCount||0)};
+  // Starší záznamy bez training-attendance-history: rovnaký uložený snapshot,
+  // aký používa štatistika. Nie rozvrh, nie počet členov skupiny.
+  try{
+    const records=(getBillingRecords()||[]).filter(r=>{
+      if(r.substituteReference || r.cancelled) return false;
+      const d=parsePaymentDate(r.date);
+      const iso=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+      if(iso!==String(dateLabel)) return false;
+      if(String(r.group||r.groupCode||'').trim().toUpperCase()!==String(groupCode||'').trim().toUpperCase()) return false;
+      return Array.isArray(r.attendanceStateSnapshot) || Array.isArray(r.paymentSnapshot) || Array.isArray(r.attendanceSnapshot);
+    });
+    if(!records.length) return null;
+    records.sort((a,b)=>Number(a.savedAt||a.updatedAt||a.createdAt||0)-Number(b.savedAt||b.updatedAt||b.createdAt||0));
+    const r=records[records.length-1];
+    let present=0,newCount=0;
+    if(Array.isArray(r.attendanceStateSnapshot)){
+      r.attendanceStateSnapshot.forEach(x=>{ if(x?.newMember)newCount++; else if(x?.training)present++; });
+    }else if(Array.isArray(r.paymentSnapshot)){
+      r.paymentSnapshot.forEach(x=>{ if(x?.newMember)newCount++; else if(x?.training)present++; });
+    }else if(Array.isArray(r.attendanceSnapshot)){
+      present=r.attendanceSnapshot.length;
+    }
+    return {present,newCount};
+  }catch(e){ console.warn('calendar billing attendance fallback',e); }
+  return null;
 }
 function dayRows(){
   const dateLabel=`${selectedCalendarYear}-${String(selectedCalendarMonth+1).padStart(2,'0')}-${String(selectedCalendarDay).padStart(2,'0')}`;
@@ -9029,17 +9061,44 @@ const GT_BACKUP_SETS = {
 function gtBackupRead(key){
   try{return localStorage.getItem(key);}catch(e){return null;}
 }
+function gtBackupApplicationStats(raw){
+  let files={};
+  try{ const p=raw?JSON.parse(raw):{}; if(p&&typeof p==='object') files=p; }catch(e){}
+  let count=0, bytes=0;
+  Object.keys(files).forEach(id=>{
+    const f=files[id];
+    if(!f||!f.data) return;
+    count++;
+    bytes += String(f.data).length;
+  });
+  return {files,count,bytes};
+}
+function gtFormatBytes(bytes){
+  const n=Number(bytes||0);
+  if(n<1024) return `${n} B`;
+  if(n<1024*1024) return `${(n/1024).toFixed(1)} kB`;
+  return `${(n/(1024*1024)).toFixed(2)} MB`;
+}
 function gtCreateBackupPayload(type){
   const set=GT_BACKUP_SETS[type];
   if(!set) throw new Error('Neznámy typ zálohy');
   const data={};
   set.keys.forEach(k=>{const raw=gtBackupRead(k); if(raw!==null) data[k]=raw;});
+  const appStats=type==='members' ? gtBackupApplicationStats(data['gt-member-application-files-v1']) : {files:{},count:0,bytes:0};
+  if(type==='members'){
+    // Prihlášky sú súčasťou zálohy členov aj samostatne čitateľným blokom.
+    // Pôvodný localStorage kľúč zostáva zachovaný kvôli spätnej kompatibilite.
+    data.applicationFiles=appStats.files;
+    data.applicationFilesCount=appStats.count;
+    data.applicationFilesBytes=appStats.bytes;
+  }
   return {
     guardTrainerBackup: true,
-    version: 1,
+    version: 2,
     type,
-    title: set.title,
+    title: type==='members' ? `Členovia + prihlášky (${appStats.count})` : set.title,
     createdAt:new Date().toISOString(),
+    stats:type==='members'?{memberCount:(()=>{try{const a=JSON.parse(data['gt-members-real-2026-v847']||'[]');return Array.isArray(a)?a.length:0;}catch(e){return 0;}})(),applicationCount:appStats.count,applicationBytes:appStats.bytes,applicationSize:gtFormatBytes(appStats.bytes)}:null,
     data
   };
 }
@@ -9175,6 +9234,12 @@ function gtDownloadFullBackup(){
       const set=GT_BACKUP_SETS[type];
       payload.data[type]={};
       set.keys.forEach(k=>{const raw=gtBackupRead(k); if(raw!==null) payload.data[type][k]=raw;});
+      if(type==='members'){
+        const st=gtBackupApplicationStats(payload.data[type]['gt-member-application-files-v1']);
+        payload.data[type].applicationFiles=st.files;
+        payload.data[type].applicationFilesCount=st.count;
+        payload.data[type].applicationFilesBytes=st.bytes;
+      }
     });
     const stamp=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
@@ -9256,7 +9321,14 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
 
 async function gtRestoreApplyData(data, type){
   if(!data || typeof data!=='object') throw new Error('Neplatné dáta zálohy');
-  const applySet=(setType,obj)=>{if(!obj||typeof obj!=='object')return;const set=GT_BACKUP_SETS[setType];if(!set)return;set.keys.forEach(k=>{if(Object.prototype.hasOwnProperty.call(obj,k))originalSetItem(k,String(obj[k]));});};
+  const applySet=(setType,obj)=>{
+    if(!obj||typeof obj!=='object')return;
+    const set=GT_BACKUP_SETS[setType];if(!set)return;
+    set.keys.forEach(k=>{if(Object.prototype.hasOwnProperty.call(obj,k))originalSetItem(k,String(obj[k]));});
+    if(setType==='members' && obj.applicationFiles && typeof obj.applicationFiles==='object'){
+      originalSetItem('gt-member-application-files-v1',JSON.stringify(obj.applicationFiles));
+    }
+  };
   if(type==='full'){applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
   if(type==='members'||type==='full'){
     try{

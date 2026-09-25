@@ -4814,8 +4814,8 @@ MY_TRAINER_GROUPS=[];
 function currentDateKey(){
   return String(attendanceState.date||appToday().iso).replace(/\./g,'-');
 }
-function openSubstitutionOffer(code,name){
- const today=attendanceState.date||appToday().iso;
+function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOverride=''){
+ const today=String(dateOverride||attendanceState.date||currentTrainingDate()||appToday().iso);
  const card0=document.querySelector(`.training[data-group-code="${CSS.escape(code)}"]`);
  const meta0=card0?.querySelector('.meta')?.innerText||'';
  const lines0=meta0.split('\n').map(x=>x.trim()).filter(Boolean);
@@ -4827,8 +4827,8 @@ function openSubstitutionOffer(code,name){
  const card=document.querySelector(`.training[data-group-code="${CSS.escape(code)}"]`);
  const meta=card?.querySelector('.meta')?.innerText||'';
  const lines=meta.split('\n').map(x=>x.trim()).filter(Boolean);
- const time=(lines[0]||'').replace('◷','').trim();
- const place=(lines[1]||'').replace('⌖','').trim();
+ const time=String(timeOverride||((lines[0]||'').replace('◷','').trim()));
+ const place=String(placeOverride||((lines[1]||'').replace('⌖','').trim()));
  const selected = new Set();
  const modal=document.createElement('div');
  modal.id='substitutionModal';
@@ -4840,7 +4840,7 @@ function openSubstitutionOffer(code,name){
      <strong>${getAdminGroupName(code)||name}</strong>
    </div>
    <div class="sub-modal-sub">
-   📅 ${formatAttendanceDate(attendanceState.date||appToday().iso)}<br>
+   📅 ${formatAttendanceDate(today)}<br>
    🕐 ${time||'—'}<br>
    📍 ${place||'—'}
    </div>
@@ -4864,7 +4864,7 @@ function openSubstitutionOffer(code,name){
    if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
    substitutionOffers.push({
      id:Date.now(), code, groupName:name,
-     date:attendanceState.date||appToday().iso,
+     date:today,
      time,place,
      from:getCurrentTrainerDisplayName(),
      trainers:[...selected],
@@ -4872,6 +4872,7 @@ function openSubstitutionOffer(code,name){
      status:'ČAKÁ NA PRIJATIE'
    });
    persistSubstitutionOffers();
+   try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
    modal.remove();
    updateHomeQuickOverview();
    toast('Ponuka zastupovania odoslaná');
@@ -4960,6 +4961,7 @@ function acceptSubstitution(id){
  o.acceptedBy=getCurrentTrainerDisplayName();
  o.status='PRIJATÉ';
  persistSubstitutionOffers();
+ try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
 
  // Create the original trainer's informational zero-value entry immediately.
  // The actual substitute will later save the real billing record.
@@ -5168,17 +5170,7 @@ function todayHomeVisibleGroupCodes(){
     }
   }catch(e){}
 
-  // Zložené tréningy (napr. B+C) nie sú samostatná skupina.
-  // Pre rýchly prehľad musíme rozšíriť B+C na B aj C, aby sa započítali
-  // členovia oboch pôvodných skupín. Karta tréningu pritom ostáva „B+C mix".
-  const result=new Set();
-  visible.forEach(g=>{
-    const code=quickGroupCode(g.code);
-    if(!code) return;
-    const parts=code.split(/\s*[+&/,]\s*/).map(x=>x.trim()).filter(Boolean);
-    if(parts.length>1) parts.forEach(p=>result.add(quickGroupCode(p)));
-    else result.add(code);
-  });
+  const result=new Set(visible.map(g=>quickGroupCode(g.code)).filter(Boolean));
 
   // Zastupovanie prijaté trénerom je súčasť dnešných tréningov.
   try{
@@ -11819,44 +11811,6 @@ function initBillingDirectSync(){
           }catch(e){}
         });
         let merged=Array.from(seen.values());
-
-        // OCHRANA PROTI STRATE VYÚČTOVANIA:
-        // Ak príde zo servera neúplný snapshot, nesmie vymazať staršie záznamy
-        // uložené na tomto zariadení. Lokálny záznam sa zachová, pokiaľ preň
-        // neexistuje výslovná mazacia značka (billingDeleteOrder).
-        // Toto je dôležité najmä po prebudení mobilu alebo krátkom výpadku
-        // Firestore, keď môže realtime snapshot obsahovať iba časť zoznamu.
-        try{
-          const localRaw=originalGetItem('gt-monthly-billing-v221')||'[]';
-          const localRows=JSON.parse(localRaw);
-          if(Array.isArray(localRows) && localRows.length>merged.length){
-            const remoteKeys=new Set(merged.map(r=>billingRecordCanonicalKey(r)));
-            localRows.forEach(r=>{
-              try{
-                const k=billingRecordCanonicalKey(r);
-                if(remoteKeys.has(k)) return;
-                const deletedAt=Number(billingDeleteOrder[k]||0);
-                const savedAt=Number(r.savedAt||r.updatedAt||0);
-                if(deletedAt && deletedAt>=savedAt) return;
-                merged.push(r);
-                remoteKeys.add(k);
-              }catch(e){}
-            });
-          }
-        }catch(e){ console.warn('Billing incomplete snapshot protection:',e); }
-
-        // Ak sme takto obnovili záznamy, oprav aj autoritatívny serverový dokument.
-        try{
-          if(Array.isArray(remote) && remote.length < merged.length && typeof db!=='undefined' && db && !window.__gtBillingRepairInFlight){
-            window.__gtBillingRepairInFlight=true;
-            const repairRows=merged.slice();
-            db.collection('guard-trainer-billing').doc('all').set({records:repairRows,billingDeleteOrder:{...billingDeleteOrder},updatedAt:Date.now()},{merge:false})
-              .then(()=>console.log('🛡️ Billing: obnovený neúplný serverový snapshot'))
-              .catch(e=>console.warn('Billing repair failed:',e))
-              .then(()=>{window.__gtBillingRepairInFlight=false;});
-          }
-        }catch(e){ window.__gtBillingRepairInFlight=false; }
-
         // Ak tréner práve uložil nový záznam, starší realtime snapshot ho môže
         // na chvíľu ešte neobsahovať. Zachovaj preto lokálny pending záznam až
         // do potvrdenia serverovej transakcie. Tým sa zobrazí v „Moje vyúčtovanie“
@@ -15851,7 +15805,7 @@ function showGroupOptions(code,name,time='',date=currentTrainingDate()){
       ${cancelled
         ? `<button class="restore-option" onclick="restoreTraining('${esc(date)}','${esc(code)}','${esc(time)}','${esc(name)}')">↩ VRÁTIŤ TRÉNING</button>`
         : `<button class="danger-option" onclick="cancelTraining('${esc(code)}','${esc(name)}','${esc(time)}','${esc(date)}')">✕ ZRUŠIŤ TRÉNING</button>
-           <button class="sub-option" onclick="offerSubstitute('${esc(code)}','${esc(name)}')">⇄ PONÚKNUŤ ZÁSTUP</button>`}
+           <button class="sub-option" onclick="offerSubstitute('${esc(code)}','${esc(name)}','${esc(time)}','${esc(date)}')">⇄ PONÚKNUŤ ZÁSTUP</button>`}
     </div>`;
   document.body.appendChild(modal);
 }
@@ -15868,9 +15822,9 @@ function cancelTraining(code,name,time='',date=currentTrainingDate()){
     else renderHome();
   },250);
 }
-function offerSubstitute(code,name){
+function offerSubstitute(code,name,time='',date=currentTrainingDate()){
   closeGroupOptions();
-  openSubstitutionOffer(code,name);
+  openSubstitutionOffer(code,name,date,time);
 }
 function attachLongPressToGroups(){
   document.querySelectorAll('[data-group-code]').forEach(el=>{

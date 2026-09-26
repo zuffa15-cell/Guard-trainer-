@@ -9620,7 +9620,7 @@ function cleanupKnownFalseAttendanceSep2026(){
     try{ if(typeof persistAttendanceDeleteOrder==='function') persistAttendanceDeleteOrder(); }catch(e){}
   }catch(e){ console.warn('cleanupKnownFalseAttendanceSep2026',e); }
 }
-setTimeout(()=>cleanupKnownFalseAttendanceSep2026(),2500);
+setTimeout(()=>cleanupKnownFalseAttendanceSep2026(),50);
 
 function getAttendanceSavedAt(date,group){
   return Number(attendanceSaveOrder[attendanceSaveOrderKey(date,group)]||0);
@@ -15221,28 +15221,13 @@ function getAttendanceTruthEntries(month, year){
       const d=parsePaymentDate(dateIso);
       if(!d || d.month!==m || d.year!==y) return;
       if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateIso,group)) return;
+      // DOCHÁDZKA JE JEDINÝ ZDROJ PRAVDY.
+      // Nevyžadujeme timestamp uloženia ani existenciu tréningu v kalendári:
+      // starší platný záznam dochádzky môže byť úplne legitímny a kalendár
+      // nesmie vytvárať ani rušiť účasť. Falošné A/D záznamy zo septembra 2026
+      // sú odstránené a majú trvalý tombstone cez isAttendanceDeleted().
       const savedAt=typeof getAttendanceSavedAt==='function' ? Number(getAttendanceSavedAt(dateIso,group)||0) : 0;
-      // Toto je rozhodujúca podmienka: záznam musí pochádzať z explicitného
-      // uloženia dochádzky. Kalendár ani samotné vyúčtovanie dochádzku nevytvára.
-      if(savedAt<=0) return;
       if(!hist || typeof hist!=='object') return;
-      // Ak pre daný dátum/skupinu neexistuje žiadny reálny naplánovaný tréning,
-      // starý/osiatený záznam dochádzky sa nesmie objaviť v štatistikách.
-      // Toto odstraňuje presne prípady, keď sa v A alebo D zobrazia mená,
-      // hoci tam nikto tréning neuložil.
-      try{
-        if(typeof scheduleItemsForDate==='function'){
-          const scheduled=(scheduleItemsForDate(dateIso)||[]).some(x=>{
-            const c=String(x?.code||x?.group||'').trim().toUpperCase();
-            return c===String(rawGroup||group).trim().toUpperCase() || c===String(group).trim().toUpperCase();
-          });
-          const staticScheduled=(typeof calendarDayGroups!=='undefined' && calendarDayGroups?.[dateIso]||[]).some(x=>{
-            const c=String(x?.code||x?.group||'').trim().toUpperCase();
-            return c===String(rawGroup||group).trim().toUpperCase() || c===String(group).trim().toUpperCase();
-          });
-          if(!scheduled && !staticScheduled) return;
-        }
-      }catch(e){}
       const attendanceHistory={};
       Object.entries(hist).forEach(([personKey,v])=>{
         if(!v || (!v.training && !v.newMember)) return;

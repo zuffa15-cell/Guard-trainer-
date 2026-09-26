@@ -7950,61 +7950,41 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
-  // PROFIL ČLENA = PRESNE TEN ISTÝ ZDROJ AKO ŠTATISTIKY.
-  // Jediným zdrojom je explicitne uložená dochádzka. Vyúčtovanie ani
-  // kalendár nemôžu vytvoriť ďalšiu účasť.
+  // PROFIL = PRESNE ROVNAKÝ ZDROJ AKO KLUBOVÁ ŠTATISTIKA.
+  // Žiadne vyúčtovanie, kalendár ani zoznam skupiny nesmie vytvoriť účasť.
   const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
   const surname=norm(member?.surname), name=norm(member?.name);
   const rows=[];
-  const seen=new Set();
   try{
-    Object.entries(trainingAttendanceByGroup||{}).forEach(([histKey,hist])=>{
-      const parts=String(histKey).split('|');
-      const dateIso=String(parts.shift()||'').trim();
-      const rawGroup=parts.join('|').trim();
-      const group=String(typeof quickGroupCode==='function' ? quickGroupCode(rawGroup)||rawGroup : rawGroup).trim();
-      if(!group || !/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) return;
-      const d=parsePaymentDate(dateIso); if(!d) return;
-      if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateIso,group)) return;
-      const savedAt=typeof getAttendanceSavedAt==='function' ? Number(getAttendanceSavedAt(dateIso,group)||0) : 0;
-      if(savedAt<=0) return;
-      if(!hist || typeof hist!=='object') return;
-      // Rovnaká ochrana ako v klubovej štatistike: bez naplánovaného tréningu
-      // sa starý/osiatený záznam A/D nesmie počítať ako účasť.
-      try{
-        if(typeof scheduleItemsForDate==='function'){
-          const targetRaw=String(rawGroup||group).trim().toUpperCase();
-          const targetGroup=String(group).trim().toUpperCase();
-          const scheduled=(scheduleItemsForDate(dateIso)||[]).some(x=>{
-            const c=String(x?.code||x?.group||'').trim().toUpperCase();
-            return c===targetRaw || c===targetGroup;
-          });
-          const staticScheduled=(typeof calendarDayGroups!=='undefined' && calendarDayGroups?.[dateIso]||[]).some(x=>{
-            const c=String(x?.code||x?.group||'').trim().toUpperCase();
-            return c===targetRaw || c===targetGroup;
-          });
-          if(!scheduled && !staticScheduled) return;
-        }
-      }catch(e){}
-      const matched=Object.entries(hist).some(([k,v])=>{
-        if(!v || (!v.training && !v.newMember)) return false;
-        const kp=String(k).split('|');
-        return norm(kp.shift()||'')===surname && norm(kp.join('|')||'')===name;
-      });
-      if(!matched) return;
-      const slot=`${dateIso}|${group}`;
-      if(seen.has(slot)) return;
-      seen.add(slot);
-      rows.push({
-        date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
-        group,
-        name:'',
-        dateObj:new Date(d.year,d.month-1,d.day)
+    const months={};
+    Object.keys(trainingAttendanceByGroup||{}).forEach(k=>{
+      const d=String(k).split('|')[0];
+      if(/^\d{4}-\d{2}-\d{2}$/.test(d)) months[d.slice(0,7)]=true;
+    });
+    Object.keys(months).forEach(ym=>{
+      const [yy,mm]=ym.split('-').map(Number);
+      const entries=typeof getAttendanceTruthEntries==='function' ? getAttendanceTruthEntries(mm,yy) : [];
+      entries.forEach(e=>{
+        const found=Object.entries(e.attendanceHistory||{}).some(([k,v])=>{
+          if(!v || (!v.training && !v.newMember)) return false;
+          const kp=String(k).split('|');
+          return norm(kp.shift()||'')===surname && norm(kp.join('|')||'')===name;
+        });
+        if(!found) return;
+        const d=parsePaymentDate(e.date); if(!d) return;
+        rows.push({
+          date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
+          group:quickGroupCode(e.group)||e.group,
+          name:'',
+          dateObj:new Date(d.year,d.month-1,d.day)
+        });
       });
     });
   }catch(e){ console.warn('member training history read failed',e); }
-  rows.sort((a,b)=>b.dateObj-a.dateObj || String(a.group).localeCompare(String(b.group)));
-  return rows;
+  const seen=new Set();
+  const unique=rows.filter(r=>{const k=`${r.dateObj.getFullYear()}-${String(r.dateObj.getMonth()+1).padStart(2,'0')}-${String(r.dateObj.getDate()).padStart(2,'0')}|${r.group}`; if(seen.has(k))return false; seen.add(k); return true;});
+  unique.sort((a,b)=>b.dateObj-a.dateObj || String(a.group).localeCompare(String(b.group)));
+  return unique;
 }
 function getMemberTrainingCount(member){
   return getSavedMemberTrainingData(member).length;
@@ -15379,41 +15359,16 @@ function getAttendanceTruthEntries(month, year){
   const dailyNewByGroupCounts=Object.fromEntries(Object.keys(groupNames).map(g=>[g,dailyNewByGroup[g].map(set=>set.size)]));
   const dailyNewCounts=Array.from({length:daysInMonth},(_,i)=>Object.keys(groupNames).reduce((sum,g)=>sum+(dailyNewByGroupCounts[g][i]||0),0));
 
-  // Graf DOCHÁDZKY = výhradne z ULOŽENÉHO VYÚČTOVANIA.
-  // Dôležité: nepoužívame attendanceStateSnapshot, pretože ten môže obsahovať
-  // viac členov než bolo vo finálnom vyúčtovaní. Pre graf je rozhodujúci počet
-  // PLATIEB uložený vo vyúčtovaní (paying). NOVÝ člen sa pridá iba vtedy, ak bol
-  // vo vyúčtovaní uložený ako newCount. Jeden dátum + skupina sa započíta iba raz.
+  // Graf DOCHÁDZKY = PRESNE ROVNAKÁ AUTORITATÍVNA DOCHÁDZKA AKO TOP/PROFIL.
   const daily=Array.from({length:daysInMonth},()=>0);
   const stackedAttendanceByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>0)]));
-  const billingChartMap=new Map();
-  (getBillingRecords()||[]).forEach(r=>{
-    if(r.substituteReference) return;
-    const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
-    const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
-    const statsSavedAt=Number(r.savedAt||r.updatedAt||r.createdAt||0);
-    if(deletedAt>0 && deletedAt>=statsSavedAt) return;
-    const d=parsePaymentDate(r.date);
-    if(!d || d.month!==m || d.year!==y || d.day<1 || d.day>daysInMonth) return;
-    const group=quickGroupCode(r.group);
+  entries.forEach(e=>{
+    const d=parsePaymentDate(e.date); if(!d) return;
+    const group=quickGroupCode(e.group);
     if(!stackedAttendanceByGroup[group]) return;
-    const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    const uniqueKey=`${iso}|${group}`;
-    const recordSavedAt=Number(r.savedAt||r.updatedAt||0);
-    const prev=billingChartMap.get(uniqueKey);
-    if(prev && Number(prev.savedAt||0)>recordSavedAt) return;
-    // Vyúčtovanie eviduje počet platených tréningov v "paying" a počet NOVÝCH
-    // samostatne. Tento súčet je presne údaj, ktorý má byť v štatistike.
-    let count=Number(r.paying);
-    if(!Number.isFinite(count) || count<0) count=Number(r.presentCount||0);
-    const newCount=Number(r.newCount||0);
-    count+=(Number.isFinite(newCount)&&newCount>0?newCount:0);
-    if(!Number.isFinite(count) || count<0) count=0;
-    billingChartMap.set(uniqueKey,{day:d.day,group,count,savedAt:recordSavedAt});
-  });
-  billingChartMap.forEach(item=>{
-    stackedAttendanceByGroup[item.group][item.day-1]=item.count;
-    daily[item.day-1]+=item.count;
+    const count=Object.values(e.attendanceHistory||{}).filter(v=>v && (v.training||v.newMember)).length;
+    stackedAttendanceByGroup[group][d.day-1]=count;
+    daily[d.day-1]+=count;
   });
   const maxDaily=Math.max(1,...daily);
   const stackedDayMax=Math.max(1,...daily);
@@ -15457,7 +15412,7 @@ function getAttendanceTruthEntries(month, year){
     <section class="stats-section">
       <h3>📈 DOCHÁDZKA V MESIACI – CELÝ KLUB</h3>
       ${renderStackedMonthChart(stackedAttendanceByGroup,stackedDayMax,`Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.`)}
-      <div class="stats-money-note">Každý stĺpec je jeden deň. Každá farba zobrazuje počet ľudí zo samostatného uloženého vyúčtovania skupiny a číslo SPOLU je súčet všetkých vyúčtovaných tréningov v daný deň.</div>
+      <div class="stats-money-note">Každý stĺpec je jeden deň. Každá farba zobrazuje počet ľudí zo skutočne uloženej dochádzky danej skupiny a číslo SPOLU je súčet dochádzky v daný deň.</div>
     </section>
 
     <section class="stats-section stats-new-members">

@@ -15305,34 +15305,39 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   }catch(e){ console.warn('Štatistiky – načítanie uložených vyúčtovaní zlyhalo',e); }
   const entries=Array.from(entryMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||quickGroupCode(a.group).localeCompare(quickGroupCode(b.group)));
 
+  // DOCHÁDZKA JE AUTORITATÍVNY ZDROJ PRE POČET ÚČASTÍ.
+  // TOP 3 nesmie počítať iba z vyúčtovania, pretože vo vyúčtovaní môže byť
+  // menej záznamov (napr. nezaplatený tréning), hoci člen bol na tréningu.
+  // Čítame preto priamo uloženú históriu dochádzky a zachováme aj dve účasti
+  // v rovnaký deň, ak boli v dvoch rôznych skupinách.
   const memberCounts={};
-  // ÚČASŤ PODĽA SKUPÍN = PRÍTOMNÍ + NOVÍ.
-  // Noví sú samostatná účasť, preto ich pripočítame k počtu prítomných.
   const groupCounts={A:0,B:0,C:0,D:0,'D+':0};
-  entries.forEach(e=>{
-    const group=quickGroupCode(e.group);
-    let presentCount=0, newCount=0;
-    Object.values(e.attendanceHistory||{}).forEach(v=>{
-      if(!v) return;
-      if(v.newMember) newCount++;
-      else if(v.training) presentCount++;
-    });
-    groupCounts[group]=(groupCounts[group]||0)+presentCount+newCount;
-    Object.keys(e.attendanceHistory||{}).forEach(n=>{
-      const v=e.attendanceHistory[n]||{};
-      if(v.training || v.newMember) memberCounts[n]=(memberCounts[n]||0)+1;
-    });
-  });
-  const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);
   const groupMembers={A:{},B:{},C:{},D:{},'D+':{}};
-  entries.forEach(e=>{
-    const group=quickGroupCode(e.group);
-    if(!groupMembers[group]) groupMembers[group]={};
-    Object.keys(e.attendanceHistory||{}).forEach(n=>{
-      const v=e.attendanceHistory[n]||{};
-      if(v.training || v.newMember) groupMembers[group][n]=(groupMembers[group][n]||0)+1;
+  try{
+    Object.entries(trainingAttendanceByGroup||{}).forEach(([histKey,hist])=>{
+      const parts=String(histKey).split('|');
+      const dateIso=String(parts.shift()||'');
+      const group=quickGroupCode(parts.join('|'));
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(dateIso) || !group || !groupMembers[group]) return;
+      const dd=parsePaymentDate(dateIso);
+      if(!dd || dd.month!==m || dd.year!==y) return;
+      const deletedAt=Number(attendanceDeleteOrder[attendanceDeleteKey(dateIso,group)]||0);
+      if(deletedAt>0) return;
+      if(!hist || typeof hist!=='object') return;
+      Object.entries(hist).forEach(([personKey,v])=>{
+        if(!v || (!v.training && !v.newMember)) return;
+        const partsName=String(personKey).split('|');
+        const surname=String(partsName.shift()||'').trim();
+        const name=String(partsName.join('|')||'').trim();
+        if(!surname && !name) return;
+        const key=surname+'|'+name;
+        memberCounts[key]=(memberCounts[key]||0)+1;
+        groupCounts[group]=(groupCounts[group]||0)+1;
+        groupMembers[group][key]=(groupMembers[group][key]||0)+1;
+      });
     });
-  });
+  }catch(e){ console.warn('Štatistiky – priamy zdroj dochádzky pre TOP 3 zlyhal',e); }
+  const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);
   const topByGroup={};
   Object.keys(groupMembers).forEach(g=>{
     topByGroup[g]=Object.entries(groupMembers[g])

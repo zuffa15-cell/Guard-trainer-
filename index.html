@@ -15335,7 +15335,16 @@ function renderStatistics(month=appToday().month,year=appToday().year){
       const savedAttendanceAt = (typeof getAttendanceSavedAt==='function')
         ? Number(getAttendanceSavedAt(dateIso,group)||0) : 0;
       const billingExists = entryMap.has(`${dateIso}|${group}`);
-      if(savedAttendanceAt<=0 && !billingExists) return;
+      // História môže obsahovať starý testovací/sirotí záznam, ktorý už nemá
+      // žiadny aktuálny dôkaz, že bol tréning skutočne uložený. Samotný starý
+      // attendance-save timestamp nestačí, pretože môže zostať v zariadení po
+      // staršej verzii aplikácie. Pre štatistiky preto musí existovať aktuálny
+      // záznam tréningu vo vyúčtovaní.
+      //
+      // Dôležité: týmto sa odstránia falošné A/D mená zo starých testovacích
+      // záznamov, ale v rámci skutočne evidovaného tréningu stále používame
+      // priamu dochádzku ako zdroj počtu účastí.
+      if(!billingExists) return;
       Object.entries(hist).forEach(([personKey,v])=>{
         if(!v || (!v.training && !v.newMember)) return;
         const partsName=String(personKey).split('|');

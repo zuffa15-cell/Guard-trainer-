@@ -7950,57 +7950,105 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
-  // PROFIL = PRESNE ROVNAKÝ AUTORITATÍVNY ZDROJ AKO ŠTATISTIKY.
-  // Jeden spoločný zoznam: getAttendanceTruthEntries().
-  // Nečíta vyúčtovanie, kalendár ani aktuálnu skupinu člena.
-  const norm=v=>String(v==null?'':v).trim().replace(/\s+/g,' ').toUpperCase();
-  const surname=norm(member?.surname), name=norm(member?.name);
+  // Štatistika člena vychádza z uloženej dochádzky. Pri čítaní používame
+  // normalizované meno, aby zmena veľkosti písmen/medzier v profile
+  // nerozbila historickú dochádzku. Ako záložný zdroj používame aj
+  // kompletný attendanceStateSnapshot vo vyúčtovaní (staršie záznamy).
+  const normName=v=>String(v||'').trim().replace(/\s+/g,' ').toUpperCase();
+  const surname=normName(member?.surname), name=normName(member?.name);
+  const key=`${member.surname}|${member.name}`;
   const rows=[];
+  const seen=new Set();
+  const seenSlots=new Set();
+  const normGroup=v=>{
+    const x=String(v||'').trim().toUpperCase();
+    if(!x)return '';
+    const m=x.match(/^([A-ZČĎĽŇŠŤŽ0-9+]+)/);
+    return m?m[1]:x;
+  };
+  const addRow=(dateValue,groupValue,nameValue,source='')=>{
+    const d=parsePaymentDate(dateValue);
+    if(!d)return;
+    const group=String(groupValue||'').trim();
+    const groupKey=normGroup(group)||group;
+    // Do osobnej štatistiky patria iba skutočné záznamy dochádzky
+    // s identifikovanou skupinou. Osamelý záznam iba s dátumom (napr.
+    // 26. 9. bez skupiny) je neplatný/sirotský a nesmie sa započítať.
+    if(!groupKey)return;
+    // Jeden člen má v osobnej štatistike maximálne JEDEN tréning za jeden
+    // kalendárny deň. Staršie synchronizácie mohli uložiť rovnakú dochádzku
+    // v dvoch skupinových záznamoch (napr. B aj C) a osobná štatistika by potom
+    // nesprávne ukazovala 2 alebo 3 tréningy v ten istý deň. Pre profil člena
+    // je preto dátum autoritatívnym identifikátorom účasti.
+    const unique=`${d.year}-${d.month}-${d.day}`;
+    if(seen.has(unique))return;
+    seen.add(unique);
+    seenSlots.add(unique);
+    rows.push({
+      date:`${String(d.day).padStart(2,'0')}. ${String(d.month).padStart(2,'0')}. ${d.year}`,
+      group:group||groupKey,
+      name:nameValue||'',
+      dateObj:new Date(d.year,d.month-1,d.day)
+    });
+  };
+
+  // 1. Primárny zdroj: uložená dochádzka podľa dátumu + skupiny.
   try{
-    const t=appToday();
-    const startYear=t.year;
-    const startMonth=1;
-    // Profil potrebuje celý rok, aby mesačná aj ročná štatistika používala
-    // presne tie isté entries ako klubová štatistika.
-    for(let y=startYear-10;y<=startYear;y++){
-      for(let mo=1;mo<=12;mo++){
-        if(y===startYear && mo>t.month) break;
-        const entries=getAttendanceTruthEntries(mo,y)||[];
-        entries.forEach(e=>{
-          const matched=Object.entries(e.attendanceHistory||{}).some(([person,v])=>{
-            if(!v || (!v.training && !v.newMember)) return false;
-            const parts=String(person).split('|');
-            const ps=norm(parts.shift()||''), pn=norm(parts.join('|')||'');
-            return ps===surname && pn===name;
-          });
-          if(!matched) return;
-          const iso=String(e.date||'').trim();
-          const m=iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-          if(!m) return;
-          const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
-          if(Number.isNaN(d.getTime())) return;
-          rows.push({
-            date:`${m[3]}. ${m[2]}. ${m[1]}`,
-            group:quickGroupCode(e.group)||e.group,
-            name:'',
-            dateObj:d
-          });
+    if(typeof trainingAttendanceByGroup!=='undefined' && trainingAttendanceByGroup){
+      Object.keys(trainingAttendanceByGroup).forEach(histKey=>{
+        const parts=String(histKey).split('|');
+        const dateValue=parts[0]||'';
+        const groupValue=parts.slice(1).join('|')||'';
+        const hist=trainingAttendanceByGroup[histKey];
+        if(!hist || typeof hist!=='object')return;
+        // Nečítame iba presný key – člen mohol mať neskôr opravené meno.
+        let memberState=null;
+        Object.keys(hist).some(k=>{
+          const kp=String(k).split('|');
+          if(normName(kp[0])===surname && normName(kp.slice(1).join('|'))===name){
+            memberState=hist[k]; return true;
+          }
+          return false;
         });
-      }
+        if(!memberState || (!memberState.training && !memberState.newMember))return;
+        addRow(dateValue,groupValue,'',`history|${histKey}`);
+      });
     }
   }catch(e){ console.warn('member training history read failed',e); }
-  const seen=new Set();
-  const unique=rows.filter(r=>{
-    // Jeden konkrétny uložený tréning = dátum + skupina.
-    // B a C v ten istý deň zostávajú dve samostatné účasti.
-    const k=`${r.dateObj.getFullYear()}-${String(r.dateObj.getMonth()+1).padStart(2,'0')}-${String(r.dateObj.getDate()).padStart(2,'0')}|${String(r.group||'').toUpperCase()}`;
-    if(seen.has(k)) return false;
-    seen.add(k); return true;
-  });
-  unique.sort((a,b)=>b.dateObj-a.dateObj || String(a.group).localeCompare(String(b.group)));
-  return unique;
-}
 
+  // 2. Záložný zdroj: kompletný snapshot dochádzky uložený vo vyúčtovaní.
+  // Toto pokrýva aj staršie tréningy, pri ktorých sa samostatná história
+  // dochádzky na tomto zariadení ešte nenachádza.
+  try{
+    getBillingRecords().forEach((r,idx)=>{
+      const d=parsePaymentDate(r.date);
+      if(!d)return;
+      const group=String(r.group||r.groupCode||'').trim();
+      let matched=false;
+      if(Array.isArray(r.attendanceStateSnapshot)){
+        matched=r.attendanceStateSnapshot.some(x=>
+          normName(x?.surname)===surname && normName(x?.name)===name && (x?.training||x?.newMember)
+        );
+      }
+      if(!matched && Array.isArray(r.attendanceSnapshot)){
+        matched=r.attendanceSnapshot.some(k=>{
+          const kp=String(k||'').split('|');
+          return normName(kp[0])===surname && normName(kp.slice(1).join('|'))===name;
+        });
+      }
+      if(!matched)return;
+      const slot=`${d.year}-${d.month}-${d.day}|${normGroup(group)||group}`;
+      // Ak už máme rovnaký dátum + skupinu z reálnej dochádzky, vyúčtovanie
+      // je iba záložný zdroj a nesmie tú istú účasť započítať druhýkrát.
+      if(seenSlots.has(slot))return;
+      const sourceKey=String(r.key||`${r.date}|${group}|${r.trainer||''}|${idx}`);
+      addRow(r.date,group,r.name||'',`billing|${sourceKey}`);
+    });
+  }catch(e){ console.warn('member billing training history read failed',e); }
+
+  rows.sort((a,b)=>b.dateObj-a.dateObj);
+  return rows;
+}
 function getMemberTrainingCount(member){
   return getSavedMemberTrainingData(member).length;
 }
@@ -9445,24 +9493,6 @@ function persistAttendanceDeleteOrder(){
     localStorage.setItem(ATTENDANCE_DELETE_ORDER_KEY,raw);
   }catch(e){}
 }
-
-// OPRAVA 2026-09: v septembri neprebehla dochádzka A ani D.
-// Staré sirotské záznamy z týchto dvoch skupín musia byť trvalo ignorované,
-// inak sa po cloudovej synchronizácii vracajú do štatistík.
-try{
-  let changed=false;
-  Object.keys(trainingAttendanceByGroup||{}).forEach(rawKey=>{
-    const canonical=canonicalAttendanceHistoryKey(rawKey);
-    const [date,group]=canonical.split('|');
-    if(/^2026-09-\d{2}$/.test(date) && (group==='A' || group==='D' || group==='D+')){
-      attendanceDeleteOrder[canonical]=Math.max(Number(attendanceDeleteOrder[canonical]||0),Date.now());
-      delete trainingAttendanceByGroup[rawKey];
-      changed=true;
-    }
-  });
-  if(changed) persistAttendanceDeleteOrder();
-  if(changed) persistTrainingAttendanceHistory();
-}catch(e){ console.warn('Guard Trainer: cleanup starých A/D dochádzok zlyhal',e); }
 function attendanceDeleteKey(date,group){
   return `${canonicalAttendanceDate(date)}|${canonicalAttendanceGroup(group)}`;
 }
@@ -9630,31 +9660,6 @@ function markAttendanceSavedNow(date=attendanceState.date,group=attendanceState.
     localStorage.setItem('gt-attendance-save-order-v1',JSON.stringify(attendanceSaveOrder));
   }catch(e){}
 }
-
-// vFIX-SEP26: jednorazová oprava starých testovacích/sirotích dochádzok A a D.
-// V septembri 2026 podľa aktuálnej evidencie nebol uložený žiadny skutočný tréning A ani D.
-// Tieto staré snapshoty preto nesmú vstupovať do štatistík, TOP ani profilov.
-function cleanupKnownFalseAttendanceSep2026(){
-  try{
-    const year='2026', month='09';
-    const groups=['A','D'];
-    groups.forEach(group=>{
-      for(let day=1;day<=30;day++){
-        const iso=`${year}-${month}-${String(day).padStart(2,'0')}`;
-        const key=attendanceDeleteKey(iso,group);
-        if(trainingAttendanceByGroup && Object.prototype.hasOwnProperty.call(trainingAttendanceByGroup,key)) delete trainingAttendanceByGroup[key];
-        try{ if(typeof attendanceSaveOrder!=='undefined') delete attendanceSaveOrder[attendanceSaveOrderKey(iso,group)]; }catch(e){}
-        try{ if(typeof attendanceDeleteOrder!=='undefined') attendanceDeleteOrder[key]=Date.now(); }catch(e){}
-        try{ if(typeof deleteAdminAttendanceDirectCloud==='function' && isAdmin()) deleteAdminAttendanceDirectCloud(key,Date.now()); }catch(e){}
-      }
-    });
-    persistTrainingAttendanceHistory();
-    try{ if(typeof persistAttendanceSaveOrder==='function') persistAttendanceSaveOrder(); }catch(e){}
-    try{ if(typeof persistAttendanceDeleteOrder==='function') persistAttendanceDeleteOrder(); }catch(e){}
-  }catch(e){ console.warn('cleanupKnownFalseAttendanceSep2026',e); }
-}
-setTimeout(()=>cleanupKnownFalseAttendanceSep2026(),50);
-
 function getAttendanceSavedAt(date,group){
   return Number(attendanceSaveOrder[attendanceSaveOrderKey(date,group)]||0);
 }
@@ -15235,101 +15240,99 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   const daysInMonth=new Date(y,m,0).getDate();
   const monthPrefix=`${y}-${String(m).padStart(2,'0')}-`;
 
-function getAttendanceTruthEntries(month, year){
-  const m=Number(month), y=Number(year);
-  const outMap=new Map();
-  const normGroup=v=>{
-    const x=String(v||'').trim().toUpperCase();
-    if(!x) return '';
-    if(typeof quickGroupCode==='function') return String(quickGroupCode(x)||x).trim().toUpperCase();
-    return x;
-  };
+  // ŠTATISTIKY = VÝHRADNE Z ULOŽENÉHO VYÚČTOVANIA.
+  // Autoritatívnym zdrojom je attendanceStateSnapshot uložený spolu
+  // s konkrétnym vyúčtovaním. Neberieme údaje z aktuálnej dochádzky,
+  // kalendára ani zo starých lokálnych snapshotov. Tým pádom sa štatistika
+  // vždy zhoduje s tým, čo bolo pri vyúčtovaní skutočne uložené.
+  // Jeden kalendárny tréning = jeden záznam podľa DÁTUM + SKUPINA.
+  // Staršie verzie mohli mať ten istý tréning uložený viackrát (napr. po
+  // synchronizácii medzi trénerom a adminom). Štatistika preto nesmie tieto
+  // kópie sčítať. Vyberieme iba najnovšie uložené vyúčtovanie pre daný
+  // dátum/skupinu. Toto je zároveň presne to, čo sa zobrazuje ako jeden
+  // tréning vo vyúčtovaní klubu.
+  const entryMap=new Map();
   try{
-    Object.entries(trainingAttendanceByGroup||{}).forEach(([histKey,hist])=>{
-      const parts=String(histKey).split('|');
-      const dateIso=String(parts.shift()||'').trim();
-      const rawGroup=parts.join('|').trim();
-      const group=normGroup(rawGroup);
-      if(!/^\d{4}-\d{2}-\d{2}$/.test(dateIso) || !group) return;
-      const d=parsePaymentDate(dateIso);
+    (getBillingRecords()||[]).forEach(r=>{
+      const d=parsePaymentDate(r.date);
       if(!d || d.month!==m || d.year!==y) return;
-      if(typeof isAttendanceDeleted==='function' && isAttendanceDeleted(dateIso,group)) return;
-      // DOCHÁDZKA JE JEDINÝ ZDROJ PRAVDY.
-      // Nevyžadujeme timestamp uloženia ani existenciu tréningu v kalendári:
-      // starší platný záznam dochádzky môže byť úplne legitímny a kalendár
-      // nesmie vytvárať ani rušiť účasť. Falošné A/D záznamy zo septembra 2026
-      // sú odstránené a majú trvalý tombstone cez isAttendanceDeleted().
-      const savedAt=typeof getAttendanceSavedAt==='function' ? Number(getAttendanceSavedAt(dateIso,group)||0) : 0;
-      let adminEditedAt=0;
-      try{
-        const rawAdmin=originalGetItem('gt-attendance-admin-edits-v1');
-        const adminMap=rawAdmin?JSON.parse(rawAdmin):{};
-        adminEditedAt=Number(adminMap?.[attendanceSaveOrderKey(dateIso,group)]||0);
-      }catch(e){}
-      // KRITICKÉ: samotný zvyšný snapshot v gt-training-attendance-history
-      // ešte neznamená, že tréning bol reálne uložený. Staré/siroté snapshoty
-      // môžu zostať po kalendári, vyúčtovaní alebo staršej verzii aplikácie.
-      // Za skutočnú dochádzku preto považujeme iba záznam, ktorý má potvrdené
-      // uloženie dochádzky (save-order) alebo neskoršiu administrátorskú úpravu.
-      // Tým sa odstránia falošné B/C dni a zároveň ostáva dochádzka jediným
-      // zdrojom pravdy.
-      if(savedAt<=0 && adminEditedAt<=0) return;
-      const authoritativeSavedAt=Math.max(savedAt,adminEditedAt);
-      if(!hist || typeof hist!=='object') return;
+      // Vymazané vyúčtovanie nesmie byť zdrojom štatistiky. Kontrolujeme
+      // rovnaký delete marker ako samotný zoznam vyúčtovaní.
+      const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
+      const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+      const savedAt=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+      if(deletedAt>0 && deletedAt>=savedAt) return;
+      if(!Array.isArray(r.attendanceStateSnapshot)) return;
+
       const attendanceHistory={};
-      Object.entries(hist).forEach(([personKey,v])=>{
-        if(!v || (!v.training && !v.newMember)) return;
-        const kp=String(personKey).split('|');
-        const surname=String(kp.shift()||'').trim();
-        const name=String(kp.join('|')||'').trim();
+      r.attendanceStateSnapshot.forEach(x=>{
+        if(!x) return;
+        const surname=String(x.surname||'').trim();
+        const name=String(x.name||'').trim();
+        const key=surname+'|'+name;
         if(!surname && !name) return;
-        attendanceHistory[surname+'|'+name]={
-          training:!!v.training,
-          newMember:!!v.newMember,
-          trainingAccount:!!v.trainingAccount
+        attendanceHistory[key]={
+          training:!!x.training,
+          newMember:!!x.newMember,
+          trainingAccount:!!x.trainingAccount
         };
       });
-      const people=Object.keys(attendanceHistory);
-      if(!people.length) return;
+
+      const people=Object.keys(attendanceHistory).filter(k=>{
+        const v=attendanceHistory[k]||{};
+        return !!v.training || !!v.newMember;
+      });
+      const newCount=Object.values(attendanceHistory).filter(v=>v&&v.newMember).length;
+      if(people.length===0 && newCount===0) return;
+
       const iso=`${y}-${String(m).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-      const key=`${iso}|${group}`;
+      const group=quickGroupCode(r.group||'');
+      if(!group) return;
       const entry={
         date:iso,
-        group:rawGroup||group,
+        group:r.group||'',
         people,
-        paymentSnapshot:[],
-        newCount:Object.values(attendanceHistory).filter(v=>v.newMember).length,
+        paymentSnapshot:Array.isArray(r.paymentSnapshot)?r.paymentSnapshot.slice():[],
+        newCount,
         attendanceHistory,
-        billingKey:'',
-        savedAt:authoritativeSavedAt
+        billingKey:r.key||'',
+        savedAt:Number(r.savedAt||r.updatedAt||0)
       };
-      const prev=outMap.get(key);
-      if(!prev || savedAt>=Number(prev.savedAt||0)) outMap.set(key,entry);
+      const uniqueKey=`${iso}|${group}`;
+      const prev=entryMap.get(uniqueKey);
+      if(!prev || entry.savedAt>=prev.savedAt) entryMap.set(uniqueKey,entry);
     });
-  }catch(e){ console.warn('Štatistiky – načítanie autoritatívnej dochádzky zlyhalo',e); }
-  return Array.from(outMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||String(a.group).localeCompare(String(b.group)));
-}
+  }catch(e){ console.warn('Štatistiky – načítanie uložených vyúčtovaní zlyhalo',e); }
+  const entries=Array.from(entryMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||quickGroupCode(a.group).localeCompare(quickGroupCode(b.group)));
 
-  const entries=getAttendanceTruthEntries(m,y);
-
-
-  // Všetky štatistiky používajú rovnaké autoritatívne entries z dochádzky.
-  // Žiadne vyúčtovanie, kalendár ani iný záložný zdroj tu nemení počet účastí.
   const memberCounts={};
+  // ÚČASŤ PODĽA SKUPÍN = PRÍTOMNÍ + NOVÍ.
+  // Noví sú samostatná účasť, preto ich pripočítame k počtu prítomných.
   const groupCounts={A:0,B:0,C:0,D:0,'D+':0};
+  entries.forEach(e=>{
+    const group=quickGroupCode(e.group);
+    let presentCount=0, newCount=0;
+    Object.values(e.attendanceHistory||{}).forEach(v=>{
+      if(!v) return;
+      if(v.newMember) newCount++;
+      else if(v.training) presentCount++;
+    });
+    groupCounts[group]=(groupCounts[group]||0)+presentCount+newCount;
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) memberCounts[n]=(memberCounts[n]||0)+1;
+    });
+  });
+  const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);
   const groupMembers={A:{},B:{},C:{},D:{},'D+':{}};
   entries.forEach(e=>{
     const group=quickGroupCode(e.group);
-    let count=0;
-    Object.entries(e.attendanceHistory||{}).forEach(([personKey,v])=>{
-      if(!v || (!v.training && !v.newMember)) return;
-      count++;
-      memberCounts[personKey]=(memberCounts[personKey]||0)+1;
-      if(groupMembers[group]) groupMembers[group][personKey]=(groupMembers[group][personKey]||0)+1;
+    if(!groupMembers[group]) groupMembers[group]={};
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) groupMembers[group][n]=(groupMembers[group][n]||0)+1;
     });
-    if(groupCounts[group]!=null) groupCounts[group]+=count;
   });
-  const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);
   const topByGroup={};
   Object.keys(groupMembers).forEach(g=>{
     topByGroup[g]=Object.entries(groupMembers[g])
@@ -15417,16 +15420,41 @@ function getAttendanceTruthEntries(month, year){
   const dailyNewByGroupCounts=Object.fromEntries(Object.keys(groupNames).map(g=>[g,dailyNewByGroup[g].map(set=>set.size)]));
   const dailyNewCounts=Array.from({length:daysInMonth},(_,i)=>Object.keys(groupNames).reduce((sum,g)=>sum+(dailyNewByGroupCounts[g][i]||0),0));
 
-  // Graf DOCHÁDZKY = PRESNE ROVNAKÁ AUTORITATÍVNA DOCHÁDZKA AKO TOP/PROFIL.
+  // Graf DOCHÁDZKY = výhradne z ULOŽENÉHO VYÚČTOVANIA.
+  // Dôležité: nepoužívame attendanceStateSnapshot, pretože ten môže obsahovať
+  // viac členov než bolo vo finálnom vyúčtovaní. Pre graf je rozhodujúci počet
+  // PLATIEB uložený vo vyúčtovaní (paying). NOVÝ člen sa pridá iba vtedy, ak bol
+  // vo vyúčtovaní uložený ako newCount. Jeden dátum + skupina sa započíta iba raz.
   const daily=Array.from({length:daysInMonth},()=>0);
   const stackedAttendanceByGroup=Object.fromEntries(Object.keys(groupNames).map(g=>[g,Array.from({length:daysInMonth},()=>0)]));
-  entries.forEach(e=>{
-    const d=parsePaymentDate(e.date); if(!d) return;
-    const group=quickGroupCode(e.group);
+  const billingChartMap=new Map();
+  (getBillingRecords()||[]).forEach(r=>{
+    if(r.substituteReference) return;
+    const deleteKey=(typeof billingRecordCanonicalKey==='function') ? billingRecordCanonicalKey(r) : '';
+    const deletedAt=deleteKey ? Number(billingDeleteOrder[deleteKey]||0) : 0;
+    const statsSavedAt=Number(r.savedAt||r.updatedAt||r.createdAt||0);
+    if(deletedAt>0 && deletedAt>=statsSavedAt) return;
+    const d=parsePaymentDate(r.date);
+    if(!d || d.month!==m || d.year!==y || d.day<1 || d.day>daysInMonth) return;
+    const group=quickGroupCode(r.group);
     if(!stackedAttendanceByGroup[group]) return;
-    const count=Object.values(e.attendanceHistory||{}).filter(v=>v && (v.training||v.newMember)).length;
-    stackedAttendanceByGroup[group][d.day-1]=count;
-    daily[d.day-1]+=count;
+    const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    const uniqueKey=`${iso}|${group}`;
+    const recordSavedAt=Number(r.savedAt||r.updatedAt||0);
+    const prev=billingChartMap.get(uniqueKey);
+    if(prev && Number(prev.savedAt||0)>recordSavedAt) return;
+    // Vyúčtovanie eviduje počet platených tréningov v "paying" a počet NOVÝCH
+    // samostatne. Tento súčet je presne údaj, ktorý má byť v štatistike.
+    let count=Number(r.paying);
+    if(!Number.isFinite(count) || count<0) count=Number(r.presentCount||0);
+    const newCount=Number(r.newCount||0);
+    count+=(Number.isFinite(newCount)&&newCount>0?newCount:0);
+    if(!Number.isFinite(count) || count<0) count=0;
+    billingChartMap.set(uniqueKey,{day:d.day,group,count,savedAt:recordSavedAt});
+  });
+  billingChartMap.forEach(item=>{
+    stackedAttendanceByGroup[item.group][item.day-1]=item.count;
+    daily[item.day-1]+=item.count;
   });
   const maxDaily=Math.max(1,...daily);
   const stackedDayMax=Math.max(1,...daily);
@@ -15470,7 +15498,7 @@ function getAttendanceTruthEntries(month, year){
     <section class="stats-section">
       <h3>📈 DOCHÁDZKA V MESIACI – CELÝ KLUB</h3>
       ${renderStackedMonthChart(stackedAttendanceByGroup,stackedDayMax,`Za ${monthNames[m-1]} ${y} zatiaľ nie je uložená dochádzka.`)}
-      <div class="stats-money-note">Každý stĺpec je jeden deň. Každá farba zobrazuje počet ľudí zo skutočne uloženej dochádzky danej skupiny a číslo SPOLU je súčet dochádzky v daný deň.</div>
+      <div class="stats-money-note">Každý stĺpec je jeden deň. Každá farba zobrazuje počet ľudí zo samostatného uloženého vyúčtovania skupiny a číslo SPOLU je súčet všetkých vyúčtovaných tréningov v daný deň.</div>
     </section>
 
     <section class="stats-section stats-new-members">

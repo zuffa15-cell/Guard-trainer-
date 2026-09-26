@@ -7950,44 +7950,49 @@ async function showMemberApplication(id){
 }
 
 function getSavedMemberTrainingData(member){
-  // PROFIL = PRESNE ROVNAKÝ ZDROJ AKO KLUBOVÁ ŠTATISTIKA: uložená dochádzka.
+  // PROFIL = PRESNE ROVNAKÝ AUTORITATÍVNY ZDROJ AKO ŠTATISTIKY.
+  // Jeden spoločný zoznam: getAttendanceTruthEntries().
   // Nečíta vyúčtovanie, kalendár ani aktuálnu skupinu člena.
   const norm=v=>String(v==null?'':v).trim().replace(/\s+/g,' ').toUpperCase();
   const surname=norm(member?.surname), name=norm(member?.name);
   const rows=[];
   try{
-    const months=new Set();
-    Object.keys(trainingAttendanceByGroup||{}).forEach(k=>{
-      const iso=String(k).split('|')[0].trim();
-      if(/^\d{4}-\d{2}-\d{2}$/.test(iso)) months.add(iso.slice(0,7));
-    });
-    months.forEach(ym=>{
-      const [yy,mm]=ym.split('-').map(Number);
-      const entries=getAttendanceTruthEntries(mm,yy)||[];
-      entries.forEach(e=>{
-        const matched=Object.entries(e.attendanceHistory||{}).some(([person,v])=>{
-          if(!v || (!v.training && !v.newMember)) return false;
-          const parts=String(person).split('|');
-          const ps=norm(parts.shift()||''), pn=norm(parts.join('|')||'');
-          return ps===surname && pn===name;
+    const t=appToday();
+    const startYear=t.year;
+    const startMonth=1;
+    // Profil potrebuje celý rok, aby mesačná aj ročná štatistika používala
+    // presne tie isté entries ako klubová štatistika.
+    for(let y=startYear-10;y<=startYear;y++){
+      for(let mo=1;mo<=12;mo++){
+        if(y===startYear && mo>t.month) break;
+        const entries=getAttendanceTruthEntries(mo,y)||[];
+        entries.forEach(e=>{
+          const matched=Object.entries(e.attendanceHistory||{}).some(([person,v])=>{
+            if(!v || (!v.training && !v.newMember)) return false;
+            const parts=String(person).split('|');
+            const ps=norm(parts.shift()||''), pn=norm(parts.join('|')||'');
+            return ps===surname && pn===name;
+          });
+          if(!matched) return;
+          const iso=String(e.date||'').trim();
+          const m=iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if(!m) return;
+          const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+          if(Number.isNaN(d.getTime())) return;
+          rows.push({
+            date:`${m[3]}. ${m[2]}. ${m[1]}`,
+            group:quickGroupCode(e.group)||e.group,
+            name:'',
+            dateObj:d
+          });
         });
-        if(!matched) return;
-        const iso=String(e.date||'').trim();
-        const m=iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if(!m) return;
-        const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
-        if(Number.isNaN(d.getTime())) return;
-        rows.push({
-          date:`${m[3]}. ${m[2]}. ${m[1]}`,
-          group:quickGroupCode(e.group)||e.group,
-          name:'',
-          dateObj:d
-        });
-      });
-    });
+      }
+    }
   }catch(e){ console.warn('member training history read failed',e); }
   const seen=new Set();
   const unique=rows.filter(r=>{
+    // Jeden konkrétny uložený tréning = dátum + skupina.
+    // B a C v ten istý deň zostávajú dve samostatné účasti.
     const k=`${r.dateObj.getFullYear()}-${String(r.dateObj.getMonth()+1).padStart(2,'0')}-${String(r.dateObj.getDate()).padStart(2,'0')}|${String(r.group||'').toUpperCase()}`;
     if(seen.has(k)) return false;
     seen.add(k); return true;
@@ -15255,6 +15260,21 @@ function getAttendanceTruthEntries(month, year){
       // nesmie vytvárať ani rušiť účasť. Falošné A/D záznamy zo septembra 2026
       // sú odstránené a majú trvalý tombstone cez isAttendanceDeleted().
       const savedAt=typeof getAttendanceSavedAt==='function' ? Number(getAttendanceSavedAt(dateIso,group)||0) : 0;
+      let adminEditedAt=0;
+      try{
+        const rawAdmin=originalGetItem('gt-attendance-admin-edits-v1');
+        const adminMap=rawAdmin?JSON.parse(rawAdmin):{};
+        adminEditedAt=Number(adminMap?.[attendanceSaveOrderKey(dateIso,group)]||0);
+      }catch(e){}
+      // KRITICKÉ: samotný zvyšný snapshot v gt-training-attendance-history
+      // ešte neznamená, že tréning bol reálne uložený. Staré/siroté snapshoty
+      // môžu zostať po kalendári, vyúčtovaní alebo staršej verzii aplikácie.
+      // Za skutočnú dochádzku preto považujeme iba záznam, ktorý má potvrdené
+      // uloženie dochádzky (save-order) alebo neskoršiu administrátorskú úpravu.
+      // Tým sa odstránia falošné B/C dni a zároveň ostáva dochádzka jediným
+      // zdrojom pravdy.
+      if(savedAt<=0 && adminEditedAt<=0) return;
+      const authoritativeSavedAt=Math.max(savedAt,adminEditedAt);
       if(!hist || typeof hist!=='object') return;
       const attendanceHistory={};
       Object.entries(hist).forEach(([personKey,v])=>{
@@ -15281,7 +15301,7 @@ function getAttendanceTruthEntries(month, year){
         newCount:Object.values(attendanceHistory).filter(v=>v.newMember).length,
         attendanceHistory,
         billingKey:'',
-        savedAt
+        savedAt:authoritativeSavedAt
       };
       const prev=outMap.get(key);
       if(!prev || savedAt>=Number(prev.savedAt||0)) outMap.set(key,entry);

@@ -15325,21 +15325,17 @@ function renderStatistics(month=appToday().month,year=appToday().year){
       if(deletedAt>0) return;
       if(!hist || typeof hist!=='object') return;
 
-      // DÔLEŽITÉ: samotný starý lokálny/cloud snapshot dochádzky ešte nie je
-      // dôkaz, že sa daný tréning naozaj konal. Staršie verzie aplikácie
-      // vedeli ponechať sirotí záznam (napr. skupina A), hoci v kalendári už
-      // žiadny taký tréning nebol. Taký záznam nesmie vstúpiť do TOP 3.
-      // Platný tréning musí mať pre daný dátum + skupinu reálny rozpis alebo
-      // jednorazový záznam v kalendári.
-      let scheduledHere=false;
-      try{
-        const dyn=(typeof scheduleItemsForDate==='function' ? scheduleItemsForDate(dateIso) : [])||[];
-        scheduledHere=dyn.some(x=>String(x?.code||'').trim().toUpperCase()===String(group||'').trim().toUpperCase());
-        if(!scheduledHere && typeof calendarDayGroups!=='undefined'){
-          scheduledHere=Array.isArray(calendarDayGroups?.[dateIso]) && calendarDayGroups[dateIso].some(x=>String(x?.code||'').trim().toUpperCase()===String(group||'').trim().toUpperCase());
-        }
-      }catch(e){}
-      if(!scheduledHere) return;
+      // HISTÓRIA DOCHÁDZKY MÔŽE OBSAHOVAŤ STARÉ SIROTY.
+      // Za skutočne uloženú dochádzku považujeme iba záznam, ktorý má vlastný
+      // timestamp explicitného uloženia dochádzky. Ako spätná kompatibilita
+      // akceptujeme aj záznam, ktorý má platné uložené vyúčtovanie pre rovnaký
+      // dátum + skupinu. Samotný rozpis v kalendári NIE JE dôkazom dochádzky.
+      // Toto je dôležité: ak sa A alebo D iba objavujú v starom snapshot-e,
+      // ale nikto tam dochádzku neuložil, nesmú sa dostať do TOP 3.
+      const savedAttendanceAt = (typeof getAttendanceSavedAt==='function')
+        ? Number(getAttendanceSavedAt(dateIso,group)||0) : 0;
+      const billingExists = entryMap.has(`${dateIso}|${group}`);
+      if(savedAttendanceAt<=0 && !billingExists) return;
       Object.entries(hist).forEach(([personKey,v])=>{
         if(!v || (!v.training && !v.newMember)) return;
         const partsName=String(personKey).split('|');

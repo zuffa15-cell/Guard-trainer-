@@ -15324,6 +15324,22 @@ function renderStatistics(month=appToday().month,year=appToday().year){
       const deletedAt=Number(attendanceDeleteOrder[attendanceDeleteKey(dateIso,group)]||0);
       if(deletedAt>0) return;
       if(!hist || typeof hist!=='object') return;
+
+      // DÔLEŽITÉ: samotný starý lokálny/cloud snapshot dochádzky ešte nie je
+      // dôkaz, že sa daný tréning naozaj konal. Staršie verzie aplikácie
+      // vedeli ponechať sirotí záznam (napr. skupina A), hoci v kalendári už
+      // žiadny taký tréning nebol. Taký záznam nesmie vstúpiť do TOP 3.
+      // Platný tréning musí mať pre daný dátum + skupinu reálny rozpis alebo
+      // jednorazový záznam v kalendári.
+      let scheduledHere=false;
+      try{
+        const dyn=(typeof scheduleItemsForDate==='function' ? scheduleItemsForDate(dateIso) : [])||[];
+        scheduledHere=dyn.some(x=>String(x?.code||'').trim().toUpperCase()===String(group||'').trim().toUpperCase());
+        if(!scheduledHere && typeof calendarDayGroups!=='undefined'){
+          scheduledHere=Array.isArray(calendarDayGroups?.[dateIso]) && calendarDayGroups[dateIso].some(x=>String(x?.code||'').trim().toUpperCase()===String(group||'').trim().toUpperCase());
+        }
+      }catch(e){}
+      if(!scheduledHere) return;
       Object.entries(hist).forEach(([personKey,v])=>{
         if(!v || (!v.training && !v.newMember)) return;
         const partsName=String(personKey).split('|');

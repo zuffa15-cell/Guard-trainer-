@@ -15130,18 +15130,18 @@ function buildMyMonthlyBillingPDFBlob(){
 function printMyMonthlyBillingPDF(){
   try{
     const x=buildMyMonthlyBillingPDFBlob();
-    saveGuardTrainerPDF(x.blob,x.filename);
+    return saveGuardTrainerPDF(x.blob,x.filename);
   }catch(err){
     console.error('PDF MOJE VYÚČTOVANIE:',err);
     if(typeof toast==='function') toast('PDF sa nepodarilo vytvoriť');
+    return false;
   }
-  return false;
 }
 
 async function emailMyMonthlyBillingPDF(){
   try{
     const x=buildMyMonthlyBillingPDFBlob();
-    await shareGuardTrainerPDF(
+    return await shareGuardTrainerPDF(
       x.blob,
       x.filename,
       `Guard Trainer - ${x.title}`,
@@ -15149,10 +15149,30 @@ async function emailMyMonthlyBillingPDF(){
     );
   }catch(err){
     console.error('ZDIEĽAŤ PDF:',err);
-    if(typeof toast==='function') toast('PDF sa nepodarilo vytvoriť');
+    if(typeof toast==='function') toast('Zdieľanie sa nepodarilo');
+    return false;
   }
-  return false;
 }
+
+// Android/Chrome: tieto dve tlačidlá majú aj delegovaný handler.
+// Inline onclick zostáva ako fallback, ale handler zabezpečí spustenie aj po
+// dynamickom prekreslení obrazovky vyúčtovania.
+document.addEventListener('click', function(e){
+  const pdf=e.target.closest && e.target.closest('.gt-my-pdf-btn');
+  if(pdf){
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    try{ printMyMonthlyBillingPDF(); }catch(err){ console.error(err); }
+    return false;
+  }
+  const share=e.target.closest && e.target.closest('.gt-my-share-btn');
+  if(share){
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    try{ emailMyMonthlyBillingPDF(); }catch(err){ console.error(err); }
+    return false;
+  }
+}, true);
 
 function goBackBilling(){ nav(billingReturnScreen || 'attendance'); }
 

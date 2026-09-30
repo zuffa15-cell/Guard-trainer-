@@ -15075,8 +15075,8 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       </section>`:''})()}
       <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${month}</small><br>${clubHandoverLabel(getClubHandoverStatus(CURRENT_TRAINER_NAME,shownMonth,shownYear),false)}</span><strong>${totalClub} €</strong></div>
       <div class="my-billing-pdf-actions my-billing-pdf-row">
-        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="event.preventDefault();event.stopPropagation();return window.__gtOpenMyBillingPDF && window.__gtOpenMyBillingPDF()">PDF</button>
-        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="event.preventDefault();event.stopPropagation();return window.__gtShareMyBillingPDF && window.__gtShareMyBillingPDF()">ZDIEĽAŤ</button>
+        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return printMyMonthlyBillingPDF()">PDF</button>
+        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
         <button type="button" class="membership-paid-report-btn" onclick="showTrainerMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
       </div>
 
@@ -15130,18 +15130,18 @@ function buildMyMonthlyBillingPDFBlob(){
 function printMyMonthlyBillingPDF(){
   try{
     const x=buildMyMonthlyBillingPDFBlob();
-    return saveGuardTrainerPDF(x.blob,x.filename);
+    saveGuardTrainerPDF(x.blob,x.filename);
   }catch(err){
     console.error('PDF MOJE VYÚČTOVANIE:',err);
     if(typeof toast==='function') toast('PDF sa nepodarilo vytvoriť');
-    return false;
   }
+  return false;
 }
 
 async function emailMyMonthlyBillingPDF(){
   try{
     const x=buildMyMonthlyBillingPDFBlob();
-    return await shareGuardTrainerPDF(
+    await shareGuardTrainerPDF(
       x.blob,
       x.filename,
       `Guard Trainer - ${x.title}`,
@@ -15149,69 +15149,10 @@ async function emailMyMonthlyBillingPDF(){
     );
   }catch(err){
     console.error('ZDIEĽAŤ PDF:',err);
-    if(typeof toast==='function') toast('Zdieľanie sa nepodarilo');
-    return false;
-  }
-}
-
-// Android/Chrome: tieto dve tlačidlá majú aj delegovaný handler.
-// Inline onclick zostáva ako fallback, ale handler zabezpečí spustenie aj po
-// dynamickom prekreslení obrazovky vyúčtovania.
-document.addEventListener('click', function(e){
-  const pdf=e.target.closest && e.target.closest('.gt-my-pdf-btn');
-  if(pdf){
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    try{ printMyMonthlyBillingPDF(); }catch(err){ console.error(err); }
-    return false;
-  }
-  const share=e.target.closest && e.target.closest('.gt-my-share-btn');
-  if(share){
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    try{ emailMyMonthlyBillingPDF(); }catch(err){ console.error(err); }
-    return false;
-  }
-}, true);
-
-window.__gtOpenMyBillingPDF = function(){
-  try{
-    const x=buildMyMonthlyBillingPDFBlob();
-    const url=URL.createObjectURL(x.blob);
-    const w=window.open(url,'_blank');
-    if(!w){
-      const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener';
-      document.body.appendChild(a); a.click(); a.remove();
-    }
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-    if(typeof toast==='function') toast('PDF bolo vytvorené');
-  }catch(e){
-    console.error('MOJE VYÚČTOVANIE PDF:',e);
     if(typeof toast==='function') toast('PDF sa nepodarilo vytvoriť');
   }
   return false;
-};
-window.__gtShareMyBillingPDF = async function(){
-  try{
-    const x=buildMyMonthlyBillingPDFBlob();
-    const file=new File([x.blob],x.filename,{type:'application/pdf'});
-    if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
-      await navigator.share({title:x.title||'Guard Trainer',text:`Vyúčtovanie trénera ${x.trainer||''}`,files:[file]});
-      return false;
-    }
-    const url=URL.createObjectURL(x.blob);
-    const w=window.open(url,'_blank');
-    if(!w){
-      const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener';
-      document.body.appendChild(a); a.click(); a.remove();
-    }
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-  }catch(e){
-    console.error('MOJE VYÚČTOVANIE SHARE:',e);
-    if(typeof toast==='function') toast('Zdieľanie sa nepodarilo');
-  }
-  return false;
-};
+}
 
 function goBackBilling(){ nav(billingReturnScreen || 'attendance'); }
 

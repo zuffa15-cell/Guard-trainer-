@@ -11755,17 +11755,8 @@ function normalizeMonthlyBillingRecords(){
 // Vyúčtovanie sa po štarte NESMIE lokálne zmenšovať pred načítaním
 // autoritatívneho serverového dokumentu. Serverový snapshot ho nastaví.
 
-(function removeErroneousViktorGroupABilling(){
-  try{
-    const marker='gt-migration-v679-viktor-group-a-removed';
-    if(localStorage.getItem(marker)==='1') return;
-    const isViktor=n=>{const x=String(n||'').trim().toUpperCase(); return x==='VIKTOR ŽUFFA'||x==='VIKTOR ZUFFA';};
-    const before=monthlyBillingRecords.length;
-    monthlyBillingRecords=monthlyBillingRecords.filter(r=>!(isViktor(r?.trainer) && String(r?.group||'').trim().toUpperCase()==='A'));
-    localStorage.setItem(marker,'1');
-    if(monthlyBillingRecords.length!==before) persistMonthlyBillingRecords();
-  }catch(e){ console.warn('Migrácia Viktor/A vyúčtovania sa nepodarila',e); }
-})();
+// Stará migrácia Viktor/A je vypnutá – nesmie pri štarte mazať vyúčtovania.
+
 const BILLING_DELETE_ORDER_KEY='gt-billing-delete-order-v1';
 const billingDeleteOrder=Object.create(null);
 // Mazania, ktoré práve prebiehajú. Chránia serverový dokument pred tým,

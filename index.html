@@ -2,6 +2,7 @@
 <!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
+<!-- Guard Trainer v956 FIX: po návrate na túto verziu sa lokálne vyúčtovanie administrátora jednorazovo zapíše na server a následne sa server + lokál držia identicky. -->
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
 <head>
 
@@ -943,7 +944,16 @@ function initCloudSync(){
   // v846: staré cloudové member kľúče sa NESMÚ migrovať.
     syncEnabled = true;
     try{ initTrainersDirectSync(); }catch(e){}
-    try{ initBillingDirectSync(); }catch(e){}
+    // Najprv jednorazovo zosúladíme vyúčtovanie z lokálnej kópie
+    // administrátora na server. Až potom spustíme realtime listener,
+    // aby prvý serverový snapshot nemohol prepísať práve obnovenú verziu.
+    try{
+      Promise.resolve(gtBootstrapLocalBillingToServerOnce())
+        .then(()=>{ try{ initBillingDirectSync(); }catch(e){} })
+        .catch(()=>{ try{ initBillingDirectSync(); }catch(e){} });
+    }catch(e){
+      try{ initBillingDirectSync(); }catch(_){}
+    }
 
 }
 
@@ -11561,6 +11571,96 @@ function gtBillingRecoveryRows(){
     const p=raw?JSON.parse(raw):null;
     return Array.isArray(p)?p:(Array.isArray(p?.records)?p.records:[]);
   }catch(e){return [];}
+}
+
+// v956 FIX: Keď sa administrátor vráti na túto konkrétnu verziu aplikácie,
+// jeho aktuálna lokálna kópia vyúčtovania je jednorazovo prenesená aj na
+// autoritatívny server. Po úspechu sa stav uloží lokálne aj na server a ďalší
+// veľký refresh už používa práve tento zjednotený stav.
+// Ostatné zariadenia potom iba prijmú serverovú verziu.
+// Tento zápis sa vykoná iba raz pre túto verziu aplikácie.
+const GT_BILLING_LOCAL_AUTHORITY_VERSION='v956-local-billing-authority-20260930-1';
+const GT_BILLING_LOCAL_AUTHORITY_KEY='gt-billing-local-authority-version-v1';
+
+async function gtBootstrapLocalBillingToServerOnce(){
+  try{
+    const isAdminUser =
+      (typeof isAdmin==='function' && isAdmin()) ||
+      String(localStorage.getItem('gt-user-role')||'').toLowerCase()==='admin' ||
+      String(localStorage.getItem('gt-is-admin')||'').toLowerCase()==='true';
+    if(!isAdminUser) return false;
+    if(!db || !cloudEnabled) return false;
+
+    const done=originalGetItem(GT_BILLING_LOCAL_AUTHORITY_KEY)||localStorage.getItem(GT_BILLING_LOCAL_AUTHORITY_KEY)||'';
+    if(done===GT_BILLING_LOCAL_AUTHORITY_VERSION) return false;
+
+    let localRows=[];
+    try{
+      const raw=originalGetItem('gt-monthly-billing-v221')||localStorage.getItem('gt-monthly-billing-v221')||'[]';
+      const parsed=JSON.parse(raw||'[]');
+      if(Array.isArray(parsed)) localRows=parsed;
+    }catch(e){}
+
+    if(!localRows.length && Array.isArray(monthlyBillingRecords) && monthlyBillingRecords.length){
+      localRows=monthlyBillingRecords.slice();
+    }
+    if(!localRows.length) return false;
+
+    try{ normalizeMonthlyBillingRecords(); }catch(e){}
+    if(Array.isArray(monthlyBillingRecords) && monthlyBillingRecords.length){
+      localRows=monthlyBillingRecords.slice();
+    }
+
+    // V tejto jednorazovej akcii je lokálna kópia zámerne zdrojom pravdy.
+    // Existujúce mazacie značky pre tieto lokálne riadky sa zrušia, aby ich
+    // starý serverový tombstone po refreshe znovu neodstránil.
+    const ref=db.collection('guard-trainer-billing').doc('all');
+    const snap=await ref.get();
+    const data=snap.exists?(snap.data()||{}):{};
+    const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')
+      ? {...data.billingDeleteOrder}:{};
+
+    localRows.forEach(r=>{
+      try{ delete del[billingRecordCanonicalKey(r)]; }catch(e){}
+    });
+
+    const cleanRows=JSON.parse(JSON.stringify(localRows));
+    await ref.set({
+      records:cleanRows,
+      billingDeleteOrder:del,
+      updatedAt:Date.now(),
+      billingLocalAuthorityVersion:GT_BILLING_LOCAL_AUTHORITY_VERSION
+    },{merge:false});
+
+    // Po potvrdení serverového zápisu zapíš presne ten istý stav aj lokálne.
+    const json=JSON.stringify(cleanRows);
+    originalSetItem('gt-monthly-billing-v221',json);
+    localStorage.setItem('gt-monthly-billing-v221',json);
+    originalSetItem('gt-billing',json);
+    localStorage.setItem('gt-billing',json);
+    try{
+      monthlyBillingRecords.splice(0,monthlyBillingRecords.length,...cleanRows);
+    }catch(e){}
+    try{
+      originalSetItem(BILLING_DELETE_ORDER_KEY,JSON.stringify(del));
+      localStorage.setItem(BILLING_DELETE_ORDER_KEY,JSON.stringify(del));
+      Object.keys(billingDeleteOrder).forEach(k=>delete billingDeleteOrder[k]);
+      Object.assign(billingDeleteOrder,del);
+    }catch(e){}
+
+    // Záchranná kópia sa aktualizuje až po úspešnom serverovom zápise.
+    try{
+      gtBillingRecoverySave(cleanRows,'local-authority-bootstrap');
+    }catch(e){}
+
+    originalSetItem(GT_BILLING_LOCAL_AUTHORITY_KEY,GT_BILLING_LOCAL_AUTHORITY_VERSION);
+    localStorage.setItem(GT_BILLING_LOCAL_AUTHORITY_KEY,GT_BILLING_LOCAL_AUTHORITY_VERSION);
+    console.log('✅ Vyúčtovanie zjednotené: LOCAL → SERVER → LOCAL',cleanRows.length);
+    return true;
+  }catch(e){
+    console.warn('Billing local-authority bootstrap zlyhal:',e);
+    return false;
+  }
 }
 async function gtCheckBillingRecovery(){
   if(typeof db==='undefined' || !db){ alert('Databáza nie je pripojená.'); return; }

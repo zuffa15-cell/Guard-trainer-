@@ -668,12 +668,21 @@ function initCloudSync(){
         if(k==='gt-substitution-offers'){
           try{
             const remoteOffers=JSON.parse(data[k]||'[]');
+            const localOffers=JSON.parse(originalGetItem(k)||'[]');
             if(Array.isArray(remoteOffers)){
-              // Zástupy sú spoločné. Cloudový zoznam je autoritatívny pre ponuky,
-              // aby sa ponuka vytvorená na inom zariadení okamžite zobrazila.
-              substitutionOffers=remoteOffers;
-              originalSetItem(k,JSON.stringify(remoteOffers));
-              changed=true;
+              // Zástupy musia byť spoločné. Nikdy však nesmie prázdny/starejší
+              // zoznam z jedného zariadenia vymazať novú ponuku z druhého.
+              const merged=new Map();
+              (Array.isArray(localOffers)?localOffers:[]).forEach(o=>{ if(o&&o.id!=null) merged.set(String(o.id),o); });
+              remoteOffers.forEach(o=>{
+                if(!o||o.id==null)return;
+                const key=String(o.id), prev=merged.get(key);
+                if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
+              });
+              const mergedOffers=Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0));
+              const raw=JSON.stringify(mergedOffers);
+              if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
+              substitutionOffers=mergedOffers;
               setTimeout(()=>{
                 try{updateSubstitutionQuick();}catch(e){}
                 try{if(typeof updateHomeQuickOverview==='function')updateHomeQuickOverview();}catch(e){}
@@ -1078,6 +1087,23 @@ function pushToCloud(force = false){
         payload['gt-training-attendance-history']=JSON.stringify(out);
       }
     }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
+
+    // ZASTUPOVANIE: zlúč ponuky z cloudu a lokálneho zariadenia podľa ID,
+    // aby zariadenie bez novej ponuky nemohlo prepísať ponuku vytvorenú inde.
+    try{
+      const localOffers=JSON.parse(payload['gt-substitution-offers']||'[]');
+      const remoteOffers=JSON.parse(remote['gt-substitution-offers']||'[]');
+      if(Array.isArray(localOffers) || Array.isArray(remoteOffers)){
+        const merged=new Map();
+        (Array.isArray(remoteOffers)?remoteOffers:[]).forEach(o=>{if(o&&o.id!=null)merged.set(String(o.id),o);});
+        (Array.isArray(localOffers)?localOffers:[]).forEach(o=>{
+          if(!o||o.id==null)return;
+          const key=String(o.id), prev=merged.get(key);
+          if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
+        });
+        payload['gt-substitution-offers']=JSON.stringify(Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0)));
+      }
+    }catch(e){ console.warn('Substitution cloud merge before push failed',e); }
 
     // VYÚČTOVANIE sa do shared-db NEZAPISUJE. Autoritatívny zdroj je guard-trainer-billing/all.
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
@@ -4824,32 +4850,6 @@ function persistSubstitutionOffers(){
   try{ localStorage.setItem('gt-substitution-offers', JSON.stringify(Array.isArray(substitutionOffers)?substitutionOffers:[])); }
   catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
 }
-async function saveSubstitutionOffersToCloudNow(){
-  try{
-    if(!db || !cloudEnabled) return false;
-    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
-    const localOffers=Array.isArray(substitutionOffers)?substitutionOffers:[];
-    await db.runTransaction(async tx=>{
-      const snap=await tx.get(ref);
-      const data=snap.exists?(snap.data()||{}):{};
-      let remoteOffers=[];
-      try{ const x=data['gt-substitution-offers']; const p=x?JSON.parse(x):[]; if(Array.isArray(p)) remoteOffers=p; }catch(e){}
-      const byId=new Map();
-      remoteOffers.forEach(o=>{ if(o&&o.id!=null) byId.set(String(o.id),o); });
-      localOffers.forEach(o=>{
-        if(!o || o.id==null) return;
-        const id=String(o.id), prev=byId.get(id);
-        if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) byId.set(id,o);
-      });
-      const merged=Array.from(byId.values());
-      tx.set(ref,{'gt-substitution-offers':JSON.stringify(merged),_updatedAt:Date.now()},{merge:true});
-    });
-    return true;
-  }catch(e){
-    console.warn('Priamy cloud zápis zastupovania sa nepodaril',e);
-    return false;
-  }
-}
 const ALL_TRAINERS = ['JÁN NOVÁK','MATEJ KOVÁČ','LUCIA ŠIMKOVÁ','PETER TÓTH','ZUZANA MIHÁLOVÁ'];
 let CURRENT_TRAINER_NAME = 'TRÉNER 1';
 MY_TRAINER_GROUPS=[];
@@ -4903,7 +4903,7 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
    else{selected.add(n);b.classList.add('selected');b.querySelector('.sub-check').textContent='✓';}
  });
  modal.querySelector('.sub-cancel').onclick=()=>modal.remove();
- modal.querySelector('.sub-send').onclick=async()=>{
+ modal.querySelector('.sub-send').onclick=()=>{
    if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
    substitutionOffers.push({
      id:Date.now(), code, groupName:name,
@@ -4917,7 +4917,6 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
    });
    persistSubstitutionOffers();
    try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
-   try{ await saveSubstitutionOffersToCloudNow(); }catch(e){}
    modal.remove();
    updateHomeQuickOverview();
    toast('Ponuka zastupovania odoslaná');
@@ -5006,6 +5005,7 @@ function acceptSubstitution(id){
  if(!o)return;
  o.acceptedBy=getCurrentTrainerDisplayName();
  o.status='PRIJATÉ';
+ o.updatedAt=Date.now();
  persistSubstitutionOffers();
  try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
 

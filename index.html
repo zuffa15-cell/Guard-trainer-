@@ -15105,7 +15105,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       </section>`:''})()}
       <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${month}</small><br>${clubHandoverLabel(getClubHandoverStatus(CURRENT_TRAINER_NAME,shownMonth,shownYear),false)}</span><strong>${totalClub} €</strong></div>
       <div class="my-billing-pdf-actions my-billing-pdf-row">
-        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return printMyMonthlyBillingPDF()">PDF</button>
+        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return false">PDF</button>
         <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
         <button type="button" class="membership-paid-report-btn" onclick="showTrainerMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
       </div>
@@ -15160,13 +15160,34 @@ function buildMyMonthlyBillingPDFBlob(){
 function printMyMonthlyBillingPDF(){
   try{
     const x=buildMyMonthlyBillingPDFBlob();
-    saveGuardTrainerPDF(x.blob,x.filename);
+    const ok=saveGuardTrainerPDF(x.blob,x.filename);
+    return ok!==false;
   }catch(err){
     console.error('PDF MOJE VYÚČTOVANIE:',err);
     if(typeof toast==='function') toast('PDF sa nepodarilo vytvoriť');
+    return false;
   }
-  return false;
 }
+
+// PDF tlačidlo na mobile: zachyti klik ešte v capture fáze, aby ho
+// neblokoval globálny touch/scroll handler. Ostatné tlačidlá nemeníme.
+window.gtMyBillingPDF=function(){
+  try{
+    return printMyMonthlyBillingPDF();
+  }catch(err){
+    console.error('GT PDF BUTTON:',err);
+    if(typeof toast==='function') toast('PDF sa nepodarilo vytvoriť');
+    return false;
+  }
+};
+
+document.addEventListener('click',function(e){
+  const btn=e.target && e.target.closest ? e.target.closest('.gt-my-pdf-btn') : null;
+  if(!btn) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  window.gtMyBillingPDF();
+},true);
 
 async function emailMyMonthlyBillingPDF(){
   try{

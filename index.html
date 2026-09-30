@@ -16580,6 +16580,42 @@ setTimeout(set,80);setTimeout(set,300)})();
   },true);
 })();
 </script>
+<script id="gt-my-billing-pdf-buttons-fix">
+(function(){
+  if(window.__gtMyBillingPdfButtonsFix) return;
+  window.__gtMyBillingPdfButtonsFix=true;
+  function runPdf(e){
+    if(e){e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();}
+    try{
+      var fn=window.printMyMonthlyBillingPDF;
+      if(typeof fn!=='function') throw new Error('PDF funkcia nie je dostupná');
+      return fn();
+    }catch(err){console.error('GT PDF BUTTON',err);try{if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}catch(_){} return false;}
+  }
+  function runShare(e){
+    if(e){e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();}
+    try{
+      var fn=window.emailMyMonthlyBillingPDF;
+      if(typeof fn!=='function') throw new Error('Zdieľanie funkcia nie je dostupná');
+      return fn();
+    }catch(err){console.error('GT SHARE BUTTON',err);try{if(typeof toast==='function')toast('Zdieľanie sa nepodarilo');}catch(_){} return false;}
+  }
+  document.addEventListener('click',function(e){
+    var t=e.target;
+    var pdf=t&&t.closest?t.closest('.gt-my-pdf-btn'):null;
+    if(pdf){runPdf(e);return;}
+    var share=t&&t.closest?t.closest('.gt-my-share-btn'):null;
+    if(share){runShare(e);return;}
+  },true);
+  document.addEventListener('touchend',function(e){
+    var t=e.target;
+    var pdf=t&&t.closest?t.closest('.gt-my-pdf-btn'):null;
+    if(pdf){runPdf(e);return;}
+    var share=t&&t.closest?t.closest('.gt-my-share-btn'):null;
+    if(share){runShare(e);return;}
+  },{capture:true,passive:false});
+})();
+</script>
 </body>
 
 <style id="v650-statistika-fit-final">

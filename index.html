@@ -12966,8 +12966,14 @@ function cleanupMayJune2026TrainingData(){
   };
   try{
     if(Array.isArray(monthlyBillingRecords)){
+      const beforeBillingCount=monthlyBillingRecords.length;
       monthlyBillingRecords=monthlyBillingRecords.filter(r=>!isMayJune2026Date(r&&r.date));
-      persistMonthlyBillingRecords();
+      // Pri bežnom refreshe nič nemeníme a hlavne nesmieme spúšťať
+      // persistMonthlyBillingRecords(), pretože táto funkcia zapisuje aj na server.
+      // Uloženie je potrebné iba vtedy, ak sa skutočne odstránil máj/júnový záznam.
+      if(monthlyBillingRecords.length!==beforeBillingCount){
+        persistMonthlyBillingRecords();
+      }
     }
   }catch(e){ console.warn('Čistenie vyúčtovania máj/jún 2026:',e); }
 

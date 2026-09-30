@@ -412,33 +412,6 @@ function gtApplyBackupMetaFromSharedData(data){
     gtRefreshBackupLabels();
   }catch(e){console.warn('Backup meta shared-db read failed',e);}
 }
-function applySubstitutionOffersFromCloud(data){
-  try{
-    if(!data || !Object.prototype.hasOwnProperty.call(data,'gt-substitution-offers')) return false;
-    const remoteOffers=JSON.parse(data['gt-substitution-offers']||'[]');
-    if(!Array.isArray(remoteOffers)) return false;
-    let localOffers=[];
-    try{ const x=JSON.parse(originalGetItem('gt-substitution-offers')||'[]'); if(Array.isArray(x)) localOffers=x; }catch(e){}
-    const merged=new Map();
-    localOffers.forEach(o=>{if(o&&o.id!=null) merged.set(String(o.id),o);});
-    remoteOffers.forEach(o=>{
-      if(!o||o.id==null)return;
-      const key=String(o.id), prev=merged.get(key);
-      if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
-    });
-    const result=Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0));
-    const raw=JSON.stringify(result);
-    const changed=raw!==originalGetItem('gt-substitution-offers');
-    if(changed) originalSetItem('gt-substitution-offers',raw);
-    substitutionOffers=result;
-    setTimeout(()=>{
-      try{updateSubstitutionQuick();}catch(e){}
-      try{if(typeof updateHomeQuickOverview==='function')updateHomeQuickOverview();}catch(e){}
-    },0);
-    return changed;
-  }catch(e){ console.warn('Guard Trainer: okamžitý sync zastupovania zlyhal',e); return false; }
-}
-
 function initCloudSync(){
   if(!db) return;
   
@@ -452,9 +425,6 @@ function initCloudSync(){
     // Vlastný zápis je možné ignorovať nižšie, ale prijatý stav sa už teraz
     // porovnal podľa per-ID timestampov.
     applyMembersFromCloudSnapshot(data);
-    // Zastupovanie spracuj ešte pred globálnou kontrolou _updatedAt.
-    // Inak môže starší snapshot zahodiť novú ponuku z iného zariadenia.
-    applySubstitutionOffersFromCloud(data);
 
     // Cloud snapshot iba prijmi a lokálne zjednoť. Ďalší zápis do cloudu sa
     // robí iba pri skutočnom lokálnom uložení člena, aby nevznikala race slučka.
@@ -698,21 +668,12 @@ function initCloudSync(){
         if(k==='gt-substitution-offers'){
           try{
             const remoteOffers=JSON.parse(data[k]||'[]');
-            const localOffers=JSON.parse(originalGetItem(k)||'[]');
             if(Array.isArray(remoteOffers)){
-              // Zástupy musia byť spoločné. Nikdy však nesmie prázdny/starejší
-              // zoznam z jedného zariadenia vymazať novú ponuku z druhého.
-              const merged=new Map();
-              (Array.isArray(localOffers)?localOffers:[]).forEach(o=>{ if(o&&o.id!=null) merged.set(String(o.id),o); });
-              remoteOffers.forEach(o=>{
-                if(!o||o.id==null)return;
-                const key=String(o.id), prev=merged.get(key);
-                if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
-              });
-              const mergedOffers=Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0));
-              const raw=JSON.stringify(mergedOffers);
-              if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
-              substitutionOffers=mergedOffers;
+              // Zástupy sú spoločné. Cloudový zoznam je autoritatívny pre ponuky,
+              // aby sa ponuka vytvorená na inom zariadení okamžite zobrazila.
+              substitutionOffers=remoteOffers;
+              originalSetItem(k,JSON.stringify(remoteOffers));
+              changed=true;
               setTimeout(()=>{
                 try{updateSubstitutionQuick();}catch(e){}
                 try{if(typeof updateHomeQuickOverview==='function')updateHomeQuickOverview();}catch(e){}
@@ -1120,21 +1081,6 @@ function pushToCloud(force = false){
 
     // ZASTUPOVANIE: zlúč ponuky z cloudu a lokálneho zariadenia podľa ID,
     // aby zariadenie bez novej ponuky nemohlo prepísať ponuku vytvorenú inde.
-    try{
-      const localOffers=JSON.parse(payload['gt-substitution-offers']||'[]');
-      const remoteOffers=JSON.parse(remote['gt-substitution-offers']||'[]');
-      if(Array.isArray(localOffers) || Array.isArray(remoteOffers)){
-        const merged=new Map();
-        (Array.isArray(remoteOffers)?remoteOffers:[]).forEach(o=>{if(o&&o.id!=null)merged.set(String(o.id),o);});
-        (Array.isArray(localOffers)?localOffers:[]).forEach(o=>{
-          if(!o||o.id==null)return;
-          const key=String(o.id), prev=merged.get(key);
-          if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
-        });
-        payload['gt-substitution-offers']=JSON.stringify(Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0)));
-      }
-    }catch(e){ console.warn('Substitution cloud merge before push failed',e); }
-
     // VYÚČTOVANIE sa do shared-db NEZAPISUJE. Autoritatívny zdroj je guard-trainer-billing/all.
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
   }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
@@ -4887,33 +4833,6 @@ MY_TRAINER_GROUPS=[];
 function currentDateKey(){
   return String(attendanceState.date||appToday().iso).replace(/\./g,'-');
 }
-function normalizeTrainerIdentity(value){
-  return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().replace(/\s+/g,' ').toUpperCase();
-}
-function getCurrentTrainerIdentity(){
-  const id=currentTrainerAccountId();
-  const name=getCurrentTrainerDisplayName();
-  return {id, name:String(name||'').trim(), norm:normalizeTrainerIdentity(name)};
-}
-function substitutionOfferTargetsCurrentTrainer(o){
-  if(!o) return false;
-  const me=getCurrentTrainerIdentity();
-  if(me.id!=null && Array.isArray(o.trainerIds) && o.trainerIds.some(id=>Number(id)===Number(me.id))) return true;
-  return (Array.isArray(o.trainers)?o.trainers:[]).some(n=>normalizeTrainerIdentity(n)===me.norm);
-}
-function substitutionOfferIsFromCurrentTrainer(o){
-  if(!o) return false;
-  const me=getCurrentTrainerIdentity();
-  if(o.fromTrainerId!=null && me.id!=null && Number(o.fromTrainerId)===Number(me.id)) return true;
-  return normalizeTrainerIdentity(o.from)===me.norm;
-}
-function substitutionOfferAcceptedByCurrentTrainer(o){
-  if(!o) return false;
-  const me=getCurrentTrainerIdentity();
-  if(o.acceptedById!=null && me.id!=null && Number(o.acceptedById)===Number(me.id)) return true;
-  return normalizeTrainerIdentity(o.acceptedBy)===me.norm;
-}
-
 function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOverride=''){
  const today=String(dateOverride||attendanceState.date||currentTrainingDate()||appToday().iso);
  const card0=document.querySelector(`.training[data-group-code="${CSS.escape(code)}"]`);
@@ -4962,23 +4881,14 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
  modal.querySelector('.sub-cancel').onclick=()=>modal.remove();
  modal.querySelector('.sub-send').onclick=()=>{
    if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
-   const senderId=currentTrainerAccountId();
-   const selectedTrainerIds=(visibleTrainerProfiles()||[])
-     .filter(t=>selected.has(String(t.full||t.name||'')))
-     .map(t=>Number(t.id))
-     .filter(Number.isFinite);
    substitutionOffers.push({
      id:Date.now(), code, groupName:name,
      date:today,
      time,place,
      from:getCurrentTrainerDisplayName(),
-     fromTrainerId:senderId,
      trainers:[...selected],
-     trainerIds:selectedTrainerIds,
      acceptedBy:null,
-     acceptedById:null,
-     status:'ČAKÁ NA PRIJATIE',
-     updatedAt:Date.now()
+     status:'ČAKÁ NA PRIJATIE'
    });
    persistSubstitutionOffers();
    try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
@@ -4994,8 +4904,8 @@ function showSubstitutionOffers(){
  const modal=document.createElement('div');
  modal.id='substitutionOffersModal';
  modal.className='sub-modal';
- const incoming=substitutionOffers.filter(o=>!o.acceptedBy && substitutionOfferTargetsCurrentTrainer(o));
- const outgoing=substitutionOffers.filter(o=>substitutionOfferIsFromCurrentTrainer(o) || substitutionOfferAcceptedByCurrentTrainer(o));
+ const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(getCurrentTrainerDisplayName()));
+ const outgoing=substitutionOffers.filter(o=>o.from===getCurrentTrainerDisplayName() || (o.acceptedBy===getCurrentTrainerDisplayName()));
  const incomingHtml=incoming.map(o=>`<div class="sub-offer">
    <b>⇄ PONUKA ZASTUPOVANIA</b>
    <div class="sub-group-row">
@@ -5017,7 +4927,7 @@ function showSubstitutionOffers(){
    <span>🕐 ${o.time||'—'} &nbsp; 📍 ${o.place||'—'}</span>
    <span>Ponuka pre: ${o.trainers.join(', ')}</span>
    <strong>${o.acceptedBy ? '✓ PRIJAL: '+o.acceptedBy : 'ČAKÁ NA PRIJATIE'}</strong>
-   ${!o.acceptedBy && substitutionOfferIsFromCurrentTrainer(o)?`<button type="button" class="sub-reject" onclick="cancelSubstitution(${o.id})">✕ ZRUŠIŤ PONUKU</button>`:''}
+   ${!o.acceptedBy && o.from===getCurrentTrainerDisplayName()?`<button type="button" class="sub-reject" onclick="cancelSubstitution(${o.id})">✕ ZRUŠIŤ PONUKU</button>`:''}
  </div>`).join('');
  modal.innerHTML=`<div class="sub-modal-card">
   <div class="sub-modal-title">ZASTUPOVANIE</div>
@@ -5030,7 +4940,7 @@ function cancelSubstitution(id){
  const o=substitutionOffers.find(x=>x.id===id);
  if(!o) return false;
  if(o.acceptedBy){ toast('Tento zástup už bol prijatý – ponuku nemožno zrušiť.'); return false; }
- if(!substitutionOfferIsFromCurrentTrainer(o)){ toast('Túto ponuku môže zrušiť iba tréner, ktorý ju vytvoril.'); return false; }
+ if(o.from!==getCurrentTrainerDisplayName()){ toast('Túto ponuku môže zrušiť iba tréner, ktorý ju vytvoril.'); return false; }
  substitutionOffers=substitutionOffers.filter(x=>x.id!==id);
  persistSubstitutionOffers();
  try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
@@ -5069,9 +4979,7 @@ function acceptSubstitution(id){
  const o=substitutionOffers.find(x=>x.id===id);
  if(!o)return;
  o.acceptedBy=getCurrentTrainerDisplayName();
- o.acceptedById=currentTrainerAccountId();
  o.status='PRIJATÉ';
- o.updatedAt=Date.now();
  persistSubstitutionOffers();
  try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
 
@@ -5117,12 +5025,12 @@ function updateSubstitutionQuick(){
  // na Domove sa zobrazujú/blikajú iba ponuky patriace k dnešnému tréningu.
  const relevantOffers=substitutionOffers.filter(o=>
    String(o.date||'')===todayIso &&
-   (substitutionOfferIsFromCurrentTrainer(o) || substitutionOfferTargetsCurrentTrainer(o) || substitutionOfferAcceptedByCurrentTrainer(o))
+   (o.from===me || o.trainers.includes(me) || o.acceptedBy===me)
  );
- const incoming=relevantOffers.filter(o=>!o.acceptedBy && substitutionOfferTargetsCurrentTrainer(o)).length;
- const outgoingWaiting=relevantOffers.filter(o=>substitutionOfferIsFromCurrentTrainer(o) && !o.acceptedBy).length;
- const acceptedOutgoing=relevantOffers.filter(o=>substitutionOfferIsFromCurrentTrainer(o) && o.acceptedBy).length;
- const acceptedIncoming=relevantOffers.filter(o=>substitutionOfferAcceptedByCurrentTrainer(o)).length;
+ const incoming=relevantOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
+ const outgoingWaiting=relevantOffers.filter(o=>o.from===me && !o.acceptedBy).length;
+ const acceptedOutgoing=relevantOffers.filter(o=>o.from===me && o.acceptedBy).length;
+ const acceptedIncoming=relevantOffers.filter(o=>o.acceptedBy===me).length;
  const acceptedTotal=acceptedOutgoing+acceptedIncoming;
  const pendingTotal=incoming+outgoingWaiting;
  const count=pendingTotal+acceptedTotal;
@@ -5503,7 +5411,7 @@ function filterHomeItemsForCurrentRole(items){
     try{ (getCurrentTrainerGroups()||[]).forEach(x=>allowed.add(String(x).trim().toUpperCase())); }catch(e){}
     const iso=appToday().iso;
     const me=getCurrentTrainerDisplayName();
-    const incomingAccepted=substitutionOffers.filter(o=>substitutionOfferAcceptedByCurrentTrainer(o) && o.date===iso);
+    const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
     return (items||[]).filter(g=>{
       const code=normalizeGroupCode(g?.code||'');
       const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
@@ -5515,8 +5423,8 @@ function filterHomeItemsForCurrentRole(items){
   const iso=appToday().iso;
   const me=getCurrentTrainerDisplayName();
 
-  const outgoingAccepted=substitutionOffers.filter(o=>substitutionOfferIsFromCurrentTrainer(o) && o.acceptedBy && o.date===iso);
-  const incomingAccepted=substitutionOffers.filter(o=>substitutionOfferAcceptedByCurrentTrainer(o) && o.date===iso);
+  const outgoingAccepted=substitutionOffers.filter(o=>o.acceptedBy && o.from===me && o.date===iso);
+  const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
 
   return items.map(g=>{
     const match=outgoingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));

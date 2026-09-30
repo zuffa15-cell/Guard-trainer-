@@ -11563,26 +11563,58 @@ function gtBillingRecoveryRows(){
   }catch(e){return [];}
 }
 async function gtCheckBillingRecovery(){
-  if(typeof db==='undefined' || !db){ alert('Databáza nie je pripojená.'); return; }
   try{
-    const snap=await db.collection('guard-trainer-billing').doc('all').get();
-    const server=snap.exists && Array.isArray(snap.data()?.records)?snap.data().records:[];
-    const recovery=gtBillingRecoveryRows();
     const local=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
-    const msg=`Vyúčtovania\n\nSERVER: ${server.length}\nLOKÁLNE: ${local.length}\nZÁCHRANNÁ KÓPIA: ${recovery.length}`;
-    if(recovery.length>server.length){
-      const ok=confirm(msg+`\n\nZáchranná kópia má viac záznamov než server.\n\nObnoviť ${recovery.length} záznamov na server?`);
+    const recovery=gtBillingRecoveryRows();
+    // Ešte pred kontrolou servera zachráň aktuálnu lokálnu kópiu, ak je väčšia.
+    if(local.length>recovery.length) gtBillingRecoverySave(local,'manual-check-before-server-read');
+    const saved=gtBillingRecoveryRows();
+
+    if(typeof db==='undefined' || !db){
+      alert(`Vyúčtovania\n\nSERVER: nedostupný\nLOKÁLNE: ${local.length}\nZÁCHRANNÁ KÓPIA: ${saved.length}\n\nDatabáza momentálne nie je pripojená.`);
+      return;
+    }
+
+    let snap;
+    try{
+      snap=await db.collection('guard-trainer-billing').doc('all').get();
+    }catch(readErr){
+      console.error('Billing recovery server read failed:',readErr);
+      const code=String(readErr?.code||'neznámy');
+      const detail=String(readErr?.message||readErr||'');
+      alert(`Kontrola vyúčtovania sa nepodarila načítať zo servera.\n\nChyba: ${code}\n${detail}\n\nLOKÁLNE: ${local.length}\nZÁCHRANNÁ KÓPIA: ${saved.length}`);
+      return;
+    }
+
+    const data=snap.exists ? (snap.data()||{}) : {};
+    const server=Array.isArray(data.records)?data.records:[];
+    const bestRecovery= saved.length>=local.length ? saved : local;
+    const msg=`Vyúčtovania\n\nSERVER: ${server.length}\nLOKÁLNE: ${local.length}\nZÁCHRANNÁ KÓPIA: ${bestRecovery.length}`;
+
+    if(bestRecovery.length>server.length){
+      const ok=confirm(msg+`\n\nNa tomto zariadení je staršia kópia s ${bestRecovery.length} záznamami.\n\nObnoviť tieto vyúčtovania na server?`);
       if(!ok)return;
-      const del=(snap.exists&&snap.data()?.billingDeleteOrder&&typeof snap.data().billingDeleteOrder==='object')?snap.data().billingDeleteOrder:{};
-      await db.collection('guard-trainer-billing').doc('all').set({records:recovery,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
-      monthlyBillingRecords=recovery.slice();
-      try{originalSetItem('gt-monthly-billing-v221',JSON.stringify(monthlyBillingRecords));localStorage.setItem('gt-monthly-billing-v221',JSON.stringify(monthlyBillingRecords));originalSetItem('gt-billing',JSON.stringify(monthlyBillingRecords));localStorage.setItem('gt-billing',JSON.stringify(monthlyBillingRecords));}catch(e){}
-      toast(`✓ Obnovených ${recovery.length} vyúčtovaní na server`);
+      const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?data.billingDeleteOrder:{};
+      await db.collection('guard-trainer-billing').doc('all').set({
+        records:JSON.parse(JSON.stringify(bestRecovery)),
+        billingDeleteOrder:del,
+        updatedAt:Date.now()
+      },{merge:false});
+      monthlyBillingRecords=bestRecovery.slice();
+      try{
+        const json=JSON.stringify(monthlyBillingRecords);
+        originalSetItem('gt-monthly-billing-v221',json); localStorage.setItem('gt-monthly-billing-v221',json);
+        originalSetItem('gt-billing',json); localStorage.setItem('gt-billing',json);
+      }catch(e){}
+      toast(`✓ Obnovených ${bestRecovery.length} vyúčtovaní na server`);
       setTimeout(()=>{try{openMyBilling();}catch(e){}},300);
     }else{
-      alert(msg+`\n\nZáchranná kópia nemá viac záznamov než server. Obnova sa nevykonala.`);
+      alert(msg+`\n\nNa zariadení nie je kópia s väčším počtom záznamov než server.\nObnova sa nevykonala.`);
     }
-  }catch(e){console.error('Billing recovery check failed',e);alert('Kontrola vyúčtovania zlyhala.');}
+  }catch(e){
+    console.error('Billing recovery check failed:',e);
+    alert(`Kontrola vyúčtovania zlyhala.\n\n${String(e?.code||'')}${e?.message?': '+String(e.message):''}`);
+  }
 }
 window.gtCheckBillingRecovery=gtCheckBillingRecovery;
 

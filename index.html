@@ -4824,6 +4824,32 @@ function persistSubstitutionOffers(){
   try{ localStorage.setItem('gt-substitution-offers', JSON.stringify(Array.isArray(substitutionOffers)?substitutionOffers:[])); }
   catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
 }
+async function saveSubstitutionOffersToCloudNow(){
+  try{
+    if(!db || !cloudEnabled) return false;
+    const ref=db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC);
+    const localOffers=Array.isArray(substitutionOffers)?substitutionOffers:[];
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      let remoteOffers=[];
+      try{ const x=data['gt-substitution-offers']; const p=x?JSON.parse(x):[]; if(Array.isArray(p)) remoteOffers=p; }catch(e){}
+      const byId=new Map();
+      remoteOffers.forEach(o=>{ if(o&&o.id!=null) byId.set(String(o.id),o); });
+      localOffers.forEach(o=>{
+        if(!o || o.id==null) return;
+        const id=String(o.id), prev=byId.get(id);
+        if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) byId.set(id,o);
+      });
+      const merged=Array.from(byId.values());
+      tx.set(ref,{'gt-substitution-offers':JSON.stringify(merged),_updatedAt:Date.now()},{merge:true});
+    });
+    return true;
+  }catch(e){
+    console.warn('Priamy cloud zápis zastupovania sa nepodaril',e);
+    return false;
+  }
+}
 const ALL_TRAINERS = ['JÁN NOVÁK','MATEJ KOVÁČ','LUCIA ŠIMKOVÁ','PETER TÓTH','ZUZANA MIHÁLOVÁ'];
 let CURRENT_TRAINER_NAME = 'TRÉNER 1';
 MY_TRAINER_GROUPS=[];
@@ -4877,7 +4903,7 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
    else{selected.add(n);b.classList.add('selected');b.querySelector('.sub-check').textContent='✓';}
  });
  modal.querySelector('.sub-cancel').onclick=()=>modal.remove();
- modal.querySelector('.sub-send').onclick=()=>{
+ modal.querySelector('.sub-send').onclick=async()=>{
    if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
    substitutionOffers.push({
      id:Date.now(), code, groupName:name,
@@ -4886,10 +4912,12 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
      from:getCurrentTrainerDisplayName(),
      trainers:[...selected],
      acceptedBy:null,
-     status:'ČAKÁ NA PRIJATIE'
+     status:'ČAKÁ NA PRIJATIE',
+     updatedAt:Date.now()
    });
    persistSubstitutionOffers();
    try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
+   try{ await saveSubstitutionOffersToCloudNow(); }catch(e){}
    modal.remove();
    updateHomeQuickOverview();
    toast('Ponuka zastupovania odoslaná');
@@ -15305,51 +15333,34 @@ function renderStatistics(month=appToday().month,year=appToday().year){
   }catch(e){ console.warn('Štatistiky – načítanie uložených vyúčtovaní zlyhalo',e); }
   const entries=Array.from(entryMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||quickGroupCode(a.group).localeCompare(quickGroupCode(b.group)));
 
-  // DOCHÁDZKA JE AUTORITATÍVNY ZDROJ PRE POČET ÚČASTÍ.
-  // TOP 3 nesmie počítať iba z vyúčtovania, pretože vo vyúčtovaní môže byť
-  // menej záznamov (napr. nezaplatený tréning), hoci člen bol na tréningu.
-  // Čítame preto priamo uloženú históriu dochádzky a zachováme aj dve účasti
-  // v rovnaký deň, ak boli v dvoch rôznych skupinách.
   const memberCounts={};
+  // ÚČASŤ PODĽA SKUPÍN = PRÍTOMNÍ + NOVÍ.
+  // Noví sú samostatná účasť, preto ich pripočítame k počtu prítomných.
   const groupCounts={A:0,B:0,C:0,D:0,'D+':0};
-  const groupMembers={A:{},B:{},C:{},D:{},'D+':{}};
-  try{
-    Object.entries(trainingAttendanceByGroup||{}).forEach(([histKey,hist])=>{
-      const parts=String(histKey).split('|');
-      const dateIso=String(parts.shift()||'');
-      const group=quickGroupCode(parts.join('|'));
-      if(!/^\d{4}-\d{2}-\d{2}$/.test(dateIso) || !group || !groupMembers[group]) return;
-      const dd=parsePaymentDate(dateIso);
-      if(!dd || dd.month!==m || dd.year!==y) return;
-      const deletedAt=Number(attendanceDeleteOrder[attendanceDeleteKey(dateIso,group)]||0);
-      if(deletedAt>0) return;
-      if(!hist || typeof hist!=='object') return;
-
-      // HISTÓRIA DOCHÁDZKY MÔŽE OBSAHOVAŤ STARÉ SIROTY.
-      // Za skutočne uloženú dochádzku považujeme iba záznam, ktorý má vlastný
-      // timestamp explicitného uloženia dochádzky. Ako spätná kompatibilita
-      // akceptujeme aj záznam, ktorý má platné uložené vyúčtovanie pre rovnaký
-      // dátum + skupinu. Samotný rozpis v kalendári NIE JE dôkazom dochádzky.
-      // Toto je dôležité: ak sa A alebo D iba objavujú v starom snapshot-e,
-      // ale nikto tam dochádzku neuložil, nesmú sa dostať do TOP 3.
-      const savedAttendanceAt = (typeof getAttendanceSavedAt==='function')
-        ? Number(getAttendanceSavedAt(dateIso,group)||0) : 0;
-      const billingExists = entryMap.has(`${dateIso}|${group}`);
-      if(savedAttendanceAt<=0 && !billingExists) return;
-      Object.entries(hist).forEach(([personKey,v])=>{
-        if(!v || (!v.training && !v.newMember)) return;
-        const partsName=String(personKey).split('|');
-        const surname=String(partsName.shift()||'').trim();
-        const name=String(partsName.join('|')||'').trim();
-        if(!surname && !name) return;
-        const key=surname+'|'+name;
-        memberCounts[key]=(memberCounts[key]||0)+1;
-        groupCounts[group]=(groupCounts[group]||0)+1;
-        groupMembers[group][key]=(groupMembers[group][key]||0)+1;
-      });
+  entries.forEach(e=>{
+    const group=quickGroupCode(e.group);
+    let presentCount=0, newCount=0;
+    Object.values(e.attendanceHistory||{}).forEach(v=>{
+      if(!v) return;
+      if(v.newMember) newCount++;
+      else if(v.training) presentCount++;
     });
-  }catch(e){ console.warn('Štatistiky – priamy zdroj dochádzky pre TOP 3 zlyhal',e); }
+    groupCounts[group]=(groupCounts[group]||0)+presentCount+newCount;
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) memberCounts[n]=(memberCounts[n]||0)+1;
+    });
+  });
   const top=Object.entries(memberCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3);
+  const groupMembers={A:{},B:{},C:{},D:{},'D+':{}};
+  entries.forEach(e=>{
+    const group=quickGroupCode(e.group);
+    if(!groupMembers[group]) groupMembers[group]={};
+    Object.keys(e.attendanceHistory||{}).forEach(n=>{
+      const v=e.attendanceHistory[n]||{};
+      if(v.training || v.newMember) groupMembers[group][n]=(groupMembers[group][n]||0)+1;
+    });
+  });
   const topByGroup={};
   Object.keys(groupMembers).forEach(g=>{
     topByGroup[g]=Object.entries(groupMembers[g])

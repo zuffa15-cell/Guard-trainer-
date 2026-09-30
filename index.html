@@ -11735,7 +11735,7 @@ function normalizeMonthlyBillingRecords(){
     const group=norm(r.group);
     // Jedno reálne vyúčtovanie = jeden tréning (dátum + skupina).
     // Informačný riadok zástupu môže existovať navyše, ale nenahrádza finančný záznam.
-    const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${dk}|${group}`;
+    const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${norm(r.trainer)}|${dk}|${group}`;
     const prev=map.get(key);
     if(!prev){ map.set(key,r); return; }
     const rt=Number(r.savedAt||r.updatedAt||0), pt=Number(prev.savedAt||prev.updatedAt||0);
@@ -11927,7 +11927,7 @@ function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
     rows.forEach(r=>{
       const d=parsePaymentDate(r.date);
       const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-      const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+      const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${norm(r.trainer)}|${dk}|${norm(r.group)}`;
       const prev=seen.get(key);
       if(!prev){ seen.set(key,r); return; }
       if(prev.substituteReference && !r.substituteReference) seen.set(key,r);
@@ -12059,7 +12059,7 @@ function initBillingDirectSync(){
             if(Number(billingDeleteOrder[remoteKey]||0) >= Number(r.savedAt||r.updatedAt||0)) return;
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-            const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+            const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${norm(r.trainer)}|${dk}|${norm(r.group)}`;
             const prev=seen.get(key);
             if(!prev){ seen.set(key,r); added++; }
             else if(Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)){ seen.set(key,r); updated++; }
@@ -12084,7 +12084,7 @@ function initBillingDirectSync(){
           merged.forEach(r=>{
             const d=parsePaymentDate(r.date);
             const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-            const k=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+            const k=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${norm(r.trainer)}|${dk}|${norm(r.group)}`;
             const prev=pendingSeen.get(k);
             if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) pendingSeen.set(k,r);
           });

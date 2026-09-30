@@ -2,7 +2,6 @@
 <!-- Guard Trainer v956: oprava synchronizácie nových členov v otvorenej dochádzke; Home meno používateľa vynútené priamo po renderi; cloud sa načítava súbežne s orlom.
 <!-- Guard Trainer v684: Admin môže vymazať ľubovoľný tréning z vyúčtovania; záznam sa odstráni aj trénerovi. -->
 <html lang="sk">
-<!-- Guard Trainer v956 FIX: po návrate na túto verziu sa lokálne vyúčtovanie administrátora jednorazovo zapíše na server a následne sa server + lokál držia identicky. -->
 <!-- Guard Trainer v896: cloud sync nikdy neprepína obrazovku na Domov na inom zariadení. -->
 <head>
 
@@ -944,16 +943,7 @@ function initCloudSync(){
   // v846: staré cloudové member kľúče sa NESMÚ migrovať.
     syncEnabled = true;
     try{ initTrainersDirectSync(); }catch(e){}
-    // Najprv jednorazovo zosúladíme vyúčtovanie z lokálnej kópie
-    // administrátora na server. Až potom spustíme realtime listener,
-    // aby prvý serverový snapshot nemohol prepísať práve obnovenú verziu.
-    try{
-      Promise.resolve(gtBootstrapLocalBillingToServerOnce())
-        .then(()=>{ try{ initBillingDirectSync(); }catch(e){} })
-        .catch(()=>{ try{ initBillingDirectSync(); }catch(e){} });
-    }catch(e){
-      try{ initBillingDirectSync(); }catch(_){}
-    }
+    try{ initBillingDirectSync(); }catch(e){}
 
 }
 
@@ -9393,7 +9383,6 @@ function renderBackups(){
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('members')">👥 <span><b>ZÁLOHA ČLENOV</b><small id="gtBackupLast-members">Zatiaľ nebola vytvorená</small></span>⬇</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('attendance')">☑️ <span><b>ZÁLOHA DOCHÁDZKY</b><small id="gtBackupLast-attendance">Zatiaľ nebola vytvorená</small></span>⬇</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('billing')">▤ <span><b>ZÁLOHA VYÚČTOVANIA</b><small id="gtBackupLast-billing">Zatiaľ nebola vytvorená</small></span>⬇</button>
-      <button type="button" class="more-menu-item" onclick="gtCheckBillingRecovery()">🛟 <span><b>KONTROLA / OBNOVA VYÚČTOVANIA</b><small>Porovná server, lokálne dáta a záchrannú kópiu</small></span>›</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadFullBackup()">🛡️ <span><b>ZÁLOHA VŠETKÝCH DÁT</b><small id="gtBackupLast-full">Zatiaľ nebola vytvorená</small></span>⬇</button>      <button type="button" class="more-menu-item" onclick="gtOpenRestoreFile()">♻️ <span><b>OBNOVIŤ ZÁLOHU</b><small>Načítať uloženú zálohu späť do Guard Trainer</small></span>›</button>
       <input id="gtRestoreFileInput" type="file" accept=".json,application/json" style="display:none" onchange="gtHandleRestoreFile(this)">
       <div style="margin-top:12px;padding:12px;border:1px solid #594400;border-radius:7px;background:#080808;color:#aaa;font-size:13px;line-height:1.45">
@@ -11542,150 +11531,6 @@ async function addNewMember(){
 function goBackAttendance(){ location.hash='home'; renderHome(); }
 
 
-const GT_BILLING_RECOVERY_KEY='gt-monthly-billing-recovery-v1';
-function gtBillingRecoveryRead(){
-  try{
-    const raw=originalGetItem(GT_BILLING_RECOVERY_KEY)||localStorage.getItem(GT_BILLING_RECOVERY_KEY)||'';
-    const a=raw?JSON.parse(raw):[];
-    return Array.isArray(a)?a:[];
-  }catch(e){return [];}
-}
-function gtBillingRecoverySave(rows,reason){
-  try{
-    const a=Array.isArray(rows)?rows:[];
-    if(!a.length) return false;
-    const current=gtBillingRecoveryRead();
-    // Recovery snapshot nikdy nezmenšujeme. Zachováme najväčšiu dostupnú lokálnu kópiu.
-    if(current.length>=a.length) return false;
-    const clean=JSON.parse(JSON.stringify(a));
-    const payload={savedAt:Date.now(),reason:String(reason||''),records:clean};
-    originalSetItem(GT_BILLING_RECOVERY_KEY,JSON.stringify(payload));
-    localStorage.setItem(GT_BILLING_RECOVERY_KEY,JSON.stringify(payload));
-    console.log('🛟 Billing recovery snapshot uložený:',clean.length,reason||'');
-    return true;
-  }catch(e){console.warn('Billing recovery snapshot failed',e);return false;}
-}
-function gtBillingRecoveryRows(){
-  try{
-    const raw=originalGetItem(GT_BILLING_RECOVERY_KEY)||localStorage.getItem(GT_BILLING_RECOVERY_KEY)||'';
-    const p=raw?JSON.parse(raw):null;
-    return Array.isArray(p)?p:(Array.isArray(p?.records)?p.records:[]);
-  }catch(e){return [];}
-}
-
-// v956 FIX: Keď sa administrátor vráti na túto konkrétnu verziu aplikácie,
-// jeho aktuálna lokálna kópia vyúčtovania je jednorazovo prenesená aj na
-// autoritatívny server. Po úspechu sa stav uloží lokálne aj na server a ďalší
-// veľký refresh už používa práve tento zjednotený stav.
-// Ostatné zariadenia potom iba prijmú serverovú verziu.
-// Tento zápis sa vykoná iba raz pre túto verziu aplikácie.
-const GT_BILLING_LOCAL_AUTHORITY_VERSION='v956-local-billing-authority-20260930-1';
-const GT_BILLING_LOCAL_AUTHORITY_KEY='gt-billing-local-authority-version-v1';
-
-async function gtBootstrapLocalBillingToServerOnce(){
-  try{
-    const isAdminUser =
-      (typeof isAdmin==='function' && isAdmin()) ||
-      String(localStorage.getItem('gt-user-role')||'').toLowerCase()==='admin' ||
-      String(localStorage.getItem('gt-is-admin')||'').toLowerCase()==='true';
-    if(!isAdminUser) return false;
-    if(!db || !cloudEnabled) return false;
-
-    const done=originalGetItem(GT_BILLING_LOCAL_AUTHORITY_KEY)||localStorage.getItem(GT_BILLING_LOCAL_AUTHORITY_KEY)||'';
-    if(done===GT_BILLING_LOCAL_AUTHORITY_VERSION) return false;
-
-    let localRows=[];
-    try{
-      const raw=originalGetItem('gt-monthly-billing-v221')||localStorage.getItem('gt-monthly-billing-v221')||'[]';
-      const parsed=JSON.parse(raw||'[]');
-      if(Array.isArray(parsed)) localRows=parsed;
-    }catch(e){}
-
-    if(!localRows.length && Array.isArray(monthlyBillingRecords) && monthlyBillingRecords.length){
-      localRows=monthlyBillingRecords.slice();
-    }
-    if(!localRows.length) return false;
-
-    try{ normalizeMonthlyBillingRecords(); }catch(e){}
-    if(Array.isArray(monthlyBillingRecords) && monthlyBillingRecords.length){
-      localRows=monthlyBillingRecords.slice();
-    }
-
-    // V tejto jednorazovej akcii je lokálna kópia zámerne zdrojom pravdy.
-    // Existujúce mazacie značky pre tieto lokálne riadky sa zrušia, aby ich
-    // starý serverový tombstone po refreshe znovu neodstránil.
-    const ref=db.collection('guard-trainer-billing').doc('all');
-    const snap=await ref.get();
-    const data=snap.exists?(snap.data()||{}):{};
-    const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')
-      ? {...data.billingDeleteOrder}:{};
-
-    localRows.forEach(r=>{
-      try{ delete del[billingRecordCanonicalKey(r)]; }catch(e){}
-    });
-
-    const cleanRows=JSON.parse(JSON.stringify(localRows));
-    await ref.set({
-      records:cleanRows,
-      billingDeleteOrder:del,
-      updatedAt:Date.now(),
-      billingLocalAuthorityVersion:GT_BILLING_LOCAL_AUTHORITY_VERSION
-    },{merge:false});
-
-    // Po potvrdení serverového zápisu zapíš presne ten istý stav aj lokálne.
-    const json=JSON.stringify(cleanRows);
-    originalSetItem('gt-monthly-billing-v221',json);
-    localStorage.setItem('gt-monthly-billing-v221',json);
-    originalSetItem('gt-billing',json);
-    localStorage.setItem('gt-billing',json);
-    try{
-      monthlyBillingRecords.splice(0,monthlyBillingRecords.length,...cleanRows);
-    }catch(e){}
-    try{
-      originalSetItem(BILLING_DELETE_ORDER_KEY,JSON.stringify(del));
-      localStorage.setItem(BILLING_DELETE_ORDER_KEY,JSON.stringify(del));
-      Object.keys(billingDeleteOrder).forEach(k=>delete billingDeleteOrder[k]);
-      Object.assign(billingDeleteOrder,del);
-    }catch(e){}
-
-    // Záchranná kópia sa aktualizuje až po úspešnom serverovom zápise.
-    try{
-      gtBillingRecoverySave(cleanRows,'local-authority-bootstrap');
-    }catch(e){}
-
-    originalSetItem(GT_BILLING_LOCAL_AUTHORITY_KEY,GT_BILLING_LOCAL_AUTHORITY_VERSION);
-    localStorage.setItem(GT_BILLING_LOCAL_AUTHORITY_KEY,GT_BILLING_LOCAL_AUTHORITY_VERSION);
-    console.log('✅ Vyúčtovanie zjednotené: LOCAL → SERVER → LOCAL',cleanRows.length);
-    return true;
-  }catch(e){
-    console.warn('Billing local-authority bootstrap zlyhal:',e);
-    return false;
-  }
-}
-async function gtCheckBillingRecovery(){
-  if(typeof db==='undefined' || !db){ alert('Databáza nie je pripojená.'); return; }
-  try{
-    const snap=await db.collection('guard-trainer-billing').doc('all').get();
-    const server=snap.exists && Array.isArray(snap.data()?.records)?snap.data().records:[];
-    const recovery=gtBillingRecoveryRows();
-    const local=Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[];
-    const msg=`Vyúčtovania\n\nSERVER: ${server.length}\nLOKÁLNE: ${local.length}\nZÁCHRANNÁ KÓPIA: ${recovery.length}`;
-    if(recovery.length>server.length){
-      const ok=confirm(msg+`\n\nZáchranná kópia má viac záznamov než server.\n\nObnoviť ${recovery.length} záznamov na server?`);
-      if(!ok)return;
-      const del=(snap.exists&&snap.data()?.billingDeleteOrder&&typeof snap.data().billingDeleteOrder==='object')?snap.data().billingDeleteOrder:{};
-      await db.collection('guard-trainer-billing').doc('all').set({records:recovery,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
-      monthlyBillingRecords=recovery.slice();
-      try{originalSetItem('gt-monthly-billing-v221',JSON.stringify(monthlyBillingRecords));localStorage.setItem('gt-monthly-billing-v221',JSON.stringify(monthlyBillingRecords));originalSetItem('gt-billing',JSON.stringify(monthlyBillingRecords));localStorage.setItem('gt-billing',JSON.stringify(monthlyBillingRecords));}catch(e){}
-      toast(`✓ Obnovených ${recovery.length} vyúčtovaní na server`);
-      setTimeout(()=>{try{openMyBilling();}catch(e){}},300);
-    }else{
-      alert(msg+`\n\nZáchranná kópia nemá viac záznamov než server. Obnova sa nevykonala.`);
-    }
-  }catch(e){console.error('Billing recovery check failed',e);alert('Kontrola vyúčtovania zlyhala.');}
-}
-window.gtCheckBillingRecovery=gtCheckBillingRecovery;
-
 let monthlyBillingRecords=[];
 /* v104x – definitívna identita Petra Onuščáka.
    Starý účet „Tréner 1“ bol kedysi používaný ako dočasný účet pre Petra.
@@ -11750,24 +11595,13 @@ try{
   // Bez tohto kroku boli údaje po refreshi prázdne a hlavný tréner videl samé nuly.
   const savedBilling=JSON.parse(localStorage.getItem('gt-monthly-billing-v221')||'null');
   if(Array.isArray(savedBilling)){
-    // Pred cloudovým snapshotom si nechaj poslednú lokálnu kópiu.
-    // Ak server obsahuje iba časť vyúčtovaní, táto kópia ostane dostupná na obnovu.
-    gtBillingRecoverySave(savedBilling,'startup-local');
     monthlyBillingRecords=savedBilling.filter(r=>{
       const d=parsePaymentDate(r?.date);
       if(!d) return false;
       const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
       return iso>=TRAINING_DATA_START_DATE;
     });
-    // Tu zámerne NEvoláme persistMonthlyBillingRecords(). Pri štarte nesmie
-    // lokálna kópia predbehnúť autoritatívny serverový stav.
-    try{
-      const json=JSON.stringify(monthlyBillingRecords);
-      originalSetItem('gt-monthly-billing-v221',json);
-      localStorage.setItem('gt-monthly-billing-v221',json);
-      originalSetItem('gt-billing',json);
-      localStorage.setItem('gt-billing',json);
-    }catch(e){}
+    persistMonthlyBillingRecords();
   }
 }catch(e){ console.warn('Načítanie uložených vyúčtovaní sa nepodarilo',e); }
 function normalizeMonthlyBillingRecords(){
@@ -12148,10 +11982,6 @@ function initBillingDirectSync(){
           same=JSON.stringify(stableBillingList(JSON.parse(currentRaw)||[]))===JSON.stringify(stableBillingList(merged));
         }catch(e){}
         if(!same || added>0 || updated>0 || remote.length!==currentCount){
-          // Ak server posiela podstatne menší zoznam, najprv zachráň lokálnu kópiu.
-          // Realtime snapshot potom môže pokojne zostať autoritatívny, ale staršie
-          // lokálne vyúčtovania už nebudú bez záložnej stopy stratené.
-          try{ if(currentCount>remote.length) gtBillingRecoverySave(monthlyBillingRecords,`server-${source}-smaller`); }catch(e){}
           console.log(`📥 [${source}] Vyúčtovanie = SERVER: nové ${added}, aktualizované ${updated}, celkom ${merged.length} (server ${remote.length})`);
           try{
             originalSetItem('gt-monthly-billing-v221', JSON.stringify(merged));

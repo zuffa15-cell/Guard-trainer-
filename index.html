@@ -668,12 +668,21 @@ function initCloudSync(){
         if(k==='gt-substitution-offers'){
           try{
             const remoteOffers=JSON.parse(data[k]||'[]');
+            const localOffers=JSON.parse(originalGetItem(k)||'[]');
             if(Array.isArray(remoteOffers)){
-              // Zástupy sú spoločné. Cloudový zoznam je autoritatívny pre ponuky,
-              // aby sa ponuka vytvorená na inom zariadení okamžite zobrazila.
-              substitutionOffers=remoteOffers;
-              originalSetItem(k,JSON.stringify(remoteOffers));
-              changed=true;
+              // Zástupy musia byť spoločné. Nikdy však nesmie prázdny/starejší
+              // zoznam z jedného zariadenia vymazať novú ponuku z druhého.
+              const merged=new Map();
+              (Array.isArray(localOffers)?localOffers:[]).forEach(o=>{ if(o&&o.id!=null) merged.set(String(o.id),o); });
+              remoteOffers.forEach(o=>{
+                if(!o||o.id==null)return;
+                const key=String(o.id), prev=merged.get(key);
+                if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
+              });
+              const mergedOffers=Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0));
+              const raw=JSON.stringify(mergedOffers);
+              if(raw!==originalGetItem(k)){ originalSetItem(k,raw); changed=true; }
+              substitutionOffers=mergedOffers;
               setTimeout(()=>{
                 try{updateSubstitutionQuick();}catch(e){}
                 try{if(typeof updateHomeQuickOverview==='function')updateHomeQuickOverview();}catch(e){}
@@ -1081,6 +1090,21 @@ function pushToCloud(force = false){
 
     // ZASTUPOVANIE: zlúč ponuky z cloudu a lokálneho zariadenia podľa ID,
     // aby zariadenie bez novej ponuky nemohlo prepísať ponuku vytvorenú inde.
+    try{
+      const localOffers=JSON.parse(payload['gt-substitution-offers']||'[]');
+      const remoteOffers=JSON.parse(remote['gt-substitution-offers']||'[]');
+      if(Array.isArray(localOffers) || Array.isArray(remoteOffers)){
+        const merged=new Map();
+        (Array.isArray(remoteOffers)?remoteOffers:[]).forEach(o=>{if(o&&o.id!=null)merged.set(String(o.id),o);});
+        (Array.isArray(localOffers)?localOffers:[]).forEach(o=>{
+          if(!o||o.id==null)return;
+          const key=String(o.id), prev=merged.get(key);
+          if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
+        });
+        payload['gt-substitution-offers']=JSON.stringify(Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0)));
+      }
+    }catch(e){ console.warn('Substitution cloud merge before push failed',e); }
+
     // VYÚČTOVANIE sa do shared-db NEZAPISUJE. Autoritatívny zdroj je guard-trainer-billing/all.
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
   }).then(()=>console.log('📤 Odoslané do cloudu (merge chrániaci dochádzku)'))
@@ -4888,7 +4912,8 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
      from:getCurrentTrainerDisplayName(),
      trainers:[...selected],
      acceptedBy:null,
-     status:'ČAKÁ NA PRIJATIE'
+     status:'ČAKÁ NA PRIJATIE',
+     updatedAt:Date.now()
    });
    persistSubstitutionOffers();
    try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
@@ -4980,6 +5005,7 @@ function acceptSubstitution(id){
  if(!o)return;
  o.acceptedBy=getCurrentTrainerDisplayName();
  o.status='PRIJATÉ';
+ o.updatedAt=Date.now();
  persistSubstitutionOffers();
  try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
 
@@ -5018,13 +5044,10 @@ function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
  const me=getCurrentTrainerDisplayName();
- const todayIso=String(appToday().iso||'');
- // Zastupovanie je aktuálne iba v deň konkrétneho tréningu.
- // Po skončení daného dňa nesmie zostať na Domove ako aktívne upozornenie.
- // Historické ponuky zostávajú dostupné cez obrazovku Zastupovanie, ale
- // na Domove sa zobrazujú/blikajú iba ponuky patriace k dnešnému tréningu.
+ // Na Domove musia zostať viditeľné všetky nevybavené ponuky adresované
+ // aktuálnemu trénerovi až do prijatia alebo zrušenia, bez ohľadu na dátum tréningu.
+ // Rovnako zostávajú viditeľné jeho vlastné čakajúce a prijaté ponuky.
  const relevantOffers=substitutionOffers.filter(o=>
-   String(o.date||'')===todayIso &&
    (o.from===me || o.trainers.includes(me) || o.acceptedBy===me)
  );
  const incoming=relevantOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;

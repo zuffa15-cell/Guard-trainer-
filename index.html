@@ -11561,10 +11561,20 @@ function repairPeterOnuscakIdentity(){
         }
         return r;
       });
-      if(changed) persistMonthlyBillingRecords();
+      if(changed) persistBillingRecordsLocalOnly();
     }
   }catch(e){ console.warn('Oprava identity Petra:',e); }
 }
+function persistBillingRecordsLocalOnly(){
+  try{
+    const json=JSON.stringify(Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]);
+    originalSetItem('gt-monthly-billing-v221', json);
+    localStorage.setItem('gt-monthly-billing-v221', json);
+    originalSetItem('gt-billing', json);
+    localStorage.setItem('gt-billing', json);
+  }catch(e){ console.warn('Lokálna kópia vyúčtovania sa nepodarila uložiť',e); }
+}
+
 try{
   Object.keys(localStorage).forEach(k=>{
     if(/^gt-monthly-billing-v(205|206|207|208|209|210|211|212|213|214|215|216|217|218|219|220)$/.test(k)){
@@ -11581,31 +11591,25 @@ try{
       const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
       return iso>=TRAINING_DATA_START_DATE;
     });
-    persistMonthlyBillingRecords();
+    persistBillingRecordsLocalOnly();
   }
 }catch(e){ console.warn('Načítanie uložených vyúčtovaní sa nepodarilo',e); }
 function normalizeMonthlyBillingRecords(){
-  const map=new Map();
-  const norm=s=>String(s||'').trim().toUpperCase();
-  (Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).forEach(r=>{
-    const d=parsePaymentDate(r.date); if(!d) return;
-    const dk=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
-    const group=norm(r.group);
-    // Jedno reálne vyúčtovanie = jeden tréning (dátum + skupina).
-    // Informačný riadok zástupu môže existovať navyše, ale nenahrádza finančný záznam.
-    const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${dk}|${group}`;
-    const prev=map.get(key);
-    if(!prev){ map.set(key,r); return; }
-    const rt=Number(r.savedAt||r.updatedAt||0), pt=Number(prev.savedAt||prev.updatedAt||0);
-    if(rt>=pt) map.set(key,r);
-  });
-  monthlyBillingRecords=Array.from(map.values());
+  monthlyBillingRecords=canonicalizeBillingRecords(monthlyBillingRecords);
 }
 normalizeMonthlyBillingRecords();
 
-// OCHRANA VYÚČTOVANIA: pôvodná jednorazová migrácia, ktorá mazala Viktorove
-// vyúčtovania skupiny A, je vypnutá. Vyúčtovanie sa pri štarte nesmie meniť.
-// Autoritatívnym zdrojom zostáva guard-trainer-billing/all.
+(function removeErroneousViktorGroupABilling(){
+  try{
+    const marker='gt-migration-v679-viktor-group-a-removed';
+    if(localStorage.getItem(marker)==='1') return;
+    const isViktor=n=>{const x=String(n||'').trim().toUpperCase(); return x==='VIKTOR ŽUFFA'||x==='VIKTOR ZUFFA';};
+    const before=monthlyBillingRecords.length;
+    monthlyBillingRecords=monthlyBillingRecords.filter(r=>!(isViktor(r?.trainer) && String(r?.group||'').trim().toUpperCase()==='A'));
+    localStorage.setItem(marker,'1');
+    if(monthlyBillingRecords.length!==before) persistBillingRecordsLocalOnly();
+  }catch(e){ console.warn('Migrácia Viktor/A vyúčtovania sa nepodarila',e); }
+})();
 const BILLING_DELETE_ORDER_KEY='gt-billing-delete-order-v1';
 const billingDeleteOrder=Object.create(null);
 // Mazania, ktoré práve prebiehajú. Chránia serverový dokument pred tým,
@@ -11626,6 +11630,26 @@ function billingRecordCanonicalKey(r){
   const d=parsePaymentDate(r&&r.date);
   const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
   return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
+}
+function canonicalizeBillingRecords(records){
+  const map=new Map();
+  const norm=s=>String(s||'').trim().toUpperCase();
+  (Array.isArray(records)?records:[]).forEach(r=>{
+    if(!r || typeof r!=='object') return;
+    const d=parsePaymentDate(r.date);
+    if(!d) return;
+    const dk=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
+    const group=norm(r.group);
+    // Jedno finančné vyúčtovanie = jeden tréning (dátum + skupina).
+    // Referencia zástupu môže existovať navyše. Toto je rovnaké pravidlo
+    // pre server, lokálnu kópiu aj zálohu.
+    const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${dk}|${group}`;
+    const prev=map.get(key);
+    if(!prev){ map.set(key,r); return; }
+    const rt=Number(r.savedAt||r.updatedAt||0), pt=Number(prev.savedAt||prev.updatedAt||0);
+    if(rt>=pt) map.set(key,r);
+  });
+  return Array.from(map.values());
 }
 function persistBillingDeleteOrder(){
   try{
@@ -11855,6 +11879,34 @@ function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
     }catch(e){ console.warn('billing direct push fail', e); }
   }catch(e){ console.warn('Uloženie vyúčtovania sa nepodarilo',e); }
 }
+async function reconcileBillingServerToCanonical(remoteRows, canonicalRows){
+  try{
+    if(typeof db==='undefined' || !db || window.__gtBillingServerNormalizeInFlight) return;
+    const remote=Array.isArray(remoteRows)?remoteRows:[];
+    const canonical=Array.isArray(canonicalRows)?canonicalRows:[];
+    const stable=(arr)=>JSON.stringify((Array.isArray(arr)?arr:[]).map(r=>{
+      try{return {key:billingRecordCanonicalKey(r),data:JSON.stringify(r||{})};}catch(e){return {key:'',data:JSON.stringify(r||{})};}
+    }).sort((a,b)=>(a.key+a.data).localeCompare(b.key+b.data)));
+    if(stable(remote)===stable(canonical)) return;
+    window.__gtBillingServerNormalizeInFlight=true;
+    const ref=db.collection('guard-trainer-billing').doc('all');
+    await db.runTransaction(async tx=>{
+      const snap=await tx.get(ref);
+      const data=snap.exists?(snap.data()||{}):{};
+      const fresh=Array.isArray(data.records)?data.records:[];
+      // Ak sa server medzitým zmenil, nechaj nový stav prejsť ďalším snapshotom.
+      if(stable(fresh)!==stable(remote)) return;
+      const del=(data.billingDeleteOrder&&typeof data.billingDeleteOrder==='object')?data.billingDeleteOrder:{};
+      tx.set(ref,{records:canonical,billingDeleteOrder:del,updatedAt:Date.now()},{merge:false});
+    });
+    console.log('✅ Serverové vyúčtovanie zjednotené:',canonical.length);
+  }catch(e){
+    console.warn('Zjednotenie serverového vyúčtovania zlyhalo:',e);
+  }finally{
+    window.__gtBillingServerNormalizeInFlight=false;
+  }
+}
+
 function initBillingDirectSync(){
   try{
     if(typeof db==='undefined' || !db) return;
@@ -11900,21 +11952,18 @@ function initBillingDirectSync(){
         // guard-trainer-billing/all je jediný autoritatívny zdroj vyúčtovania.
         // Lokálne záznamy sa sem nesmú primiešať, pretože by starý záznam
         // na adminovom/hlavnom zariadení mohol obnoviť už zmazané vyúčtovanie.
-        const seen=new Map();
-        let added=0, updated=0;
+        const eligible=[];
         remote.forEach(r=>{
           try{
             const remoteKey=billingRecordCanonicalKey(r);
             if(Number(billingDeleteOrder[remoteKey]||0) >= Number(r.savedAt||r.updatedAt||0)) return;
-            const d=parsePaymentDate(r.date);
-            const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-            const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
-            const prev=seen.get(key);
-            if(!prev){ seen.set(key,r); added++; }
-            else if(Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)){ seen.set(key,r); updated++; }
+            eligible.push(r);
           }catch(e){}
         });
-        let merged=Array.from(seen.values());
+        const mergedRemote=canonicalizeBillingRecords(eligible);
+        let added=mergedRemote.length;
+        let updated=0;
+        let merged=mergedRemote.slice();
         // Ak tréner práve uložil nový záznam, starší realtime snapshot ho môže
         // na chvíľu ešte neobsahovať. Zachovaj preto lokálny pending záznam až
         // do potvrdenia serverovej transakcie. Tým sa zobrazí v „Moje vyúčtovanie“
@@ -11938,6 +11987,13 @@ function initBillingDirectSync(){
             if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) pendingSeen.set(k,r);
           });
           merged=Array.from(pendingSeen.values());
+        }
+        // Server, lokálna kópia aj záloha musia používať presne rovnaký zoznam.
+        // Ak starý server obsahuje duplicitné riadky alebo záznamy zablokované
+        // mazacou značkou, zjednotíme aj server – ale iba keď práve neprebieha
+        // ukladanie nového vyúčtovania.
+        if(!billingSaveInFlight.size){
+          try{ reconcileBillingServerToCanonical(remote, merged); }catch(e){}
         }
         // Synchronizácia musí vedieť aj ZMAZAŤ starý lokálny záznam.
         // Predtým sa záznam odstránený trénerom na serveri neobjavil v remote,
@@ -14762,7 +14818,7 @@ function repairLegacyTrainer1BillingOwnership(){
       }
       return r;
     });
-    if(changed) persistMonthlyBillingRecords();
+    if(changed) persistBillingRecordsLocalOnly();
   }catch(e){ console.warn('Oprava starého mena trénera vo vyúčtovaní:',e); }
 }
 repairLegacyTrainer1BillingOwnership();

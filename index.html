@@ -420,6 +420,10 @@ function initCloudSync(){
     if(!doc.exists) return;
     const data = doc.data();
     gtApplyBackupMetaFromSharedData(data);
+    // ZASTUPOVANIE musí spracovať každý cloud snapshot ešte pred globálnymi
+    // kontrolami _lastUpdateBy/_updatedAt. Inak môže vlastný alebo starší
+    // snapshot zastaviť spracovanie ponuky skôr, než sa dostane do UI.
+    try{ applySubstitutionOffersFromSharedSnapshot(data); }catch(e){ console.warn('Substitution realtime snapshot failed',e); }
     const myUid = firebase.auth().currentUser?.uid;
     // Členovia sa spracujú okamžite ešte pred globálnymi kontrolami snapshotu.
     // Vlastný zápis je možné ignorovať nižšie, ale prijatý stav sa už teraz
@@ -4905,13 +4909,19 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
  modal.querySelector('.sub-cancel').onclick=()=>modal.remove();
  modal.querySelector('.sub-send').onclick=()=>{
    if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
+   const selectedTrainerIds=(visibleTrainerProfiles()||[])
+     .filter(t=>selected.has(String(t.full||t.name||'')))
+     .map(t=>Number(t.id)).filter(Number.isFinite);
    substitutionOffers.push({
      id:Date.now(), code, groupName:name,
      date:today,
      time,place,
      from:getCurrentTrainerDisplayName(),
+     fromTrainerId:currentTrainerAccountId(),
      trainers:[...selected],
+     trainerIds:selectedTrainerIds,
      acceptedBy:null,
+     acceptedById:null,
      status:'ČAKÁ NA PRIJATIE',
      updatedAt:Date.now()
    });
@@ -4929,8 +4939,9 @@ function showSubstitutionOffers(){
  const modal=document.createElement('div');
  modal.id='substitutionOffersModal';
  modal.className='sub-modal';
- const incoming=substitutionOffers.filter(o=>!o.acceptedBy && o.trainers.includes(getCurrentTrainerDisplayName()));
- const outgoing=substitutionOffers.filter(o=>o.from===getCurrentTrainerDisplayName() || (o.acceptedBy===getCurrentTrainerDisplayName()));
+ const meNorm=normalizeSubstitutionTrainerName(getCurrentTrainerDisplayName());
+ const incoming=substitutionOffers.filter(o=>!o.acceptedBy && (Array.isArray(o.trainers)?o.trainers:[]).some(n=>normalizeSubstitutionTrainerName(n)===meNorm));
+ const outgoing=substitutionOffers.filter(o=>normalizeSubstitutionTrainerName(o.from)===meNorm || normalizeSubstitutionTrainerName(o.acceptedBy)===meNorm);
  const incomingHtml=incoming.map(o=>`<div class="sub-offer">
    <b>⇄ PONUKA ZASTUPOVANIA</b>
    <div class="sub-group-row">
@@ -5040,20 +5051,53 @@ function acceptSubstitution(id){
  toast('Zástup prijatý – ponúkol: '+o.from+' • prijal: '+o.acceptedBy);
 }
 
+function normalizeSubstitutionTrainerName(value){
+  return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().replace(/\s+/g,' ').toUpperCase();
+}
+function applySubstitutionOffersFromSharedSnapshot(data){
+  if(!data || !Object.prototype.hasOwnProperty.call(data,'gt-substitution-offers')) return false;
+  let remote=[];
+  try{ remote=JSON.parse(data['gt-substitution-offers']||'[]'); }catch(e){ return false; }
+  if(!Array.isArray(remote)) return false;
+  let local=Array.isArray(substitutionOffers)?substitutionOffers:[];
+  // Ponuky sa nikdy nesmú stratiť iba preto, že druhé zariadenie ešte
+  // nemá svoju lokálnu kópiu. Pri rovnakom ID vyhrá novší updatedAt.
+  const map=new Map();
+  local.forEach(o=>{ if(o&&o.id!=null) map.set(String(o.id),o); });
+  remote.forEach(o=>{
+    if(!o||o.id==null) return;
+    const key=String(o.id), prev=map.get(key);
+    if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) map.set(key,o);
+  });
+  const merged=Array.from(map.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0));
+  const raw=JSON.stringify(merged);
+  if(raw===originalGetItem('gt-substitution-offers') && JSON.stringify(substitutionOffers)===raw) return false;
+  originalSetItem('gt-substitution-offers',raw);
+  substitutionOffers=merged;
+  setTimeout(()=>{
+    try{ updateSubstitutionQuick(); }catch(e){}
+    try{ if(typeof updateHomeQuickOverview==='function') updateHomeQuickOverview(); }catch(e){}
+  },0);
+  return true;
+}
+
 function updateSubstitutionQuick(){
  const slot=document.getElementById('substitutionQuickSlot');
  if(!slot)return;
  const me=getCurrentTrainerDisplayName();
+ const meNorm=normalizeSubstitutionTrainerName(me);
  // Na Domove musia zostať viditeľné všetky nevybavené ponuky adresované
  // aktuálnemu trénerovi až do prijatia alebo zrušenia, bez ohľadu na dátum tréningu.
- // Rovnako zostávajú viditeľné jeho vlastné čakajúce a prijaté ponuky.
+ // Porovnanie mien je bez diakritiky, aby sa ponuka nestratila kvôli zápisu mena.
  const relevantOffers=substitutionOffers.filter(o=>
-   (o.from===me || o.trainers.includes(me) || o.acceptedBy===me)
+   normalizeSubstitutionTrainerName(o.from)===meNorm ||
+   (Array.isArray(o.trainers)?o.trainers:[]).some(n=>normalizeSubstitutionTrainerName(n)===meNorm) ||
+   normalizeSubstitutionTrainerName(o.acceptedBy)===meNorm
  );
- const incoming=relevantOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
- const outgoingWaiting=relevantOffers.filter(o=>o.from===me && !o.acceptedBy).length;
- const acceptedOutgoing=relevantOffers.filter(o=>o.from===me && o.acceptedBy).length;
- const acceptedIncoming=relevantOffers.filter(o=>o.acceptedBy===me).length;
+ const incoming=relevantOffers.filter(o=>!o.acceptedBy && (Array.isArray(o.trainers)?o.trainers:[]).some(n=>normalizeSubstitutionTrainerName(n)===meNorm)).length;
+ const outgoingWaiting=relevantOffers.filter(o=>normalizeSubstitutionTrainerName(o.from)===meNorm && !o.acceptedBy).length;
+ const acceptedOutgoing=relevantOffers.filter(o=>normalizeSubstitutionTrainerName(o.from)===meNorm && o.acceptedBy).length;
+ const acceptedIncoming=relevantOffers.filter(o=>normalizeSubstitutionTrainerName(o.acceptedBy)===meNorm).length;
  const acceptedTotal=acceptedOutgoing+acceptedIncoming;
  const pendingTotal=incoming+outgoingWaiting;
  const count=pendingTotal+acceptedTotal;

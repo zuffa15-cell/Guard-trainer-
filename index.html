@@ -15075,8 +15075,8 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       </section>`:''})()}
       <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${month}</small><br>${clubHandoverLabel(getClubHandoverStatus(CURRENT_TRAINER_NAME,shownMonth,shownYear),false)}</span><strong>${totalClub} €</strong></div>
       <div class="my-billing-pdf-actions my-billing-pdf-row">
-        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return printMyMonthlyBillingPDF()">PDF</button>
-        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
+        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="event.preventDefault();event.stopPropagation();return window.__gtOpenMyBillingPDF && window.__gtOpenMyBillingPDF()">PDF</button>
+        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="event.preventDefault();event.stopPropagation();return window.__gtShareMyBillingPDF && window.__gtShareMyBillingPDF()">ZDIEĽAŤ</button>
         <button type="button" class="membership-paid-report-btn" onclick="showTrainerMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
       </div>
 
@@ -15173,6 +15173,45 @@ document.addEventListener('click', function(e){
     return false;
   }
 }, true);
+
+window.__gtOpenMyBillingPDF = function(){
+  try{
+    const x=buildMyMonthlyBillingPDFBlob();
+    const url=URL.createObjectURL(x.blob);
+    const w=window.open(url,'_blank');
+    if(!w){
+      const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener';
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    if(typeof toast==='function') toast('PDF bolo vytvorené');
+  }catch(e){
+    console.error('MOJE VYÚČTOVANIE PDF:',e);
+    if(typeof toast==='function') toast('PDF sa nepodarilo vytvoriť');
+  }
+  return false;
+};
+window.__gtShareMyBillingPDF = async function(){
+  try{
+    const x=buildMyMonthlyBillingPDFBlob();
+    const file=new File([x.blob],x.filename,{type:'application/pdf'});
+    if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
+      await navigator.share({title:x.title||'Guard Trainer',text:`Vyúčtovanie trénera ${x.trainer||''}`,files:[file]});
+      return false;
+    }
+    const url=URL.createObjectURL(x.blob);
+    const w=window.open(url,'_blank');
+    if(!w){
+      const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener';
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+  }catch(e){
+    console.error('MOJE VYÚČTOVANIE SHARE:',e);
+    if(typeof toast==='function') toast('Zdieľanie sa nepodarilo');
+  }
+  return false;
+};
 
 function goBackBilling(){ nav(billingReturnScreen || 'attendance'); }
 

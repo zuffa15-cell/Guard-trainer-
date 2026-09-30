@@ -11721,7 +11721,9 @@ try{
       const iso=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
       return iso>=TRAINING_DATA_START_DATE;
     });
-    persistMonthlyBillingRecords();
+    // Pri štarte nesmieme lokálnu kópiu zapisovať späť na server.
+    // Serverový dokument guard-trainer-billing/all je autoritatívny a
+    // lokálna kópia môže byť staršia (napr. 15 namiesto 17).
   }
 }catch(e){ console.warn('Načítanie uložených vyúčtovaní sa nepodarilo',e); }
 function normalizeMonthlyBillingRecords(){
@@ -11741,7 +11743,8 @@ function normalizeMonthlyBillingRecords(){
   });
   monthlyBillingRecords=Array.from(map.values());
 }
-normalizeMonthlyBillingRecords();
+// Vyúčtovanie sa po štarte NESMIE lokálne zmenšovať pred načítaním
+// autoritatívneho serverového dokumentu. Serverový snapshot ho nastaví.
 
 (function removeErroneousViktorGroupABilling(){
   try{

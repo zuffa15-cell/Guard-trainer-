@@ -12706,9 +12706,14 @@ function addBillingManualNote(trainerName,month,year){
   const dateInput=(document.getElementById('manualBillingDate')?.value||'').trim();
   const group=document.getElementById('manualBillingGroup')?.value||'';
   const note=(document.getElementById('manualBillingNote')?.value||'').trim();
-  const dm=dateInput.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if(!dm){toast('Dátum zadaj v tvare deň.mesiac.rok, napr. 15.9.2026');return false;}
-  const day=Number(dm[1]), mon=Number(dm[2]), yr=Number(dm[3]);
+  let day, mon, yr;
+  const iso=dateInput.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const dotted=dateInput.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if(iso){
+    yr=Number(iso[1]); mon=Number(iso[2]); day=Number(iso[3]);
+  }else if(dotted){
+    day=Number(dotted[1]); mon=Number(dotted[2]); yr=Number(dotted[3]);
+  }else{toast('Vyber dátum v kalendári');return false;}
   const check=new Date(yr,mon-1,day);
   if(!Number.isFinite(day)||!Number.isFinite(mon)||day<1||day>31||mon<1||mon>12||check.getFullYear()!==yr||check.getMonth()!==mon-1||check.getDate()!==day){toast('Dátum nie je platný');return false;}
   const date=`${yr}-${String(mon).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
@@ -12823,7 +12828,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
         <button type="button" class="manual-billing-add" onclick="document.getElementById('manualBillingForm').style.display='grid';document.getElementById('manualBillingNote')?.focus();">＋ PRIDAŤ RIADOK</button>
       </div>
       <div id="manualBillingForm" class="manual-billing-form" style="display:none">
-        <input id="manualBillingDate" type="text" inputmode="numeric" placeholder="deň.mesiac.rok" aria-label="Dátum" autocomplete="off">
+        <input id="manualBillingDate" type="date" aria-label="Dátum" autocomplete="off">
         <select id="manualBillingGroup" aria-label="Skupina">
           <option value="">Skupina</option><option>A</option><option>B</option><option>C</option><option>D</option><option>D+</option>
         </select>
@@ -14795,7 +14800,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
           <button type="button" class="manual-billing-add" onclick="document.getElementById('manualBillingForm')?.style.setProperty('display','grid');document.getElementById('manualBillingNote')?.focus();">＋ PRIDAŤ RIADOK</button>
         </div>
         <div id="manualBillingForm" class="manual-billing-form" style="display:none">
-          <input id="manualBillingDate" type="text" inputmode="numeric" placeholder="deň.mesiac.rok" aria-label="Dátum" autocomplete="off">
+          <input id="manualBillingDate" type="date" aria-label="Dátum" autocomplete="off">
           <select id="manualBillingGroup" aria-label="Skupina"><option value="">Skupina</option><option>A</option><option>B</option><option>C</option><option>D</option><option>D+</option></select>
           <input id="manualBillingNote" type="text" maxlength="180" placeholder="Poznámka – napíš vlastný text">
           <button type="button" onclick='return addBillingManualNote(${JSON.stringify(String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||''))},${Number(shownMonth)},${Number(shownYear)})'>ULOŽIŤ</button>

@@ -10141,14 +10141,18 @@ function deleteCurrentTrainerAttendance(){
 window.deleteCurrentTrainerAttendance=deleteCurrentTrainerAttendance;
 
 function attendance(){
+  // Kontext otvorenia z vyúčtovania musí byť dostupný pre celú funkciu.
+  // Predtým bol `openedFromBilling` deklarovaný iba v podmienke pre trénera,
+  // takže neskôr pri jeho použití vznikla ReferenceError a dochádzka sa
+  // vôbec neotvorila.
+  const openedFromBilling=!!window.__attendanceOpenedFromBilling;
+  const billingCtx=window.__attendanceBillingContext||{};
   if(!isAdmin() && (!isHeadTrainer() || isRealTrainerAttendanceEditor())){
     const accountId=currentTrainerAccountId();
     if(accountId==null){ window.__attendanceOpenedFromBilling=false; toast('Tréner nie je správne prihlásený.'); return; }
     const wantedDate=attendanceState.date||appToday().iso;
     const wantedGroup=String(attendanceState.group||'').toUpperCase();
     const wantedTime=String(attendanceState.trainingTime||'');
-    const openedFromBilling=!!window.__attendanceOpenedFromBilling;
-    const billingCtx=window.__attendanceBillingContext||{};
     const meNorm=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
     let billingOwn=false;
     if(openedFromBilling && String(billingCtx.date||'')===String(wantedDate) && String(billingCtx.group||'').toUpperCase()===wantedGroup){

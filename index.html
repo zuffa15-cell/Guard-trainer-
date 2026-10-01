@@ -12768,6 +12768,8 @@ function getMyBillingRowsForCurrentTrainer(rows,year,month){
   return list.filter(r=>normalizeBillingTrainerName(r&&r.trainer)===current);
 }
 
+let selectedBillingYear=null, selectedBillingMonth=null;
+
 function renderMonthlyBilling(year=null,targetMonth=null){
   const app=document.querySelector('.app');
   if(!app) return false;

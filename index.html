@@ -4350,6 +4350,29 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 .stats-stack-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
 </style>
 
+
+<style id="gt-custom-billing-rows-v1">
+.gt-custom-billing-section{margin:10px 0 14px;padding:10px;border:1px solid rgba(255,209,43,.28);border-radius:10px;background:#0b0b0b}
+.gt-custom-billing-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.gt-custom-billing-section-head b{color:#ffd12b;font-size:12px;letter-spacing:.4px}
+.gt-custom-add-btn{border:1px solid #ffd12b;background:#151515;color:#ffd12b;border-radius:7px;padding:7px 10px;font-weight:800;font-size:11px}
+.gt-custom-billing-list-row{display:grid;grid-template-columns:105px 34px minmax(0,1fr) 34px;align-items:center;gap:7px;padding:8px 2px;border-top:1px solid rgba(255,255,255,.08)}
+.gt-custom-row-date{font-size:12px;font-weight:700;white-space:nowrap}
+.gt-custom-row-note{text-align:left;font-size:12px;overflow-wrap:anywhere}
+.gt-custom-empty{font-size:11px;opacity:.55;padding:5px 2px}
+.custom-billing-row{background:rgba(255,209,43,.045)!important}
+.custom-billing-row td{vertical-align:middle!important}
+.custom-billing-note{text-align:left!important;font-weight:600!important;white-space:normal!important}
+.gt-custom-billing-modal{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(0,0,0,.72)}
+.gt-custom-billing-dialog{width:min(420px,100%);background:#111;border:1px solid #ffd12b;border-radius:14px;padding:16px;box-shadow:0 18px 50px rgba(0,0,0,.6)}
+.gt-custom-billing-title{font-weight:900;color:#ffd12b;font-size:16px;margin-bottom:12px}
+.gt-custom-billing-dialog label{display:block;font-size:11px;color:#aaa;margin:9px 0}
+.gt-custom-billing-dialog input,.gt-custom-billing-dialog select,.gt-custom-billing-dialog textarea{width:100%;box-sizing:border-box;margin-top:5px;padding:10px;border-radius:8px;border:1px solid #3a3a3a;background:#080808;color:#fff;font:inherit}
+.gt-custom-billing-dialog textarea{text-align:left;resize:vertical}
+.gt-custom-billing-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.gt-custom-billing-actions button{padding:9px 13px;border-radius:8px;border:1px solid #444;background:#222;color:#fff;font-weight:800}
+.gt-custom-billing-actions .primary-btn{border-color:#ffd12b;color:#ffd12b}
+</style>
 </head>
 <body class="gtSplashV323Active">
 <div id="gtSimpleLoginStep1" aria-label="Prihlásenie">
@@ -11638,6 +11661,84 @@ try{
     persistMonthlyBillingRecords();
   }
 }catch(e){ console.warn('Načítanie uložených vyúčtovaní sa nepodarilo',e); }
+
+// ===== VLASTNÉ RIADKY VYÚČTOVANIA =====
+// Vlastný riadok je súčasťou toho istého lokálneho úložiska ako tréningové
+// vyúčtovanie. Server ho iba prijíma ako zálohu; nikdy sa z neho pri štarte
+// neobnovuje späť do zariadenia.
+function isCustomBillingRow(r){
+  return !!(r && (r.customRow===true || String(r.type||'').toUpperCase()==='CUSTOM'));
+}
+function billingCustomIdentity(r){
+  if(!isCustomBillingRow(r)) return '';
+  return String(r.customId || r.key || `${r.trainer||''}|${r.date||''}|${r.group||''}|${r.note||''}|${r.savedAt||''}`);
+}
+function billingCloudMergeKey(r){
+  if(isCustomBillingRow(r)) return `CUSTOM|${billingCustomIdentity(r)}`;
+  const d=parsePaymentDate(r&&r.date);
+  const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
+  const trainer=String(r&&r.trainer||'').trim().toUpperCase();
+  const group=String(r&&r.group||'').trim().toUpperCase();
+  return r && r.substituteReference ? `REF|${trainer}|${dk}|${group}` : `TRAINING|${dk}|${group}`;
+}
+function openCustomBillingRowDialog(){
+  const old=document.getElementById('gt-custom-billing-modal');
+  if(old) old.remove();
+  const now=appToday();
+  const iso=`${now.year}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')}`;
+  const groups=['A','B','C','D','D+'];
+  const modal=document.createElement('div');
+  modal.id='gt-custom-billing-modal';
+  modal.className='gt-custom-billing-modal';
+  modal.innerHTML=`
+    <div class="gt-custom-billing-dialog">
+      <div class="gt-custom-billing-title">VLASTNÝ RIADOK</div>
+      <label>DÁTUM<input id="gt-custom-date" type="date" value="${iso}"></label>
+      <label>SKUPINA<select id="gt-custom-group">${groups.map(g=>`<option value="${g}">${g}</option>`).join('')}</select></label>
+      <label>POZNÁMKA<textarea id="gt-custom-note" rows="3" placeholder="Poznámka"></textarea></label>
+      <div class="gt-custom-billing-actions">
+        <button type="button" onclick="document.getElementById('gt-custom-billing-modal')?.remove()">ZRUŠIŤ</button>
+        <button type="button" class="primary-btn" onclick="saveCustomBillingRow()">ULOŽIŤ</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(()=>document.getElementById('gt-custom-note')?.focus(),50);
+}
+function saveCustomBillingRow(){
+  try{
+    const dateIso=String(document.getElementById('gt-custom-date')?.value||'').trim();
+    const group=String(document.getElementById('gt-custom-group')?.value||'').trim().toUpperCase();
+    const note=String(document.getElementById('gt-custom-note')?.value||'').trim();
+    const d=parsePaymentDate(dateIso);
+    if(!d){toast('Vyber dátum');return false;}
+    if(!note){toast('Zadaj poznámku');return false;}
+    const trainer=String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'Tréner').trim();
+    const trainerId=typeof currentTrainerAccountId==='function' ? currentTrainerAccountId() : null;
+    const savedAt=Date.now();
+    const customId=`${trainerId||trainer}|${dateIso}|${group}|${savedAt}|${Math.random().toString(36).slice(2,8)}`;
+    const record={
+      key:`CUSTOM|${customId}`, customId, customRow:true,
+      trainer, trainerId, savedBy:trainer,
+      date:formatBillingDate(dateIso), group,
+      note, name:getAdminGroupName(group)||group,
+      trainingSum:0,membershipSum:0,registrationSum:0,otherPlus:0,otherMinus:0,
+      gross:0,trainerReward:0,clubAmount:0,paying:0,savedAt,updatedAt:savedAt
+    };
+    monthlyBillingRecords.push(record);
+    persistMonthlyBillingRecords();
+    try{ billingJustSaved.set(billingRecordCanonicalKey(record),{record,savedAt}); }catch(e){}
+    const modal=document.getElementById('gt-custom-billing-modal'); if(modal) modal.remove();
+    toast('✓ Vlastný riadok uložený');
+    renderMonthlyBilling(selectedBillingYear,selectedBillingMonth);
+  }catch(e){
+    console.error('Uloženie vlastného riadku:',e);
+    toast('Vlastný riadok sa nepodarilo uložiť');
+  }
+  return false;
+}
+window.openCustomBillingRowDialog=openCustomBillingRowDialog;
+window.saveCustomBillingRow=saveCustomBillingRow;
+
 function normalizeMonthlyBillingRecords(){
   const map=new Map();
   const norm=s=>String(s||'').trim().toUpperCase();
@@ -11645,8 +11746,12 @@ function normalizeMonthlyBillingRecords(){
     const d=parsePaymentDate(r.date); if(!d) return;
     const dk=`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`;
     const group=norm(r.group);
-    // Jedno reálne vyúčtovanie = jeden tréning (dátum + skupina).
-    // Informačný riadok zástupu môže existovať navyše, ale nenahrádza finančný záznam.
+    if(isCustomBillingRow(r)){
+      const key=`CUSTOM|${billingCustomIdentity(r)}`;
+      const prev=map.get(key);
+      if(!prev || Number(r.savedAt||r.updatedAt||0)>=Number(prev.savedAt||prev.updatedAt||0)) map.set(key,r);
+      return;
+    }
     const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${group}` : `TRAINING|${dk}|${group}`;
     const prev=map.get(key);
     if(!prev){ map.set(key,r); return; }
@@ -11685,6 +11790,7 @@ try{
   if(x&&typeof x==='object') Object.assign(billingDeleteOrder,x);
 }catch(e){}
 function billingRecordCanonicalKey(r){
+  if(isCustomBillingRow(r)) return `CUSTOM|${billingCustomIdentity(r)}`;
   const d=parsePaymentDate(r&&r.date);
   const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
   return `${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
@@ -11838,7 +11944,7 @@ function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
     rows.forEach(r=>{
       const d=parsePaymentDate(r.date);
       const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-      const key=r.substituteReference ? `REF|${norm(r.trainer)}|${dk}|${norm(r.group)}` : `TRAINING|${dk}|${norm(r.group)}`;
+      const key=billingCloudMergeKey(r);
       const prev=seen.get(key);
       if(!prev){ seen.set(key,r); return; }
       if(prev.substituteReference && !r.substituteReference) seen.set(key,r);
@@ -11880,7 +11986,7 @@ function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
             try{
               const d=parsePaymentDate(r.date);
               const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-              seen.set(`${norm(r.trainer)}|${dk}|${norm(r.group)}`, r);
+              seen.set(billingCloudMergeKey(r), r);
             }catch(e){}
           });
           monthlyBillingRecords.forEach(r=>{
@@ -11889,7 +11995,7 @@ function persistMonthlyBillingRecords(skipDirectBillingCloud=false){
               if(Number(billingDeleteOrder[k]||0)>=Number(r.savedAt||r.updatedAt||0)) return;
               const d=parsePaymentDate(r.date);
               const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
-              const mapKey=`${norm(r.trainer)}|${dk}|${norm(r.group)}`;
+              const mapKey=billingCloudMergeKey(r);
               const prev=seen.get(mapKey);
               const rt=Number(r.savedAt||r.updatedAt||0), pt=Number(prev?.savedAt||prev?.updatedAt||0);
               // Pri konflikte vyhrá novšie uloženie. Starý lokálny záznam admina
@@ -14637,6 +14743,10 @@ function renderMonthlyBilling(year=null,targetMonth=null){
   {
     const unique=new Map();
     rows.forEach(r=>{
+      if(isCustomBillingRow(r)){
+        unique.set(`CUSTOM|${billingCustomIdentity(r)}`,r);
+        return;
+      }
       const d=parsePaymentDate(r.date);
       const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
       const key=`${dk}|${normBilling(r.group)}`;
@@ -14644,7 +14754,6 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       if(!prev){ unique.set(key,r); return; }
       if(prev.substituteReference && !r.substituteReference){ unique.set(key,r); return; }
       if(!prev.substituteReference && r.substituteReference){ return; }
-      // If both are real records, keep the latest one (the most recent save).
       unique.set(key,r);
     });
     rows=Array.from(unique.values());
@@ -14660,6 +14769,11 @@ function renderMonthlyBilling(year=null,targetMonth=null){
 
       // PRIORITA: posledné uloženie DOCHÁDZKY pre konkrétny deň + skupinu.
       // Najnovšie uložená skupina je vždy prvá.
+      if(isCustomBillingRow(a) || isCustomBillingRow(b)){
+        const sa=Number(a.savedAt||0), sb=Number(b.savedAt||0);
+        if(sa!==sb) return sb-sa;
+        return (billingDisplayOrder.get(a)||0)-(billingDisplayOrder.get(b)||0);
+      }
       const as=getAttendanceSavedAt(
         da?`${da.year}-${String(da.month).padStart(2,'0')}-${String(da.day).padStart(2,'0')}`:a.date,
         a.group
@@ -14684,7 +14798,8 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       }
       return (billingDisplayOrder.get(a)||0)-(billingDisplayOrder.get(b)||0);
     });
-  const total=(key)=>rows.reduce((a,r)=>a+Number(r[key]||0),0);
+  const financialRows=rows.filter(r=>!isCustomBillingRow(r));
+  const total=(key)=>financialRows.reduce((a,r)=>a+Number(r[key]||0),0);
   const totalClub=total('clubAmount'), totalReward=total('trainerReward');
   app.innerHTML=`
     <header class="topbar">
@@ -14713,7 +14828,15 @@ function renderMonthlyBilling(year=null,targetMonth=null){
             <th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>
           </tr></thead>
           <tbody>
-            ${rows.map(r=>`<tr class="${r.cancelled?'cancelled-billing-row':(r.substituteReference?'substitute-info-row':'')} billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(r.name||''))})' title="Otvoriť konkrétnu dochádzku">
+            ${rows.map(r=>isCustomBillingRow(r)
+              ? `<tr class="custom-billing-row">
+                  <td>${r.date}</td>
+                  <td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span></td>
+                  <td colspan="7" class="custom-billing-note">${String(r.note||'')}</td>
+                  <td class="club-amount">—</td>
+                  <td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.preventDefault();event.stopPropagation();return deleteMyBillingRecord(${JSON.stringify(String(r.key||''))},this)'>🗑</button></td>
+                </tr>`
+              : `<tr class="${r.cancelled?'cancelled-billing-row':(r.substituteReference?'substitute-info-row':'')} billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(r.name||''))})' title="Otvoriť konkrétnu dochádzku">
               <td>${r.date}${r.cancelled?`<small class="cancelled-billing-label">ZRUŠENÝ TRÉNING</small>`:(r.substituteReference?`<small class="sub-label">⇄ TRÉNING ZASTUPOVANÝ<br><b>${r.substituteBy||'—'}</b></small>`:'')}</td>
               <td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span></td>
               <td>${(r.substituteReference||r.cancelled) ? '' : `${r.trainingSum} €<small>${r.paying} platieb</small>`}</td>
@@ -14742,6 +14865,19 @@ function renderMonthlyBilling(year=null,targetMonth=null){
           </tr></tfoot>
         </table>
       </div>
+      <section class="gt-custom-billing-section">
+        <div class="gt-custom-billing-section-head">
+          <b>VLASTNÉ RIADKY</b>
+          <button type="button" class="gt-custom-add-btn" onclick="return openCustomBillingRowDialog()">+ PRIDAŤ RIADOK</button>
+        </div>
+        ${rows.filter(r=>isCustomBillingRow(r)).length ? rows.filter(r=>isCustomBillingRow(r)).map(r=>`
+          <div class="gt-custom-billing-list-row">
+            <span class="gt-custom-row-date">${r.date}</span>
+            <span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>
+            <span class="gt-custom-row-note">${String(r.note||'')}</span>
+            <button type="button" class="admin-delete-billing-btn" onclick='return deleteMyBillingRecord(${JSON.stringify(String(r.key||''))},this)'>🗑</button>
+          </div>`).join('') : `<div class="gt-custom-empty">Žiadne vlastné riadky.</div>`}
+      </section>
       ${(()=>{const details=getMonthlyOtherDetails(rows); return details.length?`
       <section class="monthly-other-details">
         <div class="monthly-other-title">INÉ PLATBY – PODROBNOSTI</div>

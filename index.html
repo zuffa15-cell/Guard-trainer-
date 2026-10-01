@@ -14990,8 +14990,8 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       </section>`:''})()}
       <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${month}</small><br>${clubHandoverLabel(getClubHandoverStatus(CURRENT_TRAINER_NAME,shownMonth,shownYear),false)}</span><strong>${totalClub} €</strong></div>
       <div class="my-billing-pdf-actions my-billing-pdf-row">
-        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return window.__GT_MY_BILLING_PDF ? window.__GT_MY_BILLING_PDF(event) : printMyMonthlyBillingPDF()">PDF</button>
-        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return window.__GT_MY_BILLING_SHARE ? window.__GT_MY_BILLING_SHARE(event) : emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
+        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return window.__gtV958PrintMyBilling ? window.__gtV958PrintMyBilling(event) : printMyMonthlyBillingPDF()">PDF</button>
+        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return window.__gtV958ShareMyBilling ? window.__gtV958ShareMyBilling(event) : emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
         <button type="button" class="membership-paid-report-btn" onclick="showTrainerMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
       </div>
 
@@ -16486,50 +16486,51 @@ setTimeout(set,80);setTimeout(set,300)})();
   },true);
 })();
 </script>
-<script>
+
+
+<script id="gtV958BillingPdfFix">
 (function(){
-function pdf(e){if(e){e.preventDefault();e.stopPropagation();}try{return window.printMyMonthlyBillingPDF?window.printMyMonthlyBillingPDF():false}catch(x){console.error(x);return false}}
-async function share(e){if(e){e.preventDefault();e.stopPropagation();}try{if(window.emailMyMonthlyBillingPDF)await window.emailMyMonthlyBillingPDF()}catch(x){console.error(x)}return false}
-window.__GT_MY_BILLING_PDF=pdf; window.__GT_MY_BILLING_SHARE=share;
-document.addEventListener('click',function(e){if(e.target.closest&&e.target.closest('.gt-my-pdf-btn')){pdf(e);return}if(e.target.closest&&e.target.closest('.gt-my-share-btn'))share(e)},true);
-var st=document.createElement('style');st.textContent='.gt-my-pdf-btn,.gt-my-share-btn{position:relative!important;z-index:9999!important;pointer-events:auto!important;touch-action:manipulation!important}';document.head.appendChild(st);
-})();
-</script>
-<script id="gtV957BillingPdfFix">
-(function(){
-  // v957: PDF/ZDIEĽAŤ pre Moje vyúčtovanie používajú rovnakú cestu pre každého trénera.
   function getMyPdfData(){
     const page=document.querySelector('.monthly-billing-page');
     const table=page && page.querySelector('.monthly-table');
     if(!table) throw new Error('Nie je otvorené mesačné vyúčtovanie');
     const clean=v=>String(v==null?'':v).replace(/\s+/g,' ').trim();
     const headers=Array.from(table.querySelectorAll('thead th')).map(x=>clean(x.innerText));
-    const body=Array.from(table.querySelectorAll('tbody tr')).filter(r=>!r.classList.contains('empty-monthly')).map(r=>Array.from(r.children).map(c=>clean(c.innerText)));
+    const body=Array.from(table.querySelectorAll('tbody tr'))
+      .filter(r=>!r.classList.contains('empty-monthly'))
+      .map(r=>Array.from(r.children).map(c=>clean(c.innerText)));
     const foot=table.querySelector('tfoot tr');
     const total=foot?Array.from(foot.children).map(c=>clean(c.innerText)):[];
     const title=clean(page.querySelector('.monthly-title')?.innerText)||'MOJE VYÚČTOVANIE';
     const trainer=clean(page.querySelector('.monthly-trainer-card span')?.innerText)||clean(getCurrentTrainerDisplayName())||'Tréner';
-    const details=Array.from(page.querySelectorAll('.monthly-other-row')).map(el=>Array.from(el.children).map(c=>clean(c.innerText))).filter(a=>a.length>=4);
+    const details=Array.from(page.querySelectorAll('.monthly-other-row'))
+      .map(el=>Array.from(el.children).map(c=>clean(c.innerText))).filter(a=>a.length>=4);
     const blob=buildGuardTrainerVectorPDF(title,'Tréner: '+trainer,headers,body,total,details);
     const safe=trainer.replace(/[^a-zA-Z0-9À-ž]+/g,'-').replace(/^-+|-+$/g,'')||'Trener';
     return {blob,filename:'Guard-Trainer-vyuctovanie-'+safe+'.pdf',title,trainer};
   }
-  window.__gtV957PrintMyBilling=function(e){
-    if(e){e.preventDefault();e.stopPropagation();}
-    try{ const x=getMyPdfData(); return saveGuardTrainerPDF(x.blob,x.filename)===true; }
-    catch(err){ console.error('v957 PDF MOJE VYÚČTOVANIE',err); if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť'); return false; }
+  window.__gtV958PrintMyBilling=function(e){
+    if(e){e.preventDefault();}
+    try{
+      const x=getMyPdfData();
+      return saveGuardTrainerPDF(x.blob,x.filename)===true ? false : false;
+    }catch(err){
+      console.error('v958 PDF MOJE VYÚČTOVANIE',err);
+      if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');
+      return false;
+    }
   };
-  window.__gtV957ShareMyBilling=async function(e){
-    if(e){e.preventDefault();e.stopPropagation();}
-    try{ const x=getMyPdfData(); await shareGuardTrainerPDF(x.blob,x.filename,'Guard Trainer - '+x.title,'Vyúčtovanie trénera '+x.trainer); return false; }
-    catch(err){ console.error('v957 ZDIEĽAŤ PDF',err); if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť'); return false; }
+  window.__gtV958ShareMyBilling=async function(e){
+    if(e){e.preventDefault();}
+    try{
+      const x=getMyPdfData();
+      await shareGuardTrainerPDF(x.blob,x.filename,'Guard Trainer - '+x.title,'Vyúčtovanie trénera '+x.trainer);
+    }catch(err){
+      console.error('v958 ZDIEĽAŤ PDF',err);
+      if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');
+    }
+    return false;
   };
-  document.addEventListener('click',function(e){
-    const p=e.target && e.target.closest ? e.target.closest('.gt-my-pdf-btn') : null;
-    const sh=e.target && e.target.closest ? e.target.closest('.gt-my-share-btn') : null;
-    if(p){ window.__gtV957PrintMyBilling(e); }
-    else if(sh){ window.__gtV957ShareMyBilling(e); }
-  },true);
 })();
 </script>
 </body>

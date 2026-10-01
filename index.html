@@ -9818,6 +9818,79 @@ function commitMembershipDraftsForCurrentTraining(){
   try{ persistMembersData(); }catch(e){ console.warn('Uloženie členského do profilu zlyhalo:',e); }
 }
 
+
+// Oprava: platby potvrdené vo vyúčtovaní musia zostať aj v profile člena.
+// Billing je finančný záznam, preto pri jeho uložení zapíšeme rovnaké platby
+// aj do member-level údajov a histórie. Tým sa profil nespolieha iba na dočasný
+// stav otvorenej dochádzky.
+function commitBillingPaymentsToMemberProfiles(){
+  try{
+    const date=attendanceDateKey();
+    const group=String(attendanceState.group||'').trim().toUpperCase();
+    const period=currentMembershipPeriod();
+    const year=Number(String(date||'').slice(0,4))||appToday().year;
+    let changed=false;
+    (attendanceState.members||[]).forEach(a=>{
+      const m=membersData.find(x=>x.surname===a.surname&&x.name===a.name);
+      if(!m) return;
+      const membershipAmount=Number(a.membershipAmount||0);
+      const registrationPaid=!!a.registration;
+      if(membershipAmount>0){
+        const existing=membershipPayments.find(p=>
+          Number(p.memberId)===Number(m.id) && Number(p.period)===Number(period) &&
+          Number(p.year||String(p.date||'').slice(0,4))===year
+        );
+        if(existing){
+          existing.date=a.membershipDate||date;
+          existing.amount=membershipAmount;
+          existing.paidGroup=a.membershipPaidGroup||group;
+          existing.groups=[existing.paidGroup];
+        }else{
+          membershipPayments.push({
+            memberId:m.id,surname:m.surname,name:m.name,groups:[a.membershipPaidGroup||group],
+            paidGroup:a.membershipPaidGroup||group,date:a.membershipDate||date,
+            amount:membershipAmount,period:Number(period),year,
+            source:(activeUserRole==='admin'?'admin':'trainer'),
+            collectorTrainer:activeUserRole==='trainer'?String(getCurrentTrainerDisplayName?.()||'').trim():'',
+            collectorTrainerId:activeUserRole==='trainer'&&currentTrainerAccountId()!=null?Number(currentTrainerAccountId()):null
+          });
+        }
+        m.membership=true;
+        m.membershipAmount=membershipAmount;
+        m.membershipDate=a.membershipDate||date;
+        m.membershipPaidGroup=a.membershipPaidGroup||group;
+        markMemberSaved(m.id);
+        changed=true;
+      }
+      if(registrationPaid){
+        const existing=registrationPayments.find(p=>Number(p.memberId)===Number(m.id));
+        if(existing){
+          existing.date=a.registrationDate||date;
+          existing.amount=Number(a.registrationAmount||existing.amount||30);
+          existing.paidGroup=a.registrationPaidGroup||group;
+        }else{
+          registrationPayments.push({
+            memberId:m.id,surname:m.surname,name:m.name,paidGroup:a.registrationPaidGroup||group,
+            date:a.registrationDate||date,amount:Number(a.registrationAmount||30),year
+          });
+        }
+        m.registration=true;
+        m.registrationDate=a.registrationDate||date;
+        m.registrationAmount=Number(a.registrationAmount||30);
+        m.registrationPaidGroup=a.registrationPaidGroup||group;
+        markMemberSaved(m.id);
+        changed=true;
+      }
+    });
+    persistPaymentHistory();
+    if(changed) persistMembersData();
+    return changed;
+  }catch(e){
+    console.warn('Guard Trainer: commitBillingPaymentsToMemberProfiles zlyhal:',e);
+    return false;
+  }
+}
+
 function getSavedTrainingAttendance(group,name){
   const data=trainingAttendanceByGroup[trainingAttendanceKey(group)];
   const v=data && data[name];
@@ -12542,6 +12615,9 @@ async function saveTrainingBilling(saveButton){
   // Po commitnutí platieb ešte raz uložíme stav, aby sa do histórie dostali
   // aj všetky aktuálne zmeny z tejto obrazovky.
   try{ saveCurrentTrainingAttendance(); }catch(e){ console.warn('Druhé uloženie dochádzky zlyhalo:',e); }
+  // Finančné platby z práve uloženého vyúčtovania zapíš aj do profilu člena.
+  // Toto je posledná poistka pred vytvorením billing záznamu.
+  try{ commitBillingPaymentsToMemberProfiles(); }catch(e){ console.warn('Synchronizácia platieb do profilu zlyhala:',e); }
   const fee=trainingFee();
   const paying=attendanceState.members.filter(m=>m.training&&!m.newMember).length;
   const trainingPaid=attendanceState.members.filter(m=>m.training&&!m.newMember&&!m.trainingAccount).length;

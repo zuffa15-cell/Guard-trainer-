@@ -9008,9 +9008,186 @@ const GT_BACKUP_SETS = {
   },
   billing: {
     title: 'Vyúčtovanie',
-    keys: ['gt-finance','gt-monthly-billing-v221','gt-billing','gt-billing-delete-order-v1','gt-monthly-billing-custom-v1']
+    keys: ['gt-finance','gt-monthly-billing-v221','gt-billing','gt-billing-delete-order-v1']
   }
 };
+/* =========================================================
+   PEVNÝ LOKÁLNY SÚBOR – autoritatívna lokálna záloha v mobile
+   - používateľ raz vyberie fyzický JSON súbor
+   - dochádzka + vyúčtovanie + ostatné GT dáta sa doň priebežne zapisujú
+   - server tento súbor NIKDY nečíta ani neprepíše lokálny stav
+   - File System Access API je progresívne: ak ho prehliadač nepodporuje,
+     zostávajú klasické JSON zálohy nižšie.
+   ========================================================= */
+const GT_PHYSICAL_FILE_DB='GuardTrainerPhysicalFile-v1';
+const GT_PHYSICAL_FILE_STORE='handles';
+const GT_PHYSICAL_FILE_KEY='main';
+let gtPhysicalFileHandle=null;
+let gtPhysicalFileWriteTimer=null;
+let gtPhysicalFileWriting=false;
+let gtPhysicalFileWriteQueued=false;
+
+function gtPhysicalFileSupported(){
+  return !!(window.showSaveFilePicker && window.indexedDB);
+}
+function gtPhysicalFileStatusText(){
+  return gtPhysicalFileHandle ? 'Pevný súbor je nastavený – dáta sa ukladajú automaticky.' : 'Pevný súbor ešte nie je nastavený.';
+}
+function gtPhysicalFileDB(){
+  return new Promise((resolve,reject)=>{
+    try{
+      const req=indexedDB.open(GT_PHYSICAL_FILE_DB,1);
+      req.onupgradeneeded=()=>{try{req.result.createObjectStore(GT_PHYSICAL_FILE_STORE);}catch(e){}};
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error||new Error('IndexedDB chyba'));
+    }catch(e){reject(e);}
+  });
+}
+async function gtPhysicalFileSaveHandle(handle){
+  try{
+    const dbi=await gtPhysicalFileDB();
+    await new Promise((resolve,reject)=>{
+      const tx=dbi.transaction(GT_PHYSICAL_FILE_STORE,'readwrite');
+      tx.objectStore(GT_PHYSICAL_FILE_STORE).put(handle,GT_PHYSICAL_FILE_KEY);
+      tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error||new Error('Uloženie handle zlyhalo'));
+    });
+    dbi.close();
+  }catch(e){console.warn('Physical file handle save failed',e);}
+}
+async function gtPhysicalFileLoadHandle(){
+  try{
+    const dbi=await gtPhysicalFileDB();
+    const handle=await new Promise((resolve,reject)=>{
+      const tx=dbi.transaction(GT_PHYSICAL_FILE_STORE,'readonly');
+      const req=tx.objectStore(GT_PHYSICAL_FILE_STORE).get(GT_PHYSICAL_FILE_KEY);
+      req.onsuccess=()=>resolve(req.result||null); req.onerror=()=>reject(req.error);
+    });
+    dbi.close();
+    if(handle){ gtPhysicalFileHandle=handle; return handle; }
+  }catch(e){console.warn('Physical file handle load failed',e);}
+  return null;
+}
+function gtPhysicalFileCollectData(){
+  const data={};
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const key=localStorage.key(i);
+      if(!key || !key.startsWith('gt-') || isGTLocalAuthKey(key)) continue;
+      const value=originalGetItem(key);
+      if(value!==null) data[key]=value;
+    }
+  }catch(e){console.warn('Physical file collect failed',e);}
+  return data;
+}
+function gtPhysicalFilePayload(){
+  return {
+    guardTrainerPhysicalFile:true,
+    version:1,
+    app:'Guard Trainer',
+    updatedAt:new Date().toISOString(),
+    data:gtPhysicalFileCollectData()
+  };
+}
+async function gtPhysicalFileWriteNow(){
+  if(!gtPhysicalFileHandle || gtPhysicalFileWriting) { if(gtPhysicalFileWriting) gtPhysicalFileWriteQueued=true; return false; }
+  gtPhysicalFileWriting=true;
+  try{
+    let perm='granted';
+    if(typeof gtPhysicalFileHandle.queryPermission==='function') perm=await gtPhysicalFileHandle.queryPermission({mode:'readwrite'});
+    if(perm!=='granted'){
+      // Automatické obnovenie povolenia bez používateľského kliknutia nemusí prehliadač dovoliť.
+      console.warn('Physical file permission is not granted');
+      return false;
+    }
+    const writable=await gtPhysicalFileHandle.createWritable();
+    await writable.write(JSON.stringify(gtPhysicalFilePayload(),null,2));
+    await writable.close();
+    window.__gtPhysicalFileLastWrite=Date.now();
+    try{ localStorage.setItem('gt-physical-file-last-write-v1',new Date().toISOString()); }catch(e){}
+    return true;
+  }catch(e){
+    console.warn('Physical file write failed',e);
+    return false;
+  }finally{
+    gtPhysicalFileWriting=false;
+    if(gtPhysicalFileWriteQueued){
+      gtPhysicalFileWriteQueued=false;
+      setTimeout(()=>gtPhysicalFileWriteNow(),50);
+    }
+  }
+}
+function gtSchedulePhysicalFileBackup(delay=250){
+  if(!gtPhysicalFileHandle) return;
+  clearTimeout(gtPhysicalFileWriteTimer);
+  gtPhysicalFileWriteTimer=setTimeout(()=>gtPhysicalFileWriteNow(),Math.max(0,delay));
+}
+async function gtSetPhysicalFile(){
+  if(!gtPhysicalFileSupported()){
+    alert('Tento prehliadač nepodporuje automatický zápis do pevného súboru. Použi Chrome a potom tlačidlo NASTAVIŤ PEVNÝ SÚBOR.');
+    return false;
+  }
+  try{
+    const handle=await window.showSaveFilePicker({
+      suggestedName:'Guard-Trainer-data.json',
+      types:[{description:'Guard Trainer dáta',accept:{'application/json':['.json']}}],
+      excludeAcceptAllOption:false
+    });
+    gtPhysicalFileHandle=handle;
+    await gtPhysicalFileSaveHandle(handle);
+    const ok=await gtPhysicalFileWriteNow();
+    const el=document.getElementById('gtPhysicalFileStatus');
+    if(el) el.textContent=ok ? '✓ Pevný súbor je nastavený a aktuálne dáta sú uložené.' : '⚠️ Súbor je vybraný, ale zápis nemá povolenie.';
+    toast(ok ? 'Pevný súbor Guard-Trainer-data.json je nastavený' : 'Súbor bol vybraný, ale zápis sa nepodaril');
+    return ok;
+  }catch(e){
+    if(e?.name!=='AbortError') console.warn('Physical file picker failed',e);
+    return false;
+  }
+}
+async function gtInitPhysicalFile(){
+  try{
+    const handle=await gtPhysicalFileLoadHandle();
+    if(!handle) return;
+    // Iba overenie povolenia – nikdy z fyzického súboru automaticky nečítame dáta späť.
+    const perm=typeof handle.queryPermission==='function' ? await handle.queryPermission({mode:'readwrite'}) : 'granted';
+    if(perm==='granted') gtPhysicalFileHandle=handle;
+    const el=document.getElementById('gtPhysicalFileStatus');
+    if(el && gtPhysicalFileHandle) el.textContent='✓ Pevný súbor je nastavený – dáta sa ukladajú automaticky.';
+  }catch(e){console.warn('Physical file init failed',e);}
+}
+async function gtImportPhysicalFile(){
+  if(!window.showOpenFilePicker){
+    const input=document.createElement('input');
+    input.type='file'; input.accept='.json,application/json';
+    input.onchange=()=>{const f=input.files?.[0];if(f)gtImportPhysicalFileBlob(f);};
+    input.click();
+    return;
+  }
+  try{
+    const [handle]=await window.showOpenFilePicker({multiple:false,types:[{description:'Guard Trainer dáta',accept:{'application/json':['.json']}}]});
+    const file=await handle.getFile();
+    await gtImportPhysicalFileBlob(file);
+    gtPhysicalFileHandle=handle;
+    await gtPhysicalFileSaveHandle(handle);
+  }catch(e){if(e?.name!=='AbortError')console.warn('Physical file import failed',e);}
+}
+async function gtImportPhysicalFileBlob(file){
+  try{
+    const p=JSON.parse(await file.text());
+    if(p?.guardTrainerPhysicalFile!==true || !p.data || typeof p.data!=='object') throw new Error('Neplatný Guard Trainer súbor');
+    if(!confirm('Naozaj načítať dáta z pevného súboru? Lokálne dáta Guard Trainer sa nahradia obsahom súboru.')) return;
+    Object.keys(p.data).forEach(k=>{
+      if(!k.startsWith('gt-') || isGTLocalAuthKey(k)) return;
+      originalSetItem(k,String(p.data[k]));
+    });
+    toast('Dáta z pevného súboru boli načítané');
+    setTimeout(()=>location.reload(),350);
+  }catch(e){console.error('Physical file restore error',e);toast('Pevný súbor sa nepodarilo načítať');}
+}
+
+// Načítaj iba handle. Obsah súboru sa nikdy automaticky nepoužíva ako serverový snapshot.
+setTimeout(()=>gtInitPhysicalFile(),0);
+
 function gtBackupRead(key){
   try{return localStorage.getItem(key);}catch(e){return null;}
 }
@@ -9343,6 +9520,7 @@ function renderBackups(){
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('attendance')">☑️ <span><b>ZÁLOHA DOCHÁDZKY</b><small id="gtBackupLast-attendance">Zatiaľ nebola vytvorená</small></span>⬇</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('billing')">▤ <span><b>ZÁLOHA VYÚČTOVANIA</b><small id="gtBackupLast-billing">Zatiaľ nebola vytvorená</small></span>⬇</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadFullBackup()">🛡️ <span><b>ZÁLOHA VŠETKÝCH DÁT</b><small id="gtBackupLast-full">Zatiaľ nebola vytvorená</small></span>⬇</button>
+      <button type="button" class="more-menu-item" onclick="gtSetPhysicalFile()">📁 <span><b>NASTAVIŤ PEVNÝ SÚBOR</b><small id="gtPhysicalFileStatus">Vyber Guard-Trainer-data.json – potom sa dáta ukladajú automaticky</small></span>›</button>
       <button type="button" class="more-menu-item" onclick="gtImportPhysicalFile()">📂 <span><b>NAČÍTAŤ Z PEVNÉHO SÚBORU</b><small>Obnoviť dáta priamo z vybraného JSON súboru</small></span>›</button>
       <button type="button" class="more-menu-item" onclick="gtOpenRestoreFile()">♻️ <span><b>OBNOVIŤ ZÁLOHU</b><small>Načítať uloženú zálohu späť do Guard Trainer</small></span>›</button>
       <input id="gtRestoreFileInput" type="file" accept=".json,application/json" style="display:none" onchange="gtHandleRestoreFile(this)">
@@ -9360,6 +9538,8 @@ function renderBackups(){
     </nav><div id="toast" class="toast"></div>`;
   applyThemeUI();
   gtRefreshBackupLabels();
+  const pfStatus=document.getElementById('gtPhysicalFileStatus');
+  if(pfStatus) pfStatus.textContent=gtPhysicalFileHandle ? '✓ Pevný súbor je nastavený – dáta sa ukladajú automaticky.' : (gtPhysicalFileSupported() ? 'Vyber Guard-Trainer-data.json – potom sa dáta ukladajú automaticky' : 'Tento prehliadač nepodporuje automatický pevný súbor.');
   // Po vykreslení načítaj posledné dátumy aj z cloudu.
   gtLoadBackupMetaFromCloud();
   gtStartBackupMetaCloudSync();
@@ -14595,6 +14775,7 @@ try{
 }catch(e){ gtCustomBillingRows=[]; }
 function persistCustomBillingRows(){
   try{ const json=JSON.stringify(Array.isArray(gtCustomBillingRows)?gtCustomBillingRows:[]); originalSetItem(GT_CUSTOM_BILLING_ROWS_KEY,json); }catch(e){}
+  try{ if(typeof gtSchedulePhysicalFileBackup==='function') gtSchedulePhysicalFileBackup(); }catch(e){}
 }
 function gtCustomBillingDateISO(r){
   const d=parsePaymentDate(r?.date);

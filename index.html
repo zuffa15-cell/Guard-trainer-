@@ -12762,13 +12762,35 @@ function normalizeBillingTrainerName(value){
 }
 function getMyBillingRowsForCurrentTrainer(rows,year,month){
   const list=Array.isArray(rows)?rows:[];
-  if((typeof isAdmin==='function' && isAdmin()) || (typeof isHeadTrainer==='function' && isHeadTrainer())) return list;
-  const current=normalizeBillingTrainerName(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'');
-  if(!current) return [];
-  return list.filter(r=>normalizeBillingTrainerName(r&&r.trainer)===current);
+  try{
+    if((typeof isAdmin==='function' && isAdmin()) || (typeof isHeadTrainer==='function' && isHeadTrainer())) return list;
+    const me=normalizeBillingTrainerName(typeof getCurrentTrainerDisplayName==='function' ? getCurrentTrainerDisplayName() : "");
+    if(!me) return [];
+    return list.filter(r=>normalizeBillingTrainerName(r && (r.trainer||r.name||""))===me);
+  }catch(e){
+    console.warn("Filtro vyúčtovania trénera zlyhal:",e);
+    return list;
+  }
 }
 
 let selectedBillingYear=null, selectedBillingMonth=null;
+
+function getMonthlyOtherDetails(rows){
+  const out=[];
+  (rows||[]).forEach(r=>{
+    if(r.cancelled || r.substituteReference) return;
+    const d=r.date||'';
+    const plus=Number(r.otherPlus||0);
+    const minus=Number(r.otherMinus||0);
+    if(plus>0){
+      out.push({date:r.otherPlusDate?formatBillingDate(r.otherPlusDate):d,type:'Iné +',reason:String(r.otherPlusReason||r.otherPlusFor||r.otherPlusDescription||'').trim()||'Neuvedené',amount:plus});
+    }
+    if(minus>0){
+      out.push({date:r.otherMinusDate?formatBillingDate(r.otherMinusDate):d,type:'Iné −',reason:String(r.otherMinusReason||r.otherMinusFor||r.otherMinusDescription||'').trim()||'Neuvedené',amount:-minus});
+    }
+  });
+  return out;
+}
 
 function renderMonthlyBilling(year=null,targetMonth=null){
   const app=document.querySelector('.app');
@@ -12874,17 +12896,17 @@ function renderMonthlyBilling(year=null,targetMonth=null){
             <th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>
           </tr></thead>
           <tbody>
-            ${rows.map(r=>`<tr class="${r.cancelled?'cancelled-billing-row':''} billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(r.name||''))})' title="Otvoriť konkrétnu dochádzku">
-              <td>${r.date}${r.cancelled?`<small class="cancelled-billing-label">ZRUŠENÝ TRÉNING</small>`:''}</td>
+            ${rows.map(r=>`<tr class="${r.cancelled?'cancelled-billing-row':(r.substituteReference?'substitute-info-row':'')} billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(r.name||''))})' title="Otvoriť konkrétnu dochádzku">
+              <td>${r.date}${r.cancelled?`<small class="cancelled-billing-label">ZRUŠENÝ TRÉNING</small>`:(r.substituteReference?`<small class="sub-label">⇄ TRÉNING ZASTUPOVANÝ<br><b>${r.substituteBy||'—'}</b></small>`:'')}</td>
               <td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span></td>
-              <td>${r.cancelled ? '' : `${r.trainingSum} €<small>${r.paying} platieb</small>`}</td>
-              <td>${r.cancelled ? '' : `${r.membershipSum} €`}</td>
-              <td>${r.cancelled ? '' : `${r.registrationSum} €`}</td>
-              <td class="plus">${r.cancelled ? '' : `${r.otherPlus} €`}</td>
-              <td class="minus">${r.cancelled ? '' : `−${r.otherMinus} €`}</td>
-              <td>${r.cancelled ? '' : `${r.gross} €`}</td>
-              <td class="minus">${r.cancelled ? '' : `−${r.trainerReward} €`}</td>
-              <td class="club-amount">${r.cancelled ? '' : `${r.clubReference?'0':r.clubAmount} € ›`}</td>
+              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.trainingSum} €<small>${r.paying} platieb</small>`}</td>
+              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.membershipSum} €`}</td>
+              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.registrationSum} €`}</td>
+              <td class="plus">${(r.substituteReference||r.cancelled) ? '' : `${r.otherPlus} €`}</td>
+              <td class="minus">${(r.substituteReference||r.cancelled) ? '' : `−${r.otherMinus} €`}</td>
+              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.gross} €`}</td>
+              <td class="minus">${(r.substituteReference||r.cancelled) ? '' : `−${r.trainerReward} €`}</td>
+              <td class="club-amount">${(r.substituteReference||r.cancelled) ? '' : `${r.clubReference?'0':r.clubAmount} € ›`}</td>
             </tr>`).join('')}
             ${!rows.length?`<tr><td colspan="10" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
           </tbody>
@@ -12919,9 +12941,9 @@ function renderMonthlyBilling(year=null,targetMonth=null){
     <nav class="bottom">
       <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
       <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-      <a class="nav nav-attendance" href="#attendance" onclick="return openMainAttendance(event)" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
       <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
-      <a class="nav active" href="#billing" onclick="return openMainBilling(event)"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
+      <a class="nav active" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
       <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
     </nav>`;
 }
@@ -13414,14 +13436,14 @@ function resetHeadTrainerBillingMonth(){
 }
 
 function standardBottomNav(active='billing', forceAttendance=false){
-  const showAttendance = forceAttendance || !isHeadTrainer() || isAnatoliiAttendanceEditor();
+  const showAttendance = forceAttendance || !isHeadTrainer();
   const navClass = forceAttendance && isHeadTrainer() ? 'bottom head-billing-nav' : 'bottom';
   return `<nav class="${navClass}">
     <a class="nav ${active==='home'?'active':''}" href="#home" onclick="return nav('home')"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
     <a class="nav ${active==='calendar'?'active':''}" href="#calendar" onclick="return nav('calendar')"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
-    ${showAttendance ? `<a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return openMainAttendance(event)"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>` : ''}
+    ${showAttendance ? `<a class="nav ${active==='attendance'?'active':''}" href="#attendance" onclick="return nav('attendance')"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>` : ''}
     <a class="nav ${active==='members'?'active':''}" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
-    <a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMainBilling(event)"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
+    <a class="nav ${active==='billing'?'active':''}" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
     <a class="nav ${active==='more'?'active':''}" href="#more" onclick="return nav('more')"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
   </nav>`;
 }
@@ -14239,15 +14261,35 @@ window.openMainAttendance=openMainAttendance;
 function openMainBilling(event){
   try{ if(event){ event.preventDefault(); event.stopPropagation(); } }catch(e){}
   try{
-    if((typeof isHeadTrainer==='function' && isHeadTrainer()) || (typeof isAdmin==='function' && isAdmin())){
+    const head = (typeof isHeadTrainer==='function' && isHeadTrainer());
+    const admin = (typeof isAdmin==='function' && isAdmin());
+    if(head || admin){
       history.pushState({gtRoute:'billing'},'',location.pathname+location.search+'#billing');
-      if(typeof renderHeadTrainerBilling==='function') renderHeadTrainerBilling();
+      if(typeof renderHeadTrainerBilling!=='function') throw new Error('renderHeadTrainerBilling nie je dostupná');
+      renderHeadTrainerBilling();
     }else{
       history.pushState({gtRoute:'trainer-month'},'',location.pathname+location.search+'#trainer-month');
-      if(typeof renderMonthlyBilling==='function') renderMonthlyBilling();
+      if(typeof renderMonthlyBilling!=='function') throw new Error('renderMonthlyBilling nie je dostupná');
+      renderMonthlyBilling();
     }
   }catch(err){
     console.error('VYÚČTOVANIE – OPEN:',err);
+    // Núdzové otvorenie: aj keby niektorý starý údaj v cloude spôsobil chybu
+    // v hlavnom renderi, obrazovka vyúčtovania sa musí otvoriť.
+    try{
+      const app=document.querySelector('.app');
+      if(app && !(typeof isHeadTrainer==='function' && isHeadTrainer()) && !(typeof isAdmin==='function' && isAdmin())){
+        const now=appToday();
+        const y=Number(now.year), m=Number(now.month);
+        const name=(typeof getCurrentTrainerDisplayName==='function' ? getCurrentTrainerDisplayName() : '') || CURRENT_TRAINER_NAME || 'Tréner';
+        const rows=(Array.isArray(monthlyBillingRecords)?monthlyBillingRecords:[]).filter(r=>{
+          const d=parsePaymentDate(r&&r.date);
+          return d && d.year===y && d.month===m && normalizeBillingTrainerName(r&& (r.trainer||r.name||''))===normalizeBillingTrainerName(name);
+        });
+        app.innerHTML=`<header class="topbar"><button class="menu" onclick="appBack()">‹</button><div class="brand">GUARD TRAINER</div></header><main class="content monthly-billing-page"><div class="section-title monthly-title">▣ &nbsp; MOJE VYÚČTOVANIE – <b>${skMonths[m-1].toUpperCase()} ${y}</b></div><div class="monthly-table-wrap"><table class="monthly-table"><thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>SPOLU</th></tr></thead><tbody>${rows.map(r=>`<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(r.name||''))})'><td>${r.date||''}</td><td>${r.group||''}</td><td>${Number(r.trainingSum||0)} €</td><td>${Number(r.membershipSum||0)} €</td><td>${Number(r.registrationSum||0)} €</td><td>${Number(r.gross||0)} €</td></tr>`).join('') || '<tr><td colspan="6" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>'}</tbody></table></div></main>`;
+        return false;
+      }
+    }catch(fallbackError){ console.error('VYÚČTOVANIE – FALLBACK:',fallbackError); }
     try{ toast('Vyúčtovanie sa nepodarilo otvoriť'); }catch(e){}
   }
   return false;

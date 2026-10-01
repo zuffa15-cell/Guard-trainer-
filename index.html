@@ -12751,6 +12751,23 @@ async function saveTrainingBilling(saveButton){
   return false;
 }
 
+// Pomocné funkcie pre "Moje vyúčtovanie".
+// Musia byť definované pred renderMonthlyBilling – pri starších úpravách sa
+// omylom stratili a otvorenie vyúčtovania potom skončilo v catch().
+function normBilling(value){
+  return String(value==null?'':value).trim().toUpperCase();
+}
+function normalizeBillingTrainerName(value){
+  return String(value==null?'':value).trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+}
+function getMyBillingRowsForCurrentTrainer(rows,year,month){
+  const list=Array.isArray(rows)?rows:[];
+  if((typeof isAdmin==='function' && isAdmin()) || (typeof isHeadTrainer==='function' && isHeadTrainer())) return list;
+  const current=normalizeBillingTrainerName(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'');
+  if(!current) return [];
+  return list.filter(r=>normalizeBillingTrainerName(r&&r.trainer)===current);
+}
+
 function renderMonthlyBilling(year=null,targetMonth=null){
   const app=document.querySelector('.app');
   if(!app) return false;

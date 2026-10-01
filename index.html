@@ -14822,6 +14822,9 @@ function renderMonthlyBilling(year=null,targetMonth=null){
         <button class="active-overview" onclick="renderMonthlyBilling()">📅 MESIAC</button>
         <button onclick="renderYearlyBilling()">📊 ROK</button>
       </div>
+      <div style="display:flex;justify-content:flex-end;margin:10px 0 6px;">
+        <button type="button" class="gt-custom-add-btn" onclick="return openCustomBillingRowDialog()">+ PRIDAŤ RIADOK</button>
+      </div>
       <div class="monthly-table-wrap">
         <table class="monthly-table">
           <thead><tr>
@@ -14865,19 +14868,6 @@ function renderMonthlyBilling(year=null,targetMonth=null){
           </tr></tfoot>
         </table>
       </div>
-      <section class="gt-custom-billing-section">
-        <div class="gt-custom-billing-section-head">
-          <b>VLASTNÉ RIADKY</b>
-          <button type="button" class="gt-custom-add-btn" onclick="return openCustomBillingRowDialog()">+ PRIDAŤ RIADOK</button>
-        </div>
-        ${rows.filter(r=>isCustomBillingRow(r)).length ? rows.filter(r=>isCustomBillingRow(r)).map(r=>`
-          <div class="gt-custom-billing-list-row">
-            <span class="gt-custom-row-date">${r.date}</span>
-            <span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>
-            <span class="gt-custom-row-note">${String(r.note||'')}</span>
-            <button type="button" class="admin-delete-billing-btn" onclick='return deleteMyBillingRecord(${JSON.stringify(String(r.key||''))},this)'>🗑</button>
-          </div>`).join('') : `<div class="gt-custom-empty">Žiadne vlastné riadky.</div>`}
-      </section>
       ${(()=>{const details=getMonthlyOtherDetails(rows); return details.length?`
       <section class="monthly-other-details">
         <div class="monthly-other-title">INÉ PLATBY – PODROBNOSTI</div>

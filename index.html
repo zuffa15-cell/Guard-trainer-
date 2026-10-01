@@ -6877,14 +6877,15 @@ function renderMore(){
        <small>Nastavenia a správa aplikácie</small>
      </div>
      ${isAdmin()?`<button class="more-menu-item admin-schedule-btn" onclick="openCreateSchedule()">📅 <span><b>VYTVORIŤ ROZVRH</b><small>Vytvorenie a opakovanie tréningov</small></span>›</button>
-     <button class="more-menu-item admin-schedule-btn" onclick="openScheduleManager()">🗓️ <span><b>SPRAVOVAŤ ROZVRH</b><small>Upraviť alebo vymazať tréning</small></span>›</button>
-     <button type="button" class="more-menu-item gt-sub-clear-btn" onclick="clearTodaySubstitutionTests()">🧹 <span><b>VYMAZAŤ DNEŠNÉ ZASTUPOVANIA</b><small>Vyčistí dnešné testovacie ponuky z cloudu</small></span>›</button>`:''}
-     ${isAdmin()||isAdminTesting()?`<button class="more-menu-item admin-schedule-btn" onclick="openRoleTesting()">🧪 <span><b>TESTOVANIE APLIKÁCIE</b><small>Vyskúšať pohľad Admin, Hlavný tréner, Tréner 1 alebo Tréner 2</small></span>›</button>`:''}
-     
+     <button class="more-menu-item admin-schedule-btn" onclick="openScheduleManager()">🗓️ <span><b>SPRAVOVAŤ ROZVRH</b><small>Upraviť alebo vymazať tréning</small></span>›</button>`:''}
+     ${isAdmin()||isAdminTesting()?`<button class="more-menu-item admin-schedule-btn" onclick="openRoleTesting()">🧪 <span><b>TESTOVANIE APLIKÁCIE</b><small>Vyskúšať pohľad Admin, Hlavný tréner, Tréner alebo Tréner 2</small></span>›</button>`:''}
+     ${hasHeadTrainerAccess()&&!isAdminTesting()?`<button class="more-menu-item" onclick="toggleHeadTrainerMode()">↔ <span><b>${isHeadTrainer()?'PREPNÚŤ NA TRÉNERA':'PREPNÚŤ NA HLAVNÉHO TRÉNERA'}</b><small>Prepnutie medzi tvojimi oprávnenými pohľadmi</small></span>›</button>`:''}
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
        <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
+       <button class="more-menu-item" onclick="renderMembers()">♙ <span><b>ČLENOVIA</b><small>Zoznam členov a profily</small></span>›</button>
        <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
+       <button class="more-menu-item" onclick="toast('Nastavenia Guard Trainer')">⚙ <span><b>NASTAVENIA</b><small>Správa aplikácie</small></span>›</button>
        <button type="button" class="more-menu-item gt-logout-button" onclick="return logoutGuardTrainer(this)">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>
      </div>
    </main>

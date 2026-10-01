@@ -14990,8 +14990,8 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       </section>`:''})()}
       <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${month}</small><br>${clubHandoverLabel(getClubHandoverStatus(CURRENT_TRAINER_NAME,shownMonth,shownYear),false)}</span><strong>${totalClub} €</strong></div>
       <div class="my-billing-pdf-actions my-billing-pdf-row">
-        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return printMyMonthlyBillingPDF()">PDF</button>
-        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
+        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return window.__GT_MY_BILLING_PDF ? window.__GT_MY_BILLING_PDF(event) : printMyMonthlyBillingPDF()">PDF</button>
+        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return window.__GT_MY_BILLING_SHARE ? window.__GT_MY_BILLING_SHARE(event) : emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
         <button type="button" class="membership-paid-report-btn" onclick="showTrainerMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
       </div>
 
@@ -16484,6 +16484,15 @@ setTimeout(set,80);setTimeout(set,300)})();
     var w=wrapOf(e);
     if(w && w.__gtBillingMoved){e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();w.__gtBillingMoved=false;}
   },true);
+})();
+</script>
+<script>
+(function(){
+function pdf(e){if(e){e.preventDefault();e.stopPropagation();}try{return window.printMyMonthlyBillingPDF?window.printMyMonthlyBillingPDF():false}catch(x){console.error(x);return false}}
+async function share(e){if(e){e.preventDefault();e.stopPropagation();}try{if(window.emailMyMonthlyBillingPDF)await window.emailMyMonthlyBillingPDF()}catch(x){console.error(x)}return false}
+window.__GT_MY_BILLING_PDF=pdf; window.__GT_MY_BILLING_SHARE=share;
+document.addEventListener('click',function(e){if(e.target.closest&&e.target.closest('.gt-my-pdf-btn')){pdf(e);return}if(e.target.closest&&e.target.closest('.gt-my-share-btn'))share(e)},true);
+var st=document.createElement('style');st.textContent='.gt-my-pdf-btn,.gt-my-share-btn{position:relative!important;z-index:9999!important;pointer-events:auto!important;touch-action:manipulation!important}';document.head.appendChild(st);
 })();
 </script>
 </body>

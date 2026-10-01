@@ -33,6 +33,8 @@ let cloudInitialSnapshotReady = false;
 let cloudInitialSnapshotReceived = false;
 let cloudInitialWaitStarted = false;
 let cloudPushQueued = false;
+// Počas obnovy zálohy nesmie Firestore snapshot vložiť späť staršiu verziu člena.
+let gtMembersRestoreInProgress = false;
 // Firebase sync sa spúšťa okamžite pri načítaní HTML, súbežne s videom orla.
 // Splash teda iba čaká na výsledok už prebiehajúceho načítania databázy.
 let cloudSyncStartedAt = Date.now();
@@ -319,6 +321,9 @@ function isGTLocalAuthKey(key){ return GT_LOCAL_AUTH_KEYS.has(String(key||'')); 
 
 
 function applyMembersFromCloudSnapshot(data){
+  // Počas obnovy ignoruj snapshoty, ktoré ešte môžu obsahovať starý stav.
+  // Po dokončení obnovy príde nový snapshot s čerstvými save-order timestampmi.
+  if(gtMembersRestoreInProgress) return false;
   // Členovia sa spracujú HNEĎ pri prijatí Firestore snapshotu. Tento blok
   // je zámerne nezávislý od globálneho _updatedAt a _lastUpdateBy, aby sa
   // zmena člena zobrazila na druhom zariadení okamžite aj vtedy, keď snapshot
@@ -666,20 +671,8 @@ function initCloudSync(){
           return;
         }
         if(k==='gt-substitution-offers'){
-          try{
-            const remoteOffers=JSON.parse(data[k]||'[]');
-            if(Array.isArray(remoteOffers)){
-              // Zástupy sú spoločné. Cloudový zoznam je autoritatívny pre ponuky,
-              // aby sa ponuka vytvorená na inom zariadení okamžite zobrazila.
-              substitutionOffers=remoteOffers;
-              originalSetItem(k,JSON.stringify(remoteOffers));
-              changed=true;
-              setTimeout(()=>{
-                try{updateSubstitutionQuick();}catch(e){}
-                try{if(typeof updateHomeQuickOverview==='function')updateHomeQuickOverview();}catch(e){}
-              },0);
-            }
-          }catch(e){ console.warn('Substitution cloud sync failed',e); }
+          // Zastupovanie bolo zrušené. Staré ponuky sa ignorujú.
+          substitutionOffers=[];
           return;
         }
         if(k==='gt-member-application-files-v1'){
@@ -857,13 +850,7 @@ function initCloudSync(){
             }
           }
         }catch(e){}
-        try{
-          const rawOffers=originalGetItem('gt-substitution-offers');
-          if(rawOffers){
-            const parsedOffers=JSON.parse(rawOffers);
-            if(Array.isArray(parsedOffers) && typeof substitutionOffers!=='undefined') substitutionOffers=parsedOffers;
-          }
-        }catch(e){}
+        try{ substitutionOffers=[]; }catch(e){}
         try{if(typeof loadSchedules==='function') loadSchedules();}catch(e){}
         // Po cloudovom pridaní člena treba obnoviť aj otvorený attendanceState.members.
         // Inak sa membersData síce synchronizuje, ale trénerova obrazovka zostane na starom zozname.
@@ -944,7 +931,90 @@ function initCloudSync(){
     syncEnabled = true;
     try{ initTrainersDirectSync(); }catch(e){}
     try{ initBillingDirectSync(); }catch(e){}
+    try{ initSubstitutionDirectSync(); }catch(e){}
 
+}
+
+const SUBSTITUTION_DIRECT_COLLECTION='guard-trainer-data';
+const SUBSTITUTION_DIRECT_DOC='substitution-offers';
+let substitutionDirectUnsub=null;
+
+function substitutionDirectMerge(remoteOffers){
+  try{
+    if(!Array.isArray(remoteOffers)) return false;
+    const local=Array.isArray(substitutionOffers)?substitutionOffers:[];
+    const map=new Map();
+    local.forEach(o=>{if(o&&o.id!=null) map.set(String(o.id),o);});
+    remoteOffers.forEach(o=>{
+      if(!o||o.id==null)return;
+      const k=String(o.id), prev=map.get(k);
+      if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) map.set(k,o);
+    });
+    const merged=Array.from(map.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0));
+    substitutionOffers=merged;
+    originalSetItem('gt-substitution-offers',JSON.stringify(merged));
+    setTimeout(()=>{
+      try{updateSubstitutionQuick();}catch(e){}
+      try{updateHomeQuickOverview();}catch(e){}
+    },0);
+    return true;
+  }catch(e){ console.warn('Direct substitution merge failed',e); return false; }
+}
+
+function pushSubstitutionDirect(){
+  try{
+    if(!db || !cloudEnabled) return;
+    const local=Array.isArray(substitutionOffers)?substitutionOffers:[];
+    const ref=db.collection(SUBSTITUTION_DIRECT_COLLECTION).doc(SUBSTITUTION_DIRECT_DOC);
+    ref.get().then(doc=>{
+      const remote=doc.exists && Array.isArray(doc.data()?.offers) ? doc.data().offers : [];
+      const map=new Map();
+      remote.forEach(o=>{if(o&&o.id!=null)map.set(String(o.id),o);});
+      local.forEach(o=>{
+        if(!o||o.id==null)return;
+        const k=String(o.id), prev=map.get(k);
+        if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) map.set(k,o);
+      });
+      return ref.set({offers:Array.from(map.values()),updatedAt:Date.now()},{merge:true});
+    }).catch(e=>console.warn('Direct substitution push failed',e));
+  }catch(e){ console.warn('Direct substitution push failed',e); }
+}
+
+function updateSubstitutionDirect(id, updater){
+  try{
+    if(!db || !cloudEnabled) return;
+    const ref=db.collection(SUBSTITUTION_DIRECT_COLLECTION).doc(SUBSTITUTION_DIRECT_DOC);
+    ref.get().then(doc=>{
+      const current=doc.exists && Array.isArray(doc.data()?.offers) ? doc.data().offers : [];
+      const map=new Map();
+      current.forEach(o=>{if(o&&o.id!=null)map.set(String(o.id),o);});
+      const key=String(id), currentOffer=map.get(key);
+      if(!currentOffer) return;
+      const updated=updater({...currentOffer}) || currentOffer;
+      updated.updatedAt=Date.now();
+      map.set(key,updated);
+      return ref.set({offers:Array.from(map.values()),updatedAt:Date.now()},{merge:true});
+    }).catch(e=>console.warn('Direct substitution update failed',e));
+  }catch(e){ console.warn('Direct substitution update failed',e); }
+}
+
+function deleteSubstitutionDirect(id){
+  try{
+    if(!db || !cloudEnabled) return;
+    const ref=db.collection(SUBSTITUTION_DIRECT_COLLECTION).doc(SUBSTITUTION_DIRECT_DOC);
+    ref.get().then(doc=>{
+      if(!doc.exists) return;
+      const offers=Array.isArray(doc.data()?.offers)?doc.data().offers:[];
+      const next=offers.filter(o=>String(o?.id)!==String(id));
+      return ref.set({offers:next,updatedAt:Date.now()},{merge:true});
+    }).catch(e=>console.warn('Direct substitution delete failed',e));
+  }catch(e){ console.warn('Direct substitution delete failed',e); }
+}
+
+function initSubstitutionDirectSync(){
+  // Zastupovanie bolo zrušené – realtime kanál sa už neinicializuje.
+  substitutionOffers=[];
+  return false;
 }
 
 function pushToCloud(force = false){
@@ -1078,6 +1148,23 @@ function pushToCloud(force = false){
         payload['gt-training-attendance-history']=JSON.stringify(out);
       }
     }catch(e){ console.warn('Attendance cloud merge before push failed',e); }
+
+    // ZASTUPOVANIE: zlúč ponuky z cloudu a lokálneho zariadenia podľa ID,
+    // aby zariadenie bez novej ponuky nemohlo prepísať ponuku vytvorenú inde.
+    try{
+      const localOffers=JSON.parse(payload['gt-substitution-offers']||'[]');
+      const remoteOffers=JSON.parse(remote['gt-substitution-offers']||'[]');
+      if(Array.isArray(localOffers) || Array.isArray(remoteOffers)){
+        const merged=new Map();
+        (Array.isArray(remoteOffers)?remoteOffers:[]).forEach(o=>{if(o&&o.id!=null)merged.set(String(o.id),o);});
+        (Array.isArray(localOffers)?localOffers:[]).forEach(o=>{
+          if(!o||o.id==null)return;
+          const key=String(o.id), prev=merged.get(key);
+          if(!prev || Number(o.updatedAt||0)>=Number(prev.updatedAt||0)) merged.set(key,o);
+        });
+        payload['gt-substitution-offers']=JSON.stringify(Array.from(merged.values()).sort((a,b)=>Number(a.id||0)-Number(b.id||0)));
+      }
+    }catch(e){ console.warn('Substitution cloud merge before push failed',e); }
 
     // VYÚČTOVANIE sa do shared-db NEZAPISUJE. Autoritatívny zdroj je guard-trainer-billing/all.
     return db.collection(CLOUD_COLLECTION).doc(CLOUD_DOC).set(payload,{merge:true});
@@ -4229,7 +4316,6 @@ body.gtLoginMode [id*="Splash"]{display:none!important;visibility:hidden!importa
 </style><style id="gt-substitution-cancel-style">
 .sub-reject{margin-top:8px;width:100%;padding:10px 12px;border:1px solid #e33;border-radius:7px;background:#160606;color:#ff6b6b;font-weight:800;cursor:pointer}
 .sub-reject:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
-.gt-sub-clear-btn{border-color:#b51f1f!important;background:#160606!important;color:#ff6b6b!important}.gt-sub-clear-btn:active{background:#b51f1f!important;border-color:#ff4b4b!important;color:#fff!important}
 </style><style id="gtSubstitutionAcceptedGreenV681">
 @keyframes gtSubstitutionGreenPulseV681{
 0%,100%{border-color:#35bd4d!important;background:rgba(20,125,45,.16)!important;box-shadow:0 0 0 1px rgba(55,210,85,.28) inset,0 0 5px rgba(55,210,85,.18)}
@@ -4665,7 +4751,7 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
     </button>
   </section>
 <section class="actions">
-    ${isAdmin()?`<button class="action" onclick="toast('Nový tréning – admin')">⊕ &nbsp; NOVÝ TRÉNING</button>`:''}<button class="action substitution-action" onclick="openSubstitutionOffer()">⇄ &nbsp; ZASTUPOVANIE</button>
+    ${isAdmin()?`<button class="action" onclick="toast('Nový tréning – admin')">⊕ &nbsp; NOVÝ TRÉNING</button>`:''}
     <button class="action" onclick="nav('calendar')">▣ &nbsp; KALENDÁR</button>
     <button class="action" onclick="nav('attendance')">♟ &nbsp; DOCHÁDZKA</button>
   </section>
@@ -4815,11 +4901,8 @@ function getAdminGroupName(code){
 }
 let MY_TRAINER_GROUPS=[];
 const GROUP_NAMES={A:'A – TOP TÍM',B:'B – NÁBOR BUDOKAN',C:'C – NÁBOR GRUNT',D:'D – DETI','D+':'D+ – TOP DETI'};
-let substitutionOffers = [];
-try{
-  const savedOffers=JSON.parse(localStorage.getItem('gt-substitution-offers')||'null');
-  if(Array.isArray(savedOffers)) substitutionOffers=savedOffers;
-}catch(e){ console.warn('Načítanie ponúk zastupovania sa nepodarilo',e); }
+let substitutionOffers = []; // LEGACY: zastupovanie je vypnuté
+// Staré ponuky zastupovania sa už nenačítavajú a nemajú žiadny vplyv na aplikáciu.
 function persistSubstitutionOffers(){
   try{ localStorage.setItem('gt-substitution-offers', JSON.stringify(Array.isArray(substitutionOffers)?substitutionOffers:[])); }
   catch(e){ console.warn('Uloženie ponúk zastupovania sa nepodarilo',e); }
@@ -4868,7 +4951,7 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
    return `<button type="button" class="sub-trainer" data-name="${n}"><span class="sub-check">□</span>${n}</button>`;
  }).join('')}
    </div>
-   <div class="sub-modal-actions"><button type="button" class="sub-cancel">ZRUŠIŤ</button><button type="button" class="sub-send">PONÚKNUŤ ZÁSTUP</button></div>
+   <div class="sub-modal-actions"><button type="button" class="sub-cancel">ZRUŠIŤ</button></div>
  </div>`;
  document.body.appendChild(modal);
  modal.querySelectorAll('.sub-trainer').forEach(b=>b.onclick=()=>{
@@ -4879,16 +4962,25 @@ function openSubstitutionOffer(code,name,dateOverride='',timeOverride='',placeOv
  modal.querySelector('.sub-cancel').onclick=()=>modal.remove();
  modal.querySelector('.sub-send').onclick=()=>{
    if(!selected.size){toast('Vyber aspoň jedného trénera');return;}
+   const senderId=currentTrainerAccountId();
+   const selectedTrainerIds=(visibleTrainerProfiles()||[])
+     .filter(t=>selected.has(String(t.full||t.name||'')))
+     .map(t=>Number(t.id)).filter(Number.isFinite);
    substitutionOffers.push({
      id:Date.now(), code, groupName:name,
      date:today,
      time,place,
      from:getCurrentTrainerDisplayName(),
+     fromTrainerId:senderId,
      trainers:[...selected],
+     trainerIds:selectedTrainerIds,
      acceptedBy:null,
-     status:'ČAKÁ NA PRIJATIE'
+     acceptedById:null,
+     status:'ČAKÁ NA PRIJATIE',
+     updatedAt:Date.now()
    });
    persistSubstitutionOffers();
+   try{ pushSubstitutionDirect(); }catch(e){}
    try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
    modal.remove();
    updateHomeQuickOverview();
@@ -4941,6 +5033,7 @@ function cancelSubstitution(id){
  if(o.from!==getCurrentTrainerDisplayName()){ toast('Túto ponuku môže zrušiť iba tréner, ktorý ju vytvoril.'); return false; }
  substitutionOffers=substitutionOffers.filter(x=>x.id!==id);
  persistSubstitutionOffers();
+ try{ deleteSubstitutionDirect(id); }catch(e){}
  try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
  const modal=document.getElementById('substitutionOffersModal');
  if(modal) modal.remove();
@@ -4976,9 +5069,14 @@ window.clearTodaySubstitutionTests=clearTodaySubstitutionTests;
 function acceptSubstitution(id){
  const o=substitutionOffers.find(x=>x.id===id);
  if(!o)return;
- o.acceptedBy=getCurrentTrainerDisplayName();
+ const accepterName=getCurrentTrainerDisplayName();
+ const accepterId=currentTrainerAccountId();
+ o.acceptedBy=accepterName;
+ o.acceptedById=accepterId;
  o.status='PRIJATÉ';
+ o.updatedAt=Date.now();
  persistSubstitutionOffers();
+ try{ updateSubstitutionDirect(id, offer=>{ offer.acceptedBy=accepterName; offer.acceptedById=accepterId; offer.status='PRIJATÉ'; return offer; }); }catch(e){}
  try{ if(typeof pushToCloud==='function') pushToCloud(true); }catch(e){}
 
  // Create the original trainer's informational zero-value entry immediately.
@@ -5013,34 +5111,11 @@ function acceptSubstitution(id){
 }
 
 function updateSubstitutionQuick(){
- const slot=document.getElementById('substitutionQuickSlot');
- if(!slot)return;
- const me=getCurrentTrainerDisplayName();
- const todayIso=String(appToday().iso||'');
- // Zastupovanie je aktuálne iba v deň konkrétneho tréningu.
- // Po skončení daného dňa nesmie zostať na Domove ako aktívne upozornenie.
- // Historické ponuky zostávajú dostupné cez obrazovku Zastupovanie, ale
- // na Domove sa zobrazujú/blikajú iba ponuky patriace k dnešnému tréningu.
- const relevantOffers=substitutionOffers.filter(o=>
-   String(o.date||'')===todayIso &&
-   (o.from===me || o.trainers.includes(me) || o.acceptedBy===me)
- );
- const incoming=relevantOffers.filter(o=>!o.acceptedBy && o.trainers.includes(me)).length;
- const outgoingWaiting=relevantOffers.filter(o=>o.from===me && !o.acceptedBy).length;
- const acceptedOutgoing=relevantOffers.filter(o=>o.from===me && o.acceptedBy).length;
- const acceptedIncoming=relevantOffers.filter(o=>o.acceptedBy===me).length;
- const acceptedTotal=acceptedOutgoing+acceptedIncoming;
- const pendingTotal=incoming+outgoingWaiting;
- const count=pendingTotal+acceptedTotal;
- if(!count){slot.innerHTML='';return;}
- const accepted=acceptedTotal>0;
- const text=accepted ? `Zastupovanie prijaté (${acceptedTotal})` :
-   (incoming ? `Ponuka zastupovania (${incoming} nová)` : 'Ponuka zastupovania čaká na prijatie');
- const cls=accepted ? 'accepted-offer' : (pendingTotal>0 ? 'important-offer' : '');
- slot.innerHTML=`<button type="button" class="q substitution-q ${cls}" onclick="showSubstitutionOffers()">
-   <span class="qicon">⇄</span><span class="qtext"><b>ZASTUPOVANIE</b><small>${text}</small></span><strong>${count}</strong><span class="go">›</span>
- </button>`;
+  // Zastupovanie bolo zrušené – na Domove sa už nezobrazuje.
+  const slot=document.getElementById('substitutionQuickSlot');
+  if(slot) slot.innerHTML='';
 }
+
 function normalizeGroupCode(value){
   return String(value||'').trim().toUpperCase().replace(/\s*\+\s*/g,'+');
 }
@@ -5164,14 +5239,6 @@ function todayTrainingGroups(){
 
   const result=new Set([...all].filter(c=>trainerGroupMatches(c,allowed)));
 
-  // A trainer who accepted a substitution must also see that substituted
-  // group in today's quick overview.
-  try{
-    const me=getCurrentTrainerDisplayName();
-    substitutionOffers
-      .filter(o=>o.date===t.iso && o.acceptedBy===me)
-      .forEach(o=>result.add(String(o.code||'').trim().toUpperCase()));
-  }catch(e){}
   return result;
 }
 function todayHomeVisibleGroupCodes(){
@@ -5195,12 +5262,6 @@ function todayHomeVisibleGroupCodes(){
 
   const result=new Set(visible.map(g=>quickGroupCode(g.code)).filter(Boolean));
 
-  // Zastupovanie prijaté trénerom je súčasť dnešných tréningov.
-  try{
-    const me=getCurrentTrainerDisplayName();
-    substitutionOffers.filter(o=>o.date===t.iso && o.acceptedBy===me)
-      .forEach(o=>{const c=quickGroupCode(o.code);if(c)result.add(c);});
-  }catch(e){}
 
   // Bezpečnostná poistka: ak filtrovanie role z nejakého dôvodu nevráti kartu,
   // ale dnešný rozvrh ju obsahuje, skupina sa nesmie zmeniť na „žiadne“.
@@ -5363,120 +5424,28 @@ function currentTrainerAccountId(){
   }catch(e){ return null; }
 }
 function trainerOwnsTraining(item){
-  if(isAdmin() || isHeadTrainer()) return true;
-  const myId=currentTrainerAccountId();
-  if(myId==null || !item) return false;
-
-  // The trainer's profile assignment is the primary group permission.
-  // Multiple trainers may legitimately be assigned to the same group.
-  // Therefore a training in one of my assigned groups is mine to open,
-  // even when an older schedule row still contains another/legacy trainerId.
-  try{
-    const profile=getCurrentTestTrainerProfile();
-    const myGroups=new Set((profile?.groups||[])
-      .map(x=>String(x).trim().toUpperCase()).filter(Boolean));
-    // Include groups resolved from the current trainer ID and active schedule.
-    // This fixes trainers whose profile copy is stale but whose group is
-    // correctly assigned in the current schedule.
-    try{
-      (getCurrentTrainerGroups()||[]).forEach(x=>myGroups.add(String(x).trim().toUpperCase()));
-    }catch(e){}
-    const code=normalizeGroupCode(item.groupCode||item.code||item.group||'');
-    if(groupRosterCodes(code).some(c=>myGroups.has(c))) return true;
-  }catch(e){}
-
-  // Backward-compatible ownership for schedules that are not represented in
-  // the trainer profile yet: use explicit trainer IDs, then trainer name.
-  const ids=Array.isArray(item.trainerIds)?item.trainerIds.map(Number):[];
-  if(item.trainerId!=null) ids.push(Number(item.trainerId));
-  if(ids.includes(myId)) return true;
-  try{
-    const me=(trainersData||[]).find(t=>Number(t.id)===myId);
-    const myName=String(me?.full||me?.name||'').trim().toLowerCase();
-    return !!myName && myName===String(item.trainer||'').trim().toLowerCase();
-  }catch(e){ return false; }
+  // ZASTUPOVANIE JE ZRUŠENÉ: každý prihlásený tréner môže otvoriť
+  // ktorýkoľvek tréning.
+  if(!item) return false;
+  return isAdmin() || isHeadTrainer() || currentTrainerAccountId()!=null;
 }
 
 function filterHomeItemsForCurrentRole(items){
-  const accountId=currentTrainerAccountId();
-  if(accountId!=null && !isAdmin() && !isHeadTrainer()){
-    // For a real trainer, the profile assignment is authoritative for which
-    // group cards are visible. Do NOT require trainerId on the schedule row:
-    // old/new schedule rows can legitimately lack that field, while the Admin
-    // has already assigned the group to this trainer.
-    const p=getCurrentTestTrainerProfile();
-    const allowed=new Set((p?.groups||[]).map(x=>String(x).trim().toUpperCase()).filter(Boolean));
-    try{ (getCurrentTrainerGroups()||[]).forEach(x=>allowed.add(String(x).trim().toUpperCase())); }catch(e){}
-    const iso=appToday().iso;
-    const me=getCurrentTrainerDisplayName();
-    const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
-    return (items||[]).filter(g=>{
-      const code=normalizeGroupCode(g?.code||'');
-      const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===code && (!o.time || String(o.time||'')===String(g.time||'')));
-      return trainerGroupMatches(code, allowed) || incoming;
-    });
-  }
-  const allowed=getCurrentTestTrainerGroupCodes();
-  if(!allowed) return items;
-  const iso=appToday().iso;
-  const me=getCurrentTrainerDisplayName();
-
-  const outgoingAccepted=substitutionOffers.filter(o=>o.acceptedBy && o.from===me && o.date===iso);
-  const incomingAccepted=substitutionOffers.filter(o=>o.acceptedBy===me && o.date===iso);
-
-  return items.map(g=>{
-    const match=outgoingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
-    return match ? {...g,substitutionInactive:true,substitutionLabel:'ZASTUPOVANÝ TRÉNING',substitutionBy:match.acceptedBy} : g;
-  }).filter(g=>{
-    const incoming=incomingAccepted.some(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
-    return trainerGroupMatches(String(g.code||'').toUpperCase(), allowed) || incoming;
-  }).map(g=>{
-    const incoming=incomingAccepted.find(o=>String(o.code).toUpperCase()===String(g.code).toUpperCase() && String(o.time||'')===String(g.time||''));
-    return incoming ? {...g,substitutionActive:false,substitutionLabel:'',substitutionBy:''} : g;
-  });
+  // Každý tréner vidí celý dnešný rozvrh.
+  return items || [];
 }
 
 function hasAcceptedSubstitutionAccess(code,date,time=''){
-  try{
-    const me=String(getCurrentTrainerDisplayName()||'').trim();
-    const wantedCode=normalizeGroupCode(code);
-    const wantedDate=String(date||'');
-    const wantedTime=String(time||'').trim();
-    if(!me || !wantedCode || !wantedDate) return false;
-    return substitutionOffers.some(o=>{
-      if(String(o.acceptedBy||'').trim()!==me) return false;
-      if(String(o.date||'')!==wantedDate) return false;
-      if(String(o.code||'').trim().toUpperCase()!==wantedCode) return false;
-      return !wantedTime || !String(o.time||'').trim() || String(o.time||'').trim()===wantedTime;
-    });
-  }catch(e){ return false; }
+  // Zastupovanie bolo zrušené.
+  return false;
 }
+
 window.hasAcceptedSubstitutionAccess=hasAcceptedSubstitutionAccess;
 
 function openHomeTodayTraining(g){
-  if(!isAdmin() && !isHeadTrainer()){
-    const p=getCurrentTestTrainerProfile();
-    const myGroups=new Set((p?.groups||[]).map(x=>String(x).toUpperCase()));
-    try{ (getCurrentTrainerGroups()||[]).forEach(x=>myGroups.add(String(x).trim().toUpperCase())); }catch(e){}
-    const code=String(g?.code||g?.group||'').toUpperCase();
-    const today=appToday().iso;
-    const acceptedSubstitution=hasAcceptedSubstitutionAccess(code,today,String(g?.time||''));
-    if(code && trainerGroupMatches(code, myGroups)){
-      // Tréner má skupinu pridelenú.
-    }else if(acceptedSubstitution){
-      // PRIJATÝ ZÁSTUP: dočasný prístup k tomuto konkrétnemu tréningu,
-      // aj keď skupina nie je v profile trénera.
-    }else if(!trainerOwnsTraining(g)){
-      toast('Tento tréning/skupina nepatrí tomuto trénerovi.');
-      return false;
-    }
-  }
+  // Každý tréner môže otvoriť ktorýkoľvek tréning.
   // HARD SEPARATION: Home has its own entry context. It must never read the
   // last date selected in Calendar, even if the Calendar was opened moments ago.
-  if(g && g.substitutionInactive){
-    toast('Tento tréning je zastupovaný trénerom '+(g.substitutionBy||'iným trénerom')+'.');
-    return false;
-  }
   const todayIso=appToday().iso;
   window.__attendanceOpenedFromCalendar=false;
   window.__attendanceOpenSource='home';
@@ -6073,14 +6042,8 @@ function dayRows(){
     const safeTime=String(g.time||'').replace(/'/g,"\\'");
     const counts=isPast ? getCalendarAttendanceCounts(dateLabel,g.code,g.name) : null;
     const countText=counts?`<div class="attendance-count-meta">Prítomní: <b>${counts.present}</b> · Noví: <b>${counts.newCount}</b></div>`:'';
-    const testAllowed = typeof getCurrentTrainerGroups==='function'
-      ? new Set((getCurrentTrainerGroups()||[]).map(x=>String(x).trim().toUpperCase()))
-      : (typeof getCurrentTestTrainerGroupCodes==='function' ? getCurrentTestTrainerGroupCodes() : null);
-    const trainerGroups = testAllowed instanceof Set ? testAllowed : new Set((MY_TRAINER_GROUPS||[]).map(x=>String(x).trim().toUpperCase()));
-    const trainerAssigned=isAdmin() || isHeadTrainer() || trainerGroupMatches(g.code||'', trainerGroups);
-    const acceptedSubstitution=hasAcceptedSubstitutionAccess(g.code,dateLabel,g.time);
-    const canOpen=trainerAssigned || acceptedSubstitution;
-    const groupInactive=(!isHeadTrainer() && !isAdmin() && !canOpen);
+    // Každý tréner môže otvoriť ktorýkoľvek tréning v kalendári.
+    const groupInactive=false;
     return `<article class="training ${cancelled?'cancelled-training':''} ${groupInactive?'group-inactive':''}" data-group-code="${g.code}" data-group-name="${g.name}"
       onclick="${cancelled?'return false;':`openGroup('${safeCode}','${safeName}','${safeTime}','calendar')`}"
       oncontextmenu="event.preventDefault(); ${groupInactive?'return false;':`groupLongPress('${safeCode}','${safeName}','${safeTime}','${dateLabel}'); return false;`}">
@@ -9287,9 +9250,15 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
     let cloudMembers=[];
     try{cloudMembers=JSON.parse(cloudData[MEMBERS_STORAGE_KEY]||'[]');if(!Array.isArray(cloudMembers))cloudMembers=[];}catch(e){}
     const cloudIds=new Set(cloudMembers.filter(m=>m&&m.id!=null).map(m=>String(m.id)));
+    // OBVOVA MUSÍ MAŤ PREDNOSŤ pred aktuálnymi cloudovými timestampami.
+    // Ak by sme použili staré timestampy zo zálohy, následný realtime snapshot
+    // mohol staršiu verziu člena (bez nového dátumu narodenia/skupiny) znovu
+    // prepísať cez obnovené dáta. Preto všetkým obnoveným členom nastavíme
+    // nový spoločný čas obnovy. Samotné údaje člena sa nemenia.
     const now=Date.now();
-    const restoredOrder={...order};
+    const restoredOrder={};
     const restoredDelete={...dels};
+    members.forEach(m=>{ if(m&&m.id!=null) restoredOrder[String(m.id)]=now; });
     cloudIds.forEach(id=>{
       if(!wanted.has(id)) restoredDelete[id]=Math.max(Number(restoredDelete[id]||0),now);
     });
@@ -9297,11 +9266,9 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
       if(!restoredOrder[id]) restoredOrder[id]=now;
       if(Number(restoredDelete[id]||0)>=Number(restoredOrder[id]||0)) delete restoredDelete[id];
     });
+    // Obnova musí byť presná kópia zálohy. Nemeníme group, groups, dob
+    // ani iné údaje člena a nemeníme ani poradie záznamov.
     const restored=Array.from(wanted.values()).map(memberDirectV2Clean).filter(Boolean);
-    restored.sort((a,b)=>{
-      const s=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});
-      return s || (a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});
-    });
     tx.set(ref,{
       [MEMBERS_STORAGE_KEY]:JSON.stringify(restored),
       [MEMBER_SAVE_ORDER_KEY]:JSON.stringify(restoredOrder),
@@ -9331,7 +9298,9 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
     members.forEach(m=>{
       if(!m||m.id==null)return;
       const id=String(m.id);
-      batch.set(col.doc(id),{memberId:id,member:memberDirectV2Clean(m),updatedAt:Number(order[id]||now),deleted:false},{merge:true});
+      // Aj priamy realtime dokument musí dostať čas obnovy, nie starý čas zo zálohy.
+      // Inak by mohol starší cloudový dokument po obnove znovu prepísať skupinu/DOB.
+      batch.set(col.doc(id),{memberId:id,member:memberDirectV2Clean(m),updatedAt:now,deleted:false},{merge:true});
       if(++n>=450) n=450;
     });
     if(n) await batch.commit();
@@ -9351,15 +9320,35 @@ async function gtRestoreApplyData(data, type){
   };
   if(type==='full'){applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
   if(type==='members'||type==='full'){
+    gtMembersRestoreInProgress=true;
     try{
+      // Záloha je autoritatívna: načítaj ju 1:1. Pri obnove zámerne
+      // NEVOLÁME normalizeAllMembers(), pretože tá funkcia upravuje údaje
+      // člena (napr. group podľa groups) a tým by mohla zmeniť hodnotu zo zálohy.
       const arr=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]');
-      if(Array.isArray(arr)){membersData.splice(0,membersData.length,...arr);normalizeAllMembers();applyMemberApplicationFiles();}
-    }catch(e){console.warn('Obnova členov',e);}
-    try{
-      const ord=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}')||{};
+      if(!Array.isArray(arr)) throw new Error('Záloha členov neobsahuje pole členov');
+      const exact=arr.filter(m=>m&&m.id!=null).map(m=>memberDirectV2Clean(m)).filter(Boolean);
+      membersData.splice(0,membersData.length,...exact);
+      originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(exact));
+      applyMemberApplicationFiles();
+
+      // Vytvoríme nové save-order timestampy, aby žiadna staršia cloudová
+      // verzia nemohla po obnove prepísať DOB/skupinu/ostatné údaje.
+      const now=Date.now();
+      const ord={};
+      exact.forEach(m=>{ord[String(m.id)]=now;});
+      originalSetItem(MEMBER_SAVE_ORDER_KEY,JSON.stringify(ord));
       const dels=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
-      await gtRestoreMembersToCloud(membersData,ord,dels);
-    }catch(e){console.warn('Cloud obnova členov',e);}
+      await gtRestoreMembersToCloud(exact,ord,dels);
+      // Ešte raz zapíš presný stav lokálne po úspešnej cloudovej obnove.
+      membersData.splice(0,membersData.length,...exact.map(m=>({...m})));
+      originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(exact));
+    }catch(e){
+      console.warn('Obnova členov',e);
+      throw e;
+    }finally{
+      gtMembersRestoreInProgress=false;
+    }
   }
   if(type==='attendance'||type==='full'){try{pushToCloud(true);}catch(e){console.warn('Cloud sync dochádzky',e);}}
   if(type==='billing'||type==='full'){try{if(typeof pushBillingToCloud==='function')pushBillingToCloud();else if(typeof syncBillingDirect==='function')syncBillingDirect();}catch(e){console.warn('Cloud sync vyúčtovania',e);}}
@@ -9418,7 +9407,7 @@ function renderMore(){
      </div>
      ${isAdmin()?`<button class="more-menu-item admin-schedule-btn" onclick="openCreateSchedule()">📅 <span><b>VYTVORIŤ ROZVRH</b><small>Vytvorenie a opakovanie tréningov</small></span>›</button>
      <button class="more-menu-item admin-schedule-btn" onclick="openScheduleManager()">🗓️ <span><b>SPRAVOVAŤ ROZVRH</b><small>Upraviť alebo vymazať tréning</small></span>›</button>
-     <button type="button" class="more-menu-item gt-sub-clear-btn" onclick="clearTodaySubstitutionTests()">🧹 <span><b>VYMAZAŤ DNEŠNÉ ZASTUPOVANIA</b><small>Vyčistí dnešné testovacie ponuky z cloudu</small></span>›</button>`:''}
+     `:''}
      ${isAdmin()||isAdminTesting()?`<button class="more-menu-item admin-schedule-btn" onclick="openRoleTesting()">🧪 <span><b>TESTOVANIE APLIKÁCIE</b><small>Vyskúšať pohľad Admin, Hlavný tréner, Tréner 1 alebo Tréner 2</small></span>›</button>`:''}
      
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
@@ -10175,15 +10164,11 @@ function attendance(){
         });
       }catch(e){}
     }
-    const acceptedSubstitution=hasAcceptedSubstitutionAccess(wantedGroup,wantedDate,wantedTime);
-    const own=billingOwn || acceptedSubstitution || (typeof scheduleItemsForDate==='function'?scheduleItemsForDate(wantedDate):[]).some(x=>
-      groupRosterCodes(x.code||'').some(c=>c===wantedGroup) &&
-      (!wantedTime || String(x.time||'')===wantedTime) &&
-      trainerOwnsTraining(x)
-    );
-    // Pri otvorení dochádzky z konkrétneho riadku vyúčtovania ešte NESMIEME
-    // zmazať príznak otvorenia z vyúčtovania. attendance() ho používa nižšie
-    // na zachovanie presného dátumu kliknutého riadku.
+    // Každý tréner môže otvoriť ktorýkoľvek tréning.
+    const own=true;
+    // Flag from billing must stay active until the exact row date has been
+    // applied below. Previously it was cleared here too early, so
+    // refreshCurrentDateDefaults() replaced 28.9. with today's date.
     if(!own){ toast('Tento tréning patrí inému trénerovi.'); return; }
   } else {
     window.__attendanceOpenedFromBilling=false;
@@ -10197,15 +10182,17 @@ function attendance(){
   // Pri otvorení konkrétneho tréningu z „Moje vyúčtovanie“ je dátum z riadku
   // autoritatívny. Nesmie ho prepísať predvolený dnešný dátum ani iný vstupný
   // stav dochádzky. Rovnaký dátum použijeme aj po refreshCurrentDateDefaults().
-  if(window.__attendanceOpenedFromBilling && window.__attendanceBillingContext?.date){
+  if(openedFromBilling && window.__attendanceBillingContext?.date){
     attendanceState.date=String(window.__attendanceBillingContext.date);
   }
   refreshCurrentDateDefaults();
-  if(window.__attendanceOpenedFromBilling && (window.__attendanceBillingDateOverride || window.__attendanceBillingContext?.date)){
+  if(openedFromBilling && (window.__attendanceBillingDateOverride || window.__attendanceBillingContext?.date)){
     attendanceState.date=String(window.__attendanceBillingDateOverride || window.__attendanceBillingContext.date);
   }
-  // Až po použití dátumu z vyúčtovania môžeme príznak zmazať.
-  window.__attendanceOpenedFromBilling=false;
+  // The billing-row context has now been consumed. Keep the date already
+  // written to attendanceState; future normal attendance navigation should
+  // not inherit the billing override.
+  if(openedFromBilling) window.__attendanceOpenedFromBilling=false;
   applyTrainingSettingsForAttendance();
 
   // Dochádzka musí zobrazovať rovnaký čas ako Domov/Kalendár.
@@ -12605,25 +12592,6 @@ async function saveTrainingBilling(saveButton){
     savedBy:activeTrainer,
     savedByRole:(typeof isAdmin==='function' && isAdmin())?'ADMIN':((typeof isHeadTrainer==='function' && isHeadTrainer())?'HEAD_TRAINER':'TRAINER')
   };
-  // If this training was accepted as a substitute, the actual trainer gets
-  // the real billing record. The original trainer also gets a reference row
-  // with the same payment amounts, marked as "zastupoval XY". This reference
-  // is excluded from financial totals so the club is not counted twice.
-  const normSubName=s=>String(s||'').trim().toUpperCase();
-  const substitution=substitutionOffers.find(o =>
-    normSubName(o.acceptedBy)===normSubName(activeTrainer) &&
-    String(o.date)===String(attendanceState.date) &&
-    (
-      String(o.groupName||'')===String(attendanceState.name||'') ||
-      normSubName(o.code)===normSubName(attendanceState.group)
-    )
-  );
-  if(substitution){
-    record.substitute=true;
-    record.substituteFor=substitution.from;
-    record.substituteAcceptedBy=activeTrainer;
-    record.key=trainingKey+'|SUB|'+activeTrainer;
-  }
   const canonicalBillingKey=r=>{
     const d=parsePaymentDate(r&&r.date);
     const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
@@ -12655,41 +12623,6 @@ async function saveTrainingBilling(saveButton){
   // schovať práve uložený tréning.
   billingJustSaved.set(recordCanonical,{record, savedAt:Date.now()});
 
-  if(substitution){
-    const originalKey=trainingKey+'|ORIGINAL|'+substitution.from;
-    // The original trainer only gets an informational zero-value row.
-    // The substitute owns the actual payments and financial result.
-    const originalRecord={
-      ...record,
-      key:originalKey,
-      trainer:substitution.from,
-      paying:0,
-      trainingSum:0,
-      membershipSum:0,
-      registrationSum:0,
-      otherPlus:0,
-      otherMinus:0,
-      gross:0,
-      trainerReward:0,
-      clubAmount:0,
-      substitute:true,
-      substituteReference:true,
-      substituteBy:activeTrainer,
-      substituteLabel:'ZASTUPOVAL: '+activeTrainer,
-      originalTrainingPayments:record.trainingSum,
-      originalTrainingPaying:record.paying
-    };
-    const originalCanonical=`${String(substitution.from||'').trim().toUpperCase()}|${String(formatBillingDate(attendanceState.date)).trim().toUpperCase()}|${String(attendanceState.group||'').trim().toUpperCase()}`;
-    monthlyBillingRecords=monthlyBillingRecords.filter(r=>{
-      const d=parsePaymentDate(r&&r.date);
-      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r&&r.date||'');
-      const ck=`${String(r&&r.trainer||'').trim().toUpperCase()}|${dk}|${String(r&&r.group||'').trim().toUpperCase()}`;
-      const od=parsePaymentDate(formatBillingDate(attendanceState.date));
-      const odk=od?`${od.year}-${String(od.month).padStart(2,'0')}-${String(od.day).padStart(2,'0')}`:String(formatBillingDate(attendanceState.date)||'');
-      return ck!==`${String(substitution.from||'').trim().toUpperCase()}|${odk}|${String(attendanceState.group||'').trim().toUpperCase()}`;
-    });
-    monthlyBillingRecords.push(originalRecord);
-  }
   // Lokálny záznam je autoritatívny pre práve otvorenú obrazovku trénera.
   // Označ ho ako pending, aby ho starší realtime snapshot dočasne neodstránil.
   billingSaveInFlight.set(recordCanonical, record);
@@ -12726,7 +12659,7 @@ async function saveTrainingBilling(saveButton){
   setTimeout(()=>billingJustSaved.delete(recordCanonical),15000);
   try{ if(typeof renderMonthlyBilling==='function') renderMonthlyBilling(); }catch(e){}
   lockAttendanceFully();
-  toast(ok ? (substitution ? '✓ Vyúčtovanie uložené a odoslané – zástup: '+activeTrainer : '✓ Vyúčtovanie uložené a odoslané na server.') : '⚠ Vyúčtovanie je uložené lokálne, serverový zápis zlyhal.');
+  toast(ok ? '✓ Vyúčtovanie uložené a odoslané na server.' : '⚠ Vyúčtovanie je uložené lokálne, serverový zápis zlyhal.');
 
   // Zobrazenie vlastného vyúčtovania je okamžité. Už sa nečaká 1,5 sekundy
   // ani na ďalší veľký refresh zariadenia.
@@ -15941,7 +15874,7 @@ function showGroupOptions(code,name,time='',date=currentTrainingDate()){
       ${cancelled
         ? `<button class="restore-option" onclick="restoreTraining('${esc(date)}','${esc(code)}','${esc(time)}','${esc(name)}')">↩ VRÁTIŤ TRÉNING</button>`
         : `<button class="danger-option" onclick="cancelTraining('${esc(code)}','${esc(name)}','${esc(time)}','${esc(date)}')">✕ ZRUŠIŤ TRÉNING</button>
-           <button class="sub-option" onclick="offerSubstitute('${esc(code)}','${esc(name)}','${esc(time)}','${esc(date)}')">⇄ PONÚKNUŤ ZÁSTUP</button>`}
+`}
     </div>`;
   document.body.appendChild(modal);
 }
@@ -16017,15 +15950,6 @@ document.addEventListener('click',function(e){
   }
   const q=e.target.closest && e.target.closest('.quick .q');
   if(!q)return;
-
-  // ZASTUPOVANIE má vlastné okno. Nesmie sa preložiť na prvú
-  // položku rýchleho prehľadu (členské).
-  if(q.classList.contains('substitution-q')){
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    showSubstitutionOffers();
-    return false;
-  }
 
   const cards=[...document.querySelectorAll('.quick .q:not(.substitution-q)')];
   const type=['membership','registration','debt','birthday'][cards.indexOf(q)];

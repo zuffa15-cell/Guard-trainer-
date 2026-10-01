@@ -12751,6 +12751,164 @@ async function saveTrainingBilling(saveButton){
   return false;
 }
 
+function renderMonthlyBilling(year=null,targetMonth=null){
+  const app=document.querySelector('.app');
+  if(!app) return false;
+  normalizeMonthlyBillingRecords();
+  const now=appToday();
+  if(year==null||targetMonth==null){
+    if(selectedBillingYear==null){ selectedBillingYear=now.year; selectedBillingMonth=now.month; }
+  }else{
+    selectedBillingYear=Number(year); selectedBillingMonth=Number(targetMonth);
+  }
+  // Never navigate into a future month.
+  const future=(selectedBillingYear>now.year)||(selectedBillingYear===now.year&&selectedBillingMonth>now.month);
+  if(future){selectedBillingYear=now.year;selectedBillingMonth=now.month;}
+  const shownYear=selectedBillingYear, shownMonth=selectedBillingMonth;
+  const month=skMonths[shownMonth-1].toUpperCase()+' '+shownYear;
+  let rows=monthlyBillingRecords
+    .filter(r=>{
+      const d=parsePaymentDate(r.date);
+      return d && d.month===shownMonth && d.year===shownYear;
+    });
+  rows=getMyBillingRowsForCurrentTrainer(rows,shownYear,shownMonth);
+  // Final display guard: a trainer can never see two rows for the same
+  // calendar date + group. Older test data may contain duplicate ZZ/G rows
+  // under slightly different legacy record keys. Prefer the real financial
+  // row and keep only one row in the monthly view.
+  {
+    const unique=new Map();
+    rows.forEach(r=>{
+      const d=parsePaymentDate(r.date);
+      const dk=d?`${d.year}-${String(d.month).padStart(2,'0')}-${String(d.day).padStart(2,'0')}`:String(r.date||'');
+      const key=`${dk}|${normBilling(r.group)}`;
+      const prev=unique.get(key);
+      if(!prev){ unique.set(key,r); return; }
+      if(prev.substituteReference && !r.substituteReference){ unique.set(key,r); return; }
+      if(!prev.substituteReference && r.substituteReference){ return; }
+      // If both are real records, keep the latest one (the most recent save).
+      unique.set(key,r);
+    });
+    rows=Array.from(unique.values());
+  }
+  // Dátumy zostávajú od najnovšieho po najstarší. V rámci jedného dňa
+  // však skupiny zobrazujeme od poslednej uloženej dochádzky k staršej, nie podľa abecedy.
+  // Staršie záznamy bez savedAt si zachovajú pôvodné poradie.
+  const billingDisplayOrder=new Map(rows.map((r,i)=>[r, i]));
+  rows.sort((a,b)=>{
+      const da=parsePaymentDate(a.date), db=parsePaymentDate(b.date);
+      const dayDiff=new Date(db.year,db.month-1,db.day)-new Date(da.year,da.month-1,da.day);
+      if(dayDiff!==0) return dayDiff;
+
+      // PRIORITA: posledné uloženie DOCHÁDZKY pre konkrétny deň + skupinu.
+      // Najnovšie uložená skupina je vždy prvá.
+      const as=getAttendanceSavedAt(
+        da?`${da.year}-${String(da.month).padStart(2,'0')}-${String(da.day).padStart(2,'0')}`:a.date,
+        a.group
+      );
+      const bs=getAttendanceSavedAt(
+        db?`${db.year}-${String(db.month).padStart(2,'0')}-${String(db.day).padStart(2,'0')}`:b.date,
+        b.group
+      );
+      if(as!==bs){
+        if(as===0) return 1;
+        if(bs===0) return -1;
+        return bs-as;
+      }
+
+      // Spätná kompatibilita pre staré záznamy, ktoré ešte nemajú uložený
+      // timestamp dochádzky.
+      const sa=Number(a.savedAt||0), sb=Number(b.savedAt||0);
+      if(sa!==sb){
+        if(sa===0) return 1;
+        if(sb===0) return -1;
+        return sb-sa;
+      }
+      return (billingDisplayOrder.get(a)||0)-(billingDisplayOrder.get(b)||0);
+    });
+  const total=(key)=>rows.reduce((a,r)=>a+Number(r[key]||0),0);
+  const totalClub=total('clubAmount'), totalReward=total('trainerReward');
+  app.innerHTML=`
+    <header class="topbar">
+      <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
+      <div class="brand">GUARD TRAINER</div>
+    </header>
+    <main class="content monthly-billing-page">
+      <div class="monthly-trainer-card">
+        <div class="trainer-avatar">T</div>
+        <div><b>TRÉNER</b><span>${getCurrentTrainerDisplayName() || CURRENT_TRAINER_NAME || "Tréner"}</span></div>
+        <div class="monthly-badge">VYÚČTOVANIE</div>
+      </div>
+      <div class="section-title monthly-title">▣ &nbsp; MOJE VYÚČTOVANIE – <b>${month}</b></div>
+      <div class="billing-month-nav">
+        <button type="button" onclick="renderMonthlyBilling(${shownMonth===1?shownYear-1:shownYear},${shownMonth===1?12:shownMonth-1})">‹</button>
+        <span>${month}</span>
+        <button type="button" ${shownYear===now.year&&shownMonth===now.month?'disabled':''} onclick="renderMonthlyBilling(${shownMonth===12?shownYear+1:shownYear},${shownMonth===12?1:shownMonth+1})">›</button>
+      </div>
+      <div class="billing-overview-actions">
+        <button class="active-overview" onclick="renderMonthlyBilling()">📅 MESIAC</button>
+        <button onclick="renderYearlyBilling()">📊 ROK</button>
+      </div>
+      <div class="monthly-table-wrap">
+        <table class="monthly-table">
+          <thead><tr>
+            <th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r=>`<tr class="${r.cancelled?'cancelled-billing-row':''} billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(r.name||''))})' title="Otvoriť konkrétnu dochádzku">
+              <td>${r.date}${r.cancelled?`<small class="cancelled-billing-label">ZRUŠENÝ TRÉNING</small>`:''}</td>
+              <td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span></td>
+              <td>${r.cancelled ? '' : `${r.trainingSum} €<small>${r.paying} platieb</small>`}</td>
+              <td>${r.cancelled ? '' : `${r.membershipSum} €`}</td>
+              <td>${r.cancelled ? '' : `${r.registrationSum} €`}</td>
+              <td class="plus">${r.cancelled ? '' : `${r.otherPlus} €`}</td>
+              <td class="minus">${r.cancelled ? '' : `−${r.otherMinus} €`}</td>
+              <td>${r.cancelled ? '' : `${r.gross} €`}</td>
+              <td class="minus">${r.cancelled ? '' : `−${r.trainerReward} €`}</td>
+              <td class="club-amount">${r.cancelled ? '' : `${r.clubReference?'0':r.clubAmount} € ›`}</td>
+            </tr>`).join('')}
+            ${!rows.length?`<tr><td colspan="10" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
+          </tbody>
+          <tfoot><tr>
+            <th>SPOLU<br><small>${month}</small></th>
+            <th>${rows.length}</th>
+            <th>${total('trainingSum')} €</th>
+            <th>${total('membershipSum')} €</th>
+            <th>${total('registrationSum')} €</th>
+            <th>${total('otherPlus')} €</th>
+            <th>−${total('otherMinus')} €</th>
+            <th>${total('gross')} €</th>
+            <th>−${totalReward} €</th>
+            <th>${totalClub} €</th>
+          </tr></tfoot>
+        </table>
+      </div>
+      ${(()=>{const details=getMonthlyOtherDetails(rows); return details.length?`
+      <section class="monthly-other-details">
+        <div class="monthly-other-title">INÉ PLATBY – PODROBNOSTI</div>
+        ${details.map(d=>`<div class="monthly-other-row"><span>${d.date}</span><span>${d.type}</span><span>${d.reason}</span><strong>${d.amount>0?'+':''}${d.amount} €</strong></div>`).join('')}
+      </section>`:''})()}
+      <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${month}</small><br>${clubHandoverLabel(getClubHandoverStatus(CURRENT_TRAINER_NAME,shownMonth,shownYear),false)}</span><strong>${totalClub} €</strong></div>
+      <div class="my-billing-pdf-actions my-billing-pdf-row">
+        <button type="button" class="membership-paid-report-btn pdf-action-btn gt-my-pdf-btn" onclick="return printMyMonthlyBillingPDF()">PDF</button>
+        <button type="button" class="membership-paid-report-btn mail-action-btn gt-my-share-btn" onclick="return emailMyMonthlyBillingPDF()">ZDIEĽAŤ</button>
+        <button type="button" class="membership-paid-report-btn" onclick="showTrainerMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
+      </div>
+
+      <button class="back-to-attendance" onclick="nav('attendance')">← SPÄŤ NA DOCHÁDZKU</button>
+    </main>
+    <nav class="bottom">
+      <a class="nav" href="#home" onclick="return nav('home')" data-nav="home"><span class="ico">⌂</span><span class="nav-label">DOMOV</span></a>
+      <a class="nav" href="#calendar" onclick="return nav('calendar')" data-nav="calendar"><span class="ico">▦</span><span class="nav-label">KALENDÁR</span></a>
+      <a class="nav nav-attendance" href="#attendance" onclick="return nav('attendance')" data-nav="attendance"><span class="ico">☑</span><span class="nav-label">DOCHÁDZKA</span></a>
+      <a class="nav" href="#members" onclick="return nav('members')"><span class="ico people-nav-icon" aria-hidden="true"><svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="9" r="5" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor"/><path d="M2 27c0-6 4-10 9-10s9 4 9 10H2Z" fill="currentColor"/><path d="M18 27c.3-4.7 3-8 7-8 3.2 0 5.7 3.1 5.9 8H18Z" fill="currentColor"/></svg></span><span class="nav-label">ČLENOVIA</span></a>
+      <a class="nav active" href="#billing" onclick="return openMyBilling()"><span class="ico">▤</span><span class="nav-label">VYÚČTOVANIE</span></a>
+      <a class="nav" href="#more" onclick="return nav('more')" data-nav="more"><span class="ico">•••</span><span class="nav-label">VIAC</span></a>
+    </nav>`;
+}
+
+
+
 function renderYearlyBilling(){
   const app=document.querySelector('.app');
   const year=2026;
@@ -14035,7 +14193,8 @@ function nav(route){
     if(route==='home'){ if(location.hash!=='#home'){ history.pushState({gtRoute:'home'},'',location.pathname+location.search+'#home'); } renderHome(); return false; }
     if(route==='statistics'){ return openStatisticsScreen(); }
     if(route==='calendar'){ history.pushState({gtRoute:'calendar'},'',location.pathname+location.search+'#calendar'); renderCalendar(); return false; }
-    if(route==='attendance'){ if(isHeadTrainer() && !isRealTrainerAttendanceEditor()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; }
+    if(route==='attendance'){
+      try{ if(isHeadTrainer() && !isRealTrainerAttendanceEditor()){ toast('Hlavný tréner nemôže zapisovať dochádzku'); return false; } }catch(e){}
       window.__attendanceOpenedFromBilling=false;
       window.__attendanceBillingContext=null;
       // DOCHÁDZKA z Domova / hlavnej navigácie je vždy dnešný deň.

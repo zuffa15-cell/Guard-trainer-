@@ -1594,7 +1594,7 @@ body{overflow-x:hidden}
 .club-total-card{margin-top:12px;border:1px solid #d49b00;border-radius:7px;background:linear-gradient(90deg,#1a1200,#050505);box-shadow:0 0 9px rgba(255,193,7,.25);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;color:#ffd12b;font-weight:800}
 .club-total-card span{font-size:15px}.club-total-card small{font-size:9px;color:#ddd}.club-total-card strong{font-size:30px}
 .billing-info{margin-top:8px;border:1px solid #493b12;border-radius:5px;padding:8px;color:#aaa;font-size:12px}.back-to-attendance{margin-top:10px;width:100%;padding:11px;border:1px solid #c58d00;border-radius:7px;background:#d99a10;color:#111;font-weight:800}
-.manual-billing-section{margin-top:12px;border:1px solid #6f5200;border-radius:8px;background:#050505;padding:10px}.manual-billing-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.manual-billing-head h3{margin:0;color:#ffd12b;font-size:13px}.manual-billing-add{border:1px solid #d49b00;background:#d99a10;color:#111;border-radius:7px;padding:8px 10px;font-weight:900;cursor:pointer}.manual-billing-form{display:grid;grid-template-columns:1fr 80px 1.7fr auto;gap:7px;align-items:center;margin-bottom:9px}.manual-billing-form input,.manual-billing-form select{width:100%;box-sizing:border-box;padding:9px 8px;border-radius:6px;border:1px solid #6f5200;background:#111;color:#fff;font-size:12px}.manual-billing-form button{padding:9px 10px;border-radius:6px;border:1px solid #d49b00;background:#ffd12b;color:#111;font-weight:900}.manual-billing-table{width:100%;border-collapse:collapse;font-size:11px}.manual-billing-table th,.manual-billing-table td{border:1px solid #4f3d0b;padding:7px 6px;text-align:left}.manual-billing-table th{color:#eee;background:#090909}.manual-billing-table td{color:#ddd}.manual-billing-delete{border:1px solid #7b2525;background:#210707;color:#ff7070;border-radius:5px;padding:4px 7px;font-weight:800}.manual-billing-empty{padding:8px;text-align:center;color:#888;font-size:11px}
+.manual-billing-section{margin-top:12px;border:1px solid #6f5200;border-radius:8px;background:#050505;padding:10px}.manual-billing-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.manual-billing-head h3{margin:0;color:#ffd12b;font-size:13px}.manual-billing-add{border:1px solid #d49b00;background:#d99a10;color:#111;border-radius:7px;padding:8px 10px;font-weight:900;cursor:pointer}.manual-billing-form{display:grid;grid-template-columns:1fr 80px 1.7fr auto;gap:7px;align-items:center;margin-bottom:9px}.manual-billing-form input,.manual-billing-form select{width:100%;box-sizing:border-box;padding:9px 8px;border-radius:6px;border:1px solid #6f5200;background:#111;color:#fff;font-size:12px}.manual-billing-form button{padding:9px 10px;border-radius:6px;border:1px solid #d49b00;background:#ffd12b;color:#111;font-weight:900}.manual-billing-table{width:100%;border-collapse:collapse;font-size:11px}.manual-billing-table th,.manual-billing-table td{border:1px solid #4f3d0b;padding:7px 6px;text-align:left}.manual-billing-table th{color:#eee;background:#090909}.manual-billing-table td{color:#ddd}.manual-billing-delete{border:1px solid #7b2525;background:#210707;color:#ff7070;border-radius:5px;padding:4px 7px;font-weight:800}.manual-billing-empty{padding:8px;text-align:center;color:#888;font-size:11px}.manual-billing-inline-note{text-align:left!important}
 @media(max-width:600px){.manual-billing-form{grid-template-columns:1fr 70px}.manual-billing-form input[type="text"]{grid-column:1/-1}.manual-billing-form button{grid-column:1/-1}.manual-billing-table{font-size:10px}}
 
 .billing-overview-actions{display:flex;gap:8px;margin:10px 0}
@@ -12703,11 +12703,17 @@ function saveBillingManualNotes(all){
   try{originalSetItem('gt-billing-manual-notes-v1',raw);}catch(e){}
 }
 function addBillingManualNote(trainerName,month,year){
-  const date=document.getElementById('manualBillingDate')?.value||'';
+  const dateInput=(document.getElementById('manualBillingDate')?.value||'').trim();
   const group=document.getElementById('manualBillingGroup')?.value||'';
   const note=(document.getElementById('manualBillingNote')?.value||'').trim();
-  if(!date){toast('Vyber dátum');return false;}
+  const dm=dateInput.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if(!dm){toast('Dátum zadaj v tvare deň.mesiac.rok, napr. 15.9.2026');return false;}
+  const day=Number(dm[1]), mon=Number(dm[2]), yr=Number(dm[3]);
+  const check=new Date(yr,mon-1,day);
+  if(!Number.isFinite(day)||!Number.isFinite(mon)||day<1||day>31||mon<1||mon>12||check.getFullYear()!==yr||check.getMonth()!==mon-1||check.getDate()!==day){toast('Dátum nie je platný');return false;}
+  const date=`${yr}-${String(mon).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
   if(!note){toast('Napíš poznámku');return false;}
+  if(yr!==Number(year)||mon!==Number(month)){toast('Dátum musí patriť do zvoleného mesiaca');return false;}
   try{
     const raw=localStorage.getItem('gt-billing-manual-notes-v1');
     const all=raw?JSON.parse(raw):{};
@@ -12812,7 +12818,7 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
         <button type="button" class="manual-billing-add" onclick="document.getElementById('manualBillingForm').style.display='grid';document.getElementById('manualBillingNote')?.focus();">＋ PRIDAŤ RIADOK</button>
       </div>
       <div id="manualBillingForm" class="manual-billing-form" style="display:none">
-        <input id="manualBillingDate" type="date" value="${year}-${String(month).padStart(2,'0')}-${String(appToday().day).padStart(2,'0')}" aria-label="Dátum">
+        <input id="manualBillingDate" type="text" inputmode="numeric" placeholder="deň.mesiac.rok" aria-label="Dátum" autocomplete="off">
         <select id="manualBillingGroup" aria-label="Skupina">
           <option value="">Skupina</option><option>A</option><option>B</option><option>C</option><option>D</option><option>D+</option>
         </select>
@@ -14784,7 +14790,7 @@ function renderMonthlyBilling(year=null,targetMonth=null){
           <button type="button" class="manual-billing-add" onclick="document.getElementById('manualBillingForm')?.style.setProperty('display','grid');document.getElementById('manualBillingNote')?.focus();">＋ PRIDAŤ RIADOK</button>
         </div>
         <div id="manualBillingForm" class="manual-billing-form" style="display:none">
-          <input id="manualBillingDate" type="date" value="${shownYear}-${String(shownMonth).padStart(2,'0')}-${String(appToday().day).padStart(2,'0')}" aria-label="Dátum">
+          <input id="manualBillingDate" type="text" inputmode="numeric" placeholder="deň.mesiac.rok" aria-label="Dátum" autocomplete="off">
           <select id="manualBillingGroup" aria-label="Skupina"><option value="">Skupina</option><option>A</option><option>B</option><option>C</option><option>D</option><option>D+</option></select>
           <input id="manualBillingNote" type="text" maxlength="180" placeholder="Poznámka – napíš vlastný text">
           <button type="button" onclick='return addBillingManualNote(${JSON.stringify(String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||''))},${Number(shownMonth)},${Number(shownYear)})'>ULOŽIŤ</button>

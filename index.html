@@ -4736,6 +4736,10 @@ src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAJY9bW9vd
 <div id="toast" class="toast"></div>
 </div>
 
+<style id="gt-custom-billing-row-style">
+.gt-custom-billing-row td{background:rgba(255,198,42,.05)!important;}
+.gt-custom-billing-row td:nth-child(3){text-align:left!important;}
+</style>
 <script>
 /* v457 – FIX: trainer calendar permissions use profile-assigned groups */
 const APP_START_DATE = '2026-08-31';
@@ -8987,10 +8991,6 @@ function saveSchedule(){
  }
  setTimeout(()=>{ openScheduleManager(); },650);
 }
-<style id="gt-custom-billing-row-style">
-.gt-custom-billing-row td{background:rgba(255,198,42,.05)!important;}
-.gt-custom-billing-row td:nth-child(3){text-align:left!important;}
-</style>
 /* =========================================================
    MOBILNÉ ZÁLOHY DÁT v1
    - samostatná záloha členov, dochádzky a vyúčtovania
@@ -13769,7 +13769,9 @@ html,body{color-scheme:dark!important;}
       </table>
       <div class="total">${total}</div>
     
-<script>\n(function(){\n  const CARD_CLASSES = [
+<script>
+(function(){
+  const CARD_CLASSES = [
     'training','q','info-bar','calendar-card','day-trainings','day-row','finance','att-group',
     'member-row','member-hero','member-detail-box','profile-card','profile-info','trainer-row',
     'billing-card','billing-summary','billing-row','stats-card','stat-card','more-card','settings-card',

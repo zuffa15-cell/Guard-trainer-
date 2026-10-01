@@ -33,6 +33,8 @@ let cloudInitialSnapshotReady = false;
 let cloudInitialSnapshotReceived = false;
 let cloudInitialWaitStarted = false;
 let cloudPushQueued = false;
+// Počas obnovy zálohy nesmie Firestore snapshot vložiť späť staršiu verziu člena.
+let gtMembersRestoreInProgress = false;
 // Firebase sync sa spúšťa okamžite pri načítaní HTML, súbežne s videom orla.
 // Splash teda iba čaká na výsledok už prebiehajúceho načítania databázy.
 let cloudSyncStartedAt = Date.now();
@@ -319,6 +321,9 @@ function isGTLocalAuthKey(key){ return GT_LOCAL_AUTH_KEYS.has(String(key||'')); 
 
 
 function applyMembersFromCloudSnapshot(data){
+  // Počas obnovy ignoruj snapshoty, ktoré ešte môžu obsahovať starý stav.
+  // Po dokončení obnovy príde nový snapshot s čerstvými save-order timestampmi.
+  if(gtMembersRestoreInProgress) return false;
   // Členovia sa spracujú HNEĎ pri prijatí Firestore snapshotu. Tento blok
   // je zámerne nezávislý od globálneho _updatedAt a _lastUpdateBy, aby sa
   // zmena člena zobrazila na druhom zariadení okamžite aj vtedy, keď snapshot
@@ -9245,9 +9250,15 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
     let cloudMembers=[];
     try{cloudMembers=JSON.parse(cloudData[MEMBERS_STORAGE_KEY]||'[]');if(!Array.isArray(cloudMembers))cloudMembers=[];}catch(e){}
     const cloudIds=new Set(cloudMembers.filter(m=>m&&m.id!=null).map(m=>String(m.id)));
+    // OBVOVA MUSÍ MAŤ PREDNOSŤ pred aktuálnymi cloudovými timestampami.
+    // Ak by sme použili staré timestampy zo zálohy, následný realtime snapshot
+    // mohol staršiu verziu člena (bez nového dátumu narodenia/skupiny) znovu
+    // prepísať cez obnovené dáta. Preto všetkým obnoveným členom nastavíme
+    // nový spoločný čas obnovy. Samotné údaje člena sa nemenia.
     const now=Date.now();
-    const restoredOrder={...order};
+    const restoredOrder={};
     const restoredDelete={...dels};
+    members.forEach(m=>{ if(m&&m.id!=null) restoredOrder[String(m.id)]=now; });
     cloudIds.forEach(id=>{
       if(!wanted.has(id)) restoredDelete[id]=Math.max(Number(restoredDelete[id]||0),now);
     });
@@ -9255,11 +9266,9 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
       if(!restoredOrder[id]) restoredOrder[id]=now;
       if(Number(restoredDelete[id]||0)>=Number(restoredOrder[id]||0)) delete restoredDelete[id];
     });
+    // Obnova musí byť presná kópia zálohy. Nemeníme group, groups, dob
+    // ani iné údaje člena a nemeníme ani poradie záznamov.
     const restored=Array.from(wanted.values()).map(memberDirectV2Clean).filter(Boolean);
-    restored.sort((a,b)=>{
-      const s=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});
-      return s || (a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});
-    });
     tx.set(ref,{
       [MEMBERS_STORAGE_KEY]:JSON.stringify(restored),
       [MEMBER_SAVE_ORDER_KEY]:JSON.stringify(restoredOrder),
@@ -9289,7 +9298,9 @@ async function gtRestoreMembersToCloud(backupMembers, backupOrder, backupDelete)
     members.forEach(m=>{
       if(!m||m.id==null)return;
       const id=String(m.id);
-      batch.set(col.doc(id),{memberId:id,member:memberDirectV2Clean(m),updatedAt:Number(order[id]||now),deleted:false},{merge:true});
+      // Aj priamy realtime dokument musí dostať čas obnovy, nie starý čas zo zálohy.
+      // Inak by mohol starší cloudový dokument po obnove znovu prepísať skupinu/DOB.
+      batch.set(col.doc(id),{memberId:id,member:memberDirectV2Clean(m),updatedAt:now,deleted:false},{merge:true});
       if(++n>=450) n=450;
     });
     if(n) await batch.commit();
@@ -9309,15 +9320,35 @@ async function gtRestoreApplyData(data, type){
   };
   if(type==='full'){applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
   if(type==='members'||type==='full'){
+    gtMembersRestoreInProgress=true;
     try{
+      // Záloha je autoritatívna: načítaj ju 1:1. Pri obnove zámerne
+      // NEVOLÁME normalizeAllMembers(), pretože tá funkcia upravuje údaje
+      // člena (napr. group podľa groups) a tým by mohla zmeniť hodnotu zo zálohy.
       const arr=JSON.parse(originalGetItem(MEMBERS_STORAGE_KEY)||'[]');
-      if(Array.isArray(arr)){membersData.splice(0,membersData.length,...arr);normalizeAllMembers();applyMemberApplicationFiles();}
-    }catch(e){console.warn('Obnova členov',e);}
-    try{
-      const ord=JSON.parse(originalGetItem(MEMBER_SAVE_ORDER_KEY)||'{}')||{};
+      if(!Array.isArray(arr)) throw new Error('Záloha členov neobsahuje pole členov');
+      const exact=arr.filter(m=>m&&m.id!=null).map(m=>memberDirectV2Clean(m)).filter(Boolean);
+      membersData.splice(0,membersData.length,...exact);
+      originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(exact));
+      applyMemberApplicationFiles();
+
+      // Vytvoríme nové save-order timestampy, aby žiadna staršia cloudová
+      // verzia nemohla po obnove prepísať DOB/skupinu/ostatné údaje.
+      const now=Date.now();
+      const ord={};
+      exact.forEach(m=>{ord[String(m.id)]=now;});
+      originalSetItem(MEMBER_SAVE_ORDER_KEY,JSON.stringify(ord));
       const dels=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{};
-      await gtRestoreMembersToCloud(membersData,ord,dels);
-    }catch(e){console.warn('Cloud obnova členov',e);}
+      await gtRestoreMembersToCloud(exact,ord,dels);
+      // Ešte raz zapíš presný stav lokálne po úspešnej cloudovej obnove.
+      membersData.splice(0,membersData.length,...exact.map(m=>({...m})));
+      originalSetItem(MEMBERS_STORAGE_KEY,JSON.stringify(exact));
+    }catch(e){
+      console.warn('Obnova členov',e);
+      throw e;
+    }finally{
+      gtMembersRestoreInProgress=false;
+    }
   }
   if(type==='attendance'||type==='full'){try{pushToCloud(true);}catch(e){console.warn('Cloud sync dochádzky',e);}}
   if(type==='billing'||type==='full'){try{if(typeof pushBillingToCloud==='function')pushBillingToCloud();else if(typeof syncBillingDirect==='function')syncBillingDirect();}catch(e){console.warn('Cloud sync vyúčtovania',e);}}

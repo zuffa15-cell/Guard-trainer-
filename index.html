@@ -1594,6 +1594,8 @@ body{overflow-x:hidden}
 .club-total-card{margin-top:12px;border:1px solid #d49b00;border-radius:7px;background:linear-gradient(90deg,#1a1200,#050505);box-shadow:0 0 9px rgba(255,193,7,.25);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;color:#ffd12b;font-weight:800}
 .club-total-card span{font-size:15px}.club-total-card small{font-size:9px;color:#ddd}.club-total-card strong{font-size:30px}
 .billing-info{margin-top:8px;border:1px solid #493b12;border-radius:5px;padding:8px;color:#aaa;font-size:12px}.back-to-attendance{margin-top:10px;width:100%;padding:11px;border:1px solid #c58d00;border-radius:7px;background:#d99a10;color:#111;font-weight:800}
+.manual-billing-section{margin-top:12px;border:1px solid #6f5200;border-radius:8px;background:#050505;padding:10px}.manual-billing-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.manual-billing-head h3{margin:0;color:#ffd12b;font-size:13px}.manual-billing-add{border:1px solid #d49b00;background:#d99a10;color:#111;border-radius:7px;padding:8px 10px;font-weight:900;cursor:pointer}.manual-billing-form{display:grid;grid-template-columns:1fr 80px 1.7fr auto;gap:7px;align-items:center;margin-bottom:9px}.manual-billing-form input,.manual-billing-form select{width:100%;box-sizing:border-box;padding:9px 8px;border-radius:6px;border:1px solid #6f5200;background:#111;color:#fff;font-size:12px}.manual-billing-form button{padding:9px 10px;border-radius:6px;border:1px solid #d49b00;background:#ffd12b;color:#111;font-weight:900}.manual-billing-table{width:100%;border-collapse:collapse;font-size:11px}.manual-billing-table th,.manual-billing-table td{border:1px solid #4f3d0b;padding:7px 6px;text-align:left}.manual-billing-table th{color:#eee;background:#090909}.manual-billing-table td{color:#ddd}.manual-billing-delete{border:1px solid #7b2525;background:#210707;color:#ff7070;border-radius:5px;padding:4px 7px;font-weight:800}.manual-billing-empty{padding:8px;text-align:center;color:#888;font-size:11px}
+@media(max-width:600px){.manual-billing-form{grid-template-columns:1fr 70px}.manual-billing-form input[type="text"]{grid-column:1/-1}.manual-billing-form button{grid-column:1/-1}.manual-billing-table{font-size:10px}}
 
 .billing-overview-actions{display:flex;gap:8px;margin:10px 0}
 .billing-overview-actions button{flex:1;padding:10px 8px;border:1px solid #6f5200;border-radius:7px;background:#111;color:#eee;font-weight:800}
@@ -12683,6 +12685,81 @@ function deleteBillingTrainingAsAdmin(recordKey,trainerName,date,groupCode,month
 }
 window.deleteBillingTrainingAsAdmin=deleteBillingTrainingAsAdmin;
 
+function billingManualNotesKey(trainerName,month,year){
+  const norm=s=>String(s||'').trim().replace(/\s+/g,' ').toUpperCase();
+  return `${norm(trainerName)}|${Number(year)}-${String(month).padStart(2,'0')}`;
+}
+function getBillingManualNotes(trainerName,month,year){
+  try{
+    const raw=localStorage.getItem('gt-billing-manual-notes-v1');
+    const all=raw?JSON.parse(raw):{};
+    const rows=all[billingManualNotesKey(trainerName,month,year)];
+    return Array.isArray(rows)?rows:[];
+  }catch(e){return [];}
+}
+function saveBillingManualNotes(all){
+  const raw=JSON.stringify(all||{});
+  localStorage.setItem('gt-billing-manual-notes-v1',raw);
+  try{originalSetItem('gt-billing-manual-notes-v1',raw);}catch(e){}
+}
+function addBillingManualNote(trainerName,month,year){
+  const date=document.getElementById('manualBillingDate')?.value||'';
+  const group=document.getElementById('manualBillingGroup')?.value||'';
+  const note=(document.getElementById('manualBillingNote')?.value||'').trim();
+  if(!date){toast('Vyber dátum');return false;}
+  if(!note){toast('Napíš poznámku');return false;}
+  try{
+    const raw=localStorage.getItem('gt-billing-manual-notes-v1');
+    const all=raw?JSON.parse(raw):{};
+    const key=billingManualNotesKey(trainerName,month,year);
+    if(!Array.isArray(all[key]))all[key]=[];
+    all[key].push({id:Date.now(),date,group:group||'—',note,createdAt:Date.now()});
+    saveBillingManualNotes(all);
+    renderHeadTrainerDetail(trainerName,month,year);
+    toast('Riadok bol uložený lokálne.');
+  }catch(e){console.error(e);toast('Riadok sa nepodarilo uložiť.');}
+  return false;
+}
+function deleteBillingManualNote(trainerName,month,year,id){
+  try{
+    const raw=localStorage.getItem('gt-billing-manual-notes-v1');
+    const all=raw?JSON.parse(raw):{};
+    const key=billingManualNotesKey(trainerName,month,year);
+    all[key]=(Array.isArray(all[key])?all[key]:[]).filter(x=>String(x.id)!==String(id));
+    saveBillingManualNotes(all);
+    renderHeadTrainerDetail(trainerName,month,year);
+  }catch(e){console.error(e);toast('Riadok sa nepodarilo vymazať.');}
+  return false;
+}
+window.addBillingManualNote=addBillingManualNote;
+window.deleteBillingManualNote=deleteBillingManualNote;
+
+// Vlastné riadky sa zobrazujú priamo medzi dennými záznamami podľa dátumu.
+function sortBillingManualNotesForMonth(notes){
+  return (Array.isArray(notes)?notes:[]).slice().sort((a,b)=>{
+    const da=parsePaymentDate(a?.date), db=parsePaymentDate(b?.date);
+    const ia=da?new Date(da.year,da.month-1,da.day).getTime():0;
+    const ib=db?new Date(db.year,db.month-1,db.day).getTime():0;
+    if(ia!==ib) return ib-ia;
+    return Number(b?.createdAt||b?.id||0)-Number(a?.createdAt||a?.id||0);
+  });
+}
+function renderInlineManualBillingRow(n,colspan=8){
+  const date=String(n?.date||'');
+  const group=String(n?.group||'—');
+  const note=String(n?.note||'');
+  const id=String(n?.id||'');
+  const trainer=String(window.__gtManualBillingTrainer||getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||'');
+  const month=Number(window.__gtManualBillingMonth||selectedBillingMonth||appToday().month);
+  const year=Number(window.__gtManualBillingYear||selectedBillingYear||appToday().year);
+  return `<tr class="manual-billing-inline-row">
+    <td>${date}</td>
+    <td><span class="monthly-group ${groupClass(group)}" style="background:${getGroupColor(group,'gold')} !important;background-image:none !important;">${group}</span></td>
+    <td colspan="${Math.max(1,colspan)}" class="manual-billing-inline-note">${note}</td>
+    <td class="manual-billing-inline-delete"><button type="button" onclick='event.preventDefault();event.stopPropagation();return deleteBillingManualNote(${JSON.stringify(trainer)},${month},${year},${JSON.stringify(id)})'>ZMAZAŤ</button></td>
+  </tr>`;
+}
+
 function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToday().year){
   const app=document.querySelector('.app');
   window.__gtHeadTrainerDetail={trainerName:String(trainerName||'').trim(),month:Number(month),year:Number(year)};
@@ -12692,6 +12769,18 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
   if(!realTrainer){ toast('Tréner sa v zozname nenašiel'); renderHeadTrainerBilling(); return; }
   const sum=k=>rows.reduce((a,r)=>a+Number(r[k]||0),0);
   const otherDetails=getMonthlyOtherDetails(rows);
+  const manualNotes=sortBillingManualNotesForMonth(getBillingManualNotes(trainerName,month,year));
+  const manualDisplayRows=[];
+  rows.forEach(r=>manualDisplayRows.push({type:'training',date:r.date,row:r}));
+  manualNotes.forEach(n=>manualDisplayRows.push({type:'manual',date:n.date,note:n}));
+  manualDisplayRows.sort((a,b)=>{
+    const da=parsePaymentDate(a.date), db=parsePaymentDate(b.date);
+    const ia=da?new Date(da.year,da.month-1,da.day).getTime():0;
+    const ib=db?new Date(db.year,db.month-1,db.day).getTime():0;
+    if(ia!==ib) return ib-ia;
+    if(a.type!==b.type) return a.type==='training'?-1:1;
+    return Number(b.row?.savedAt||b.note?.createdAt||b.note?.id||0)-Number(a.row?.savedAt||a.note?.createdAt||a.note?.id||0);
+  });
   const monthNames=['JANUÁR','FEBRUÁR','MAREC','APRÍL','MÁJ','JÚN','JÚL','AUGUST','SEPTEMBER','OKTÓBER','NOVEMBER','DECEMBER'];
   const mName=monthNames[month-1]||'MÁJ';
   app.innerHTML=`
@@ -12711,12 +12800,27 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
       <table class="monthly-table">
        <thead><tr><th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th><th></th>${isAdmin()?'<th>ZMAZAŤ</th>':''}</tr></thead>
        <tbody>
-       ${rows.map(r=>`<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(getAdminGroupName(r.group)||r.group||''))})' title="Otvoriť dochádzku tohto dňa"><td>${r.date}</td><td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span>${r.substituteLabel?`<small class="sub-label">⇄ ZASTUPOVANÝ TRÉNING<br><b>${r.substituteLabel}</b></small>`:''}</td><td>${r.trainingSum} €<small>${r.paying} platieb</small></td><td>${r.membershipSum} €</td><td>${r.registrationSum} €</td><td class="plus">${r.otherPlus} €</td><td class="minus">−${r.otherMinus} €</td><td>${r.gross} €</td><td class="minus">−${r.trainerReward} €</td><td class="club-amount">${r.clubAmount} €</td>${isAdmin()?`<td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.stopPropagation(); return window.deleteBillingTrainingAsAdmin(${JSON.stringify(String(r.key||''))},${JSON.stringify(String(trainerName||''))},${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${Number(month)},${Number(year)});'>🗑 ZMAZAŤ</button></td>`:''}</tr>`).join('')}
-       ${!rows.length?`<tr><td colspan="${isAdmin()?11:10}" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
+       ${manualDisplayRows.map(item=>item.type==='manual' ? `<tr class="manual-billing-inline-row"><td>${item.note.date||''}</td><td><span class="monthly-group ${groupClass(item.note.group)}" style="background:${getGroupColor(item.note.group,'gold')} !important;background-image:none !important;">${item.note.group||'—'}</span></td><td colspan="${isAdmin()?9:8}" class="manual-billing-inline-note">${String(item.note.note||'')}</td><td class="manual-billing-inline-delete"><button type="button" onclick='event.preventDefault();event.stopPropagation();return deleteBillingManualNote(${JSON.stringify(String(trainerName||''))},${Number(month)},${Number(year)},${JSON.stringify(String(item.note.id||''))})'>ZMAZAŤ</button></td></tr>` : `<tr class="billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(item.row.date||''))},${JSON.stringify(String(item.row.group||''))},${JSON.stringify(String(getAdminGroupName(item.row.group)||item.row.group||''))})' title="Otvoriť dochádzku tohto dňa"><td>${item.row.date}</td><td><span class="monthly-group ${groupClass(item.row.group)}" style="background:${getGroupColor(item.row.group,'gold')} !important;background-image:none !important;">${item.row.group}</span>${item.row.substituteLabel?`<small class="sub-label">⇄ ZASTUPOVANÝ TRÉNING<br><b>${item.row.substituteLabel}</b></small>`:''}</td><td>${item.row.trainingSum} €<small>${item.row.paying} platieb</small></td><td>${item.row.membershipSum} €</td><td>${item.row.registrationSum} €</td><td class="plus">${item.row.otherPlus} €</td><td class="minus">−${item.row.otherMinus} €</td><td>${item.row.gross} €</td><td class="minus">−${item.row.trainerReward} €</td><td class="club-amount">${item.row.clubAmount} €</td>${isAdmin()?`<td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.stopPropagation(); return window.deleteBillingTrainingAsAdmin(${JSON.stringify(String(item.row.key||''))},${JSON.stringify(String(trainerName||''))},${JSON.stringify(String(item.row.date||''))},${JSON.stringify(String(item.row.group||''))},${Number(month)},${Number(year)});'>🗑 ZMAZAŤ</button></td>`:''}</tr>`).join('')}
+       ${!manualDisplayRows.length?`<tr><td colspan="${isAdmin()?11:10}" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
        </tbody>
        <tfoot><tr><th>SPOLU<br><small>${mName} ${year}</small></th><th>${rows.length}</th><th>${sum('trainingSum')} €</th><th>${sum('membershipSum')} €</th><th>${sum('registrationSum')} €</th><th>${sum('otherPlus')} €</th><th>−${sum('otherMinus')} €</th><th>${sum('gross')} €</th><th class="minus">−${sum('trainerReward')} €</th><th class="club-amount">${sum('clubAmount')} €</th>${isAdmin()?'<th>—</th>':''}</tr></tfoot>
       </table>
     </div>
+    <section class="manual-billing-section">
+      <div class="manual-billing-head">
+        <h3>📝 VLASTNÉ RIADKY</h3>
+        <button type="button" class="manual-billing-add" onclick="document.getElementById('manualBillingForm').style.display='grid';document.getElementById('manualBillingNote')?.focus();">＋ PRIDAŤ RIADOK</button>
+      </div>
+      <div id="manualBillingForm" class="manual-billing-form" style="display:none">
+        <input id="manualBillingDate" type="date" value="${year}-${String(month).padStart(2,'0')}-${String(appToday().day).padStart(2,'0')}" aria-label="Dátum">
+        <select id="manualBillingGroup" aria-label="Skupina">
+          <option value="">Skupina</option><option>A</option><option>B</option><option>C</option><option>D</option><option>D+</option>
+        </select>
+        <input id="manualBillingNote" type="text" maxlength="180" placeholder="Poznámka – napíš vlastný text">
+        <button type="button" onclick='return addBillingManualNote(${JSON.stringify(String(trainerName||''))},${Number(month)},${Number(year)})'>ULOŽIŤ</button>
+      </div>
+      <div class="manual-billing-empty">Vlastné riadky sú vložené priamo medzi vyúčtovanie podľa dátumu.</div>
+    </section>
     <section class="billing-card head-other-summary">
       <h3>INÉ PLATBY – PODROBNOSTI</h3>
       <div class="head-other-detail-head">
@@ -14602,8 +14706,22 @@ function renderMonthlyBilling(year=null,targetMonth=null){
       }
       return (billingDisplayOrder.get(a)||0)-(billingDisplayOrder.get(b)||0);
     });
+  const manualNotes=sortBillingManualNotesForMonth(getBillingManualNotes(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME,shownMonth,shownYear));
+  const manualDisplayRows=[];
+  rows.forEach(r=>manualDisplayRows.push({type:'training',date:r.date,row:r}));
+  manualNotes.forEach(n=>manualDisplayRows.push({type:'manual',date:n.date,note:n}));
+  manualDisplayRows.sort((a,b)=>{
+    const da=parsePaymentDate(a.date), db=parsePaymentDate(b.date);
+    const ia=da?new Date(da.year,da.month-1,da.day).getTime():0;
+    const ib=db?new Date(db.year,db.month-1,db.day).getTime():0;
+    if(ia!==ib) return ib-ia;
+    if(a.type!==b.type) return a.type==='training'?-1:1;
+    return Number(b.row?.savedAt||b.note?.createdAt||b.note?.id||0)-Number(a.row?.savedAt||a.note?.createdAt||a.note?.id||0);
+  });
   const total=(key)=>rows.reduce((a,r)=>a+Number(r[key]||0),0);
   const totalClub=total('clubAmount'), totalReward=total('trainerReward');
+  window.__gtManualBillingTrainer=getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME;
+  window.__gtManualBillingMonth=shownMonth; window.__gtManualBillingYear=shownYear;
   app.innerHTML=`
     <header class="topbar">
       <button class="menu" onclick="appBack()" aria-label="Krok späť" title="Krok späť">‹</button>
@@ -14631,18 +14749,18 @@ function renderMonthlyBilling(year=null,targetMonth=null){
             <th>DÁTUM</th><th>SKUPINA</th><th>TRÉNINGY</th><th>ČLENSKÉ</th><th>REG.</th><th>INÉ +</th><th>INÉ −</th><th>SPOLU</th><th>ODMENA</th><th>ODOVZDAŤ KLUBU</th>
           </tr></thead>
           <tbody>
-            ${rows.map(r=>`<tr class="${r.cancelled?'cancelled-billing-row':(r.substituteReference?'substitute-info-row':'')} billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(r.date||''))},${JSON.stringify(String(r.group||''))},${JSON.stringify(String(r.name||''))})' title="Otvoriť konkrétnu dochádzku">
-              <td>${r.date}${r.cancelled?`<small class="cancelled-billing-label">ZRUŠENÝ TRÉNING</small>`:(r.substituteReference?`<small class="sub-label">⇄ TRÉNING ZASTUPOVANÝ<br><b>${r.substituteBy||'—'}</b></small>`:'')}</td>
-              <td><span class="monthly-group ${groupClass(r.group)}" style="background:${getGroupColor(r.group,'gold')} !important;background-image:none !important;">${r.group}</span></td>
-              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.trainingSum} €<small>${r.paying} platieb</small>`}</td>
-              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.membershipSum} €`}</td>
-              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.registrationSum} €`}</td>
-              <td class="plus">${(r.substituteReference||r.cancelled) ? '' : `${r.otherPlus} €`}</td>
-              <td class="minus">${(r.substituteReference||r.cancelled) ? '' : `−${r.otherMinus} €`}</td>
-              <td>${(r.substituteReference||r.cancelled) ? '' : `${r.gross} €`}</td>
-              <td class="minus">${(r.substituteReference||r.cancelled) ? '' : `−${r.trainerReward} €`}</td>
-              <td class="club-amount">${(r.substituteReference||r.cancelled) ? '' : `${r.clubReference?'0':r.clubAmount} € ›`}</td>
-              <td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.preventDefault();event.stopPropagation();return deleteMyBillingRecord(${JSON.stringify(String(r.key||''))},this)'>🗑</button></td>
+            ${manualDisplayRows.map(item=>item.type==='manual' ? `<tr class="manual-billing-inline-row"><td>${item.note.date||''}</td><td><span class="monthly-group ${groupClass(item.note.group)}" style="background:${getGroupColor(item.note.group,'gold')} !important;background-image:none !important;">${item.note.group||'—'}</span></td><td colspan="7" class="manual-billing-inline-note">${String(item.note.note||'')}</td><td class="manual-billing-inline-note-empty">—</td><td class="manual-billing-inline-delete"><button type="button" onclick='event.preventDefault();event.stopPropagation();return deleteBillingManualNote(${JSON.stringify(String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||''))},${Number(shownMonth)},${Number(shownYear)},${JSON.stringify(String(item.note.id||''))})'>ZMAZAŤ</button></td></tr>` : `<tr class="${item.row.cancelled?'cancelled-billing-row':(item.row.substituteReference?'substitute-info-row':'')} billing-clickable-row" onclick='return openAttendanceFromBillingRow(${JSON.stringify(String(item.row.date||''))},${JSON.stringify(String(item.row.group||''))},${JSON.stringify(String(item.row.name||''))})' title="Otvoriť konkrétnu dochádzku">
+              <td>${item.row.date}${item.row.cancelled?`<small class="cancelled-billing-label">ZRUŠENÝ TRÉNING</small>`:(item.row.substituteReference?`<small class="sub-label">⇄ TRÉNING ZASTUPOVANÝ<br><b>${item.row.substituteBy||'—'}</b></small>`:'')}</td>
+              <td><span class="monthly-group ${groupClass(item.row.group)}" style="background:${getGroupColor(item.row.group,'gold')} !important;background-image:none !important;">${item.row.group}</span></td>
+              <td>${(item.row.substituteReference||item.row.cancelled) ? '' : `${item.row.trainingSum} €<small>${item.row.paying} platieb</small>`}</td>
+              <td>${(item.row.substituteReference||item.row.cancelled) ? '' : `${item.row.membershipSum} €`}</td>
+              <td>${(item.row.substituteReference||item.row.cancelled) ? '' : `${item.row.registrationSum} €`}</td>
+              <td class="plus">${(item.row.substituteReference||item.row.cancelled) ? '' : `${item.row.otherPlus} €`}</td>
+              <td class="minus">${(item.row.substituteReference||item.row.cancelled) ? '' : `−${item.row.otherMinus} €`}</td>
+              <td>${(item.row.substituteReference||item.row.cancelled) ? '' : `${item.row.gross} €`}</td>
+              <td class="minus">${(item.row.substituteReference||item.row.cancelled) ? '' : `−${item.row.trainerReward} €`}</td>
+              <td class="club-amount">${(item.row.substituteReference||item.row.cancelled) ? '' : `${item.row.clubReference?'0':item.row.clubAmount} € ›`}</td>
+              <td class="admin-delete-billing-cell"><button type="button" class="admin-delete-billing-btn" onclick='event.preventDefault();event.stopPropagation();return deleteMyBillingRecord(${JSON.stringify(String(item.row.key||''))},this)'>🗑</button></td>
             </tr>`).join('')}
             ${!rows.length?`<tr><td colspan="11" class="empty-monthly">Zatiaľ nie je uložené žiadne vyúčtovanie.</td></tr>`:''}
           </tbody>
@@ -14660,6 +14778,18 @@ function renderMonthlyBilling(year=null,targetMonth=null){
           </tr></tfoot>
         </table>
       </div>
+      <section class="manual-billing-section">
+        <div class="manual-billing-head">
+          <h3>📝 VLASTNÉ RIADKY</h3>
+          <button type="button" class="manual-billing-add" onclick="document.getElementById('manualBillingForm')?.style.setProperty('display','grid');document.getElementById('manualBillingNote')?.focus();">＋ PRIDAŤ RIADOK</button>
+        </div>
+        <div id="manualBillingForm" class="manual-billing-form" style="display:none">
+          <input id="manualBillingDate" type="date" value="${shownYear}-${String(shownMonth).padStart(2,'0')}-${String(appToday().day).padStart(2,'0')}" aria-label="Dátum">
+          <select id="manualBillingGroup" aria-label="Skupina"><option value="">Skupina</option><option>A</option><option>B</option><option>C</option><option>D</option><option>D+</option></select>
+          <input id="manualBillingNote" type="text" maxlength="180" placeholder="Poznámka – napíš vlastný text">
+          <button type="button" onclick='return addBillingManualNote(${JSON.stringify(String(getCurrentTrainerDisplayName()||CURRENT_TRAINER_NAME||''))},${Number(shownMonth)},${Number(shownYear)})'>ULOŽIŤ</button>
+        </div>
+      </section>
       ${(()=>{const details=getMonthlyOtherDetails(rows); return details.length?`
       <section class="monthly-other-details">
         <div class="monthly-other-title">INÉ PLATBY – PODROBNOSTI</div>

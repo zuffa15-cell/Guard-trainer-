@@ -9339,7 +9339,25 @@ async function gtRestoreApplyData(data, type){
       gtMembersRestoreInProgress=false;
     }
   }
+  // VYÚČTOVANIE: po obnove okamžite načítaj obnovený stav aj do pamäte aplikácie.
+  // Samotný applySet() zapíše dáta do localStorage, ale monthlyBillingRecords
+  // môže ešte obsahovať starý stav. Preto sa po obnove najprv zobrazí presne
+  // záloha vrátane vlastných riadkov a až potom prebehne cloudová synchronizácia.
+  if(type==='billing'||type==='full'){
+    try{
+      const restoredBilling=JSON.parse(originalGetItem('gt-monthly-billing-v221')||'[]');
+      if(Array.isArray(restoredBilling)){
+        monthlyBillingRecords=restoredBilling;
+        if(typeof normalizeMonthlyBillingRecords==='function') normalizeMonthlyBillingRecords();
+      }
+    }catch(e){
+      console.warn('Okamžité načítanie obnoveného vyúčtovania',e);
+    }
+  }
   if(type==='attendance'||type==='full'){try{pushToCloud(true);}catch(e){console.warn('Cloud sync dochádzky',e);}}
+  // Cloud synchronizácia je až druhý krok. Lokálne obnovené vyúčtovanie sa
+  // nesmie čakať na server ani sa nesmie pri otvorení obrazovky znovu načítať
+  // starý stav zo servera.
   if(type==='billing'||type==='full'){try{if(typeof pushBillingToCloud==='function')pushBillingToCloud();else if(typeof syncBillingDirect==='function')syncBillingDirect();}catch(e){console.warn('Cloud sync vyúčtovania',e);}}
 }
 function gtOpenRestoreFile(){const i=document.getElementById('gtRestoreFileInput');if(i)i.click();}

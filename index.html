@@ -12969,8 +12969,8 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
     </section>
     <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${mName} ${year}</small><br>${clubHandoverLabel(getClubHandoverStatus(trainerName,month,year),true,trainerName,month,year,sum('clubAmount'))}</span><strong>${sum('clubAmount')} €${getClubHandoverStatus(trainerName,month,year)?' <span style="color:#4ade80;font-weight:900;font-size:26px;vertical-align:middle;margin-left:7px;">✓</span>':''}</strong></div>
     <div class="trainer-billing-actions">
-      <button type="button" class="gt-trainer-pdf-btn" onclick='return window.saveHeadTrainerDetailPDF(${JSON.stringify(String(trainerName||''))},${Number(month)},${Number(year)});' title="Uložiť mesačné vyúčtovanie trénera do PDF">PDF</button>
-      <button type="button" class="gt-trainer-share-btn" onclick='return window.shareHeadTrainerDetailPDF(${JSON.stringify(String(trainerName||''))},${Number(month)},${Number(year)});' title="Zdieľať mesačné vyúčtovanie trénera ako PDF">ZDIEĽAŤ</button>
+      <button type="button" class="gt-trainer-pdf-btn" data-trainer="${String(trainerName||'').replace(/"/g,'&quot;')}" data-month="${Number(month)}" data-year="${Number(year)}" title="Uložiť mesačné vyúčtovanie trénera do PDF">PDF</button>
+      <button type="button" class="gt-trainer-share-btn" data-trainer="${String(trainerName||'').replace(/"/g,'&quot;')}" data-month="${Number(month)}" data-year="${Number(year)}" title="Zdieľať mesačné vyúčtovanie trénera ako PDF">ZDIEĽAŤ</button>
     </div>
     <button class="membership-paid-report-btn" onclick="showMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
     <div class="billing-info">ⓘ &nbsp; Vyúčtovanie trénera ${trainerName} za ${mName} ${year}</div>
@@ -13063,6 +13063,34 @@ function renderHeadTrainerYearFor(trainerName){
   <div class="year-note">Aktuálny mesiac, ktorý ešte nie je ukončený, je označený odlišnou farbou.</div></main>`;
 }
 
+
+// Robust handlers for monthly trainer detail PDF/share buttons.
+// Delegation keeps them working after renderHeadTrainerDetail() replaces .app HTML
+// and avoids relying on inline onclick handlers on Android/Chrome.
+document.addEventListener('click', function(e){
+  const pdf=e.target.closest && e.target.closest('.gt-trainer-pdf-btn');
+  if(pdf){
+    e.preventDefault(); e.stopImmediatePropagation();
+    const trainer=String(pdf.getAttribute('data-trainer')||'').trim();
+    const month=Number(pdf.getAttribute('data-month'))||appToday().month;
+    const year=Number(pdf.getAttribute('data-year'))||appToday().year;
+    if(trainer && typeof window.saveHeadTrainerDetailPDF==='function'){
+      try{ window.saveHeadTrainerDetailPDF(trainer,month,year); }catch(err){ console.error('DETAIL PDF CLICK:',err); }
+    }
+    return false;
+  }
+  const share=e.target.closest && e.target.closest('.gt-trainer-share-btn');
+  if(share){
+    e.preventDefault(); e.stopImmediatePropagation();
+    const trainer=String(share.getAttribute('data-trainer')||'').trim();
+    const month=Number(share.getAttribute('data-month'))||appToday().month;
+    const year=Number(share.getAttribute('data-year'))||appToday().year;
+    if(trainer && typeof window.shareHeadTrainerDetailPDF==='function'){
+      try{ window.shareHeadTrainerDetailPDF(trainer,month,year); }catch(err){ console.error('DETAIL SHARE CLICK:',err); }
+    }
+    return false;
+  }
+}, true);
 
 // Robust handlers for the annual trainer PDF/share buttons.
 // Delegation keeps them working after renderHeadTrainerYearFor() replaces .app HTML.

@@ -14975,7 +14975,9 @@ function buildMyMonthlyBillingPDFBlob(){
     .filter(r=>!r.classList.contains('empty-monthly'));
   const foot=table.querySelector('tfoot tr');
   const headers=[...table.querySelectorAll('thead th')].map(th=>clean(th.innerText));
-  const body=rows.map(r=>[...r.children].map(td=>clean(td.innerText)));
+  const body=rows.map(r=>[...r.children]
+    .filter(td=>!td.classList.contains('admin-delete-billing-cell'))
+    .map(td=>clean(td.innerText)));
   const total=foot ? [...foot.children].map(td=>clean(td.innerText)) : [];
 
   const title=page.querySelector('.monthly-title')?.innerText || 'MOJE VYÚČTOVANIE';
@@ -16454,7 +16456,10 @@ setTimeout(set,80);setTimeout(set,300)})();
     const headers=Array.from(table.querySelectorAll('thead th')).map(x=>clean(x.innerText));
     const body=Array.from(table.querySelectorAll('tbody tr'))
       .filter(r=>!r.classList.contains('empty-monthly'))
-      .map(r=>Array.from(r.children).map(c=>clean(c.innerText)));
+      .map(r=>Array.from(r.children)
+        .filter(c=>!c.classList.contains('admin-delete-billing-cell'))
+        .map(c=>clean(c.innerText))
+      );
     const foot=table.querySelector('tfoot tr');
     const total=foot?Array.from(foot.children).map(c=>clean(c.innerText)):[];
     const title=clean(page.querySelector('.monthly-title')?.innerText)||'MOJE VYÚČTOVANIE';

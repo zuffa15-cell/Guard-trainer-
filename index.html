@@ -12969,8 +12969,8 @@ function renderHeadTrainerDetail(trainerName,month=appToday().month,year=appToda
     </section>
     <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${mName} ${year}</small><br>${clubHandoverLabel(getClubHandoverStatus(trainerName,month,year),true,trainerName,month,year,sum('clubAmount'))}</span><strong>${sum('clubAmount')} €${getClubHandoverStatus(trainerName,month,year)?' <span style="color:#4ade80;font-weight:900;font-size:26px;vertical-align:middle;margin-left:7px;">✓</span>':''}</strong></div>
     <div class="trainer-billing-actions">
-      <button type="button" class="gt-trainer-pdf-btn" data-trainer="${String(trainerName).replace(/"/g,'&quot;')}" data-month="${month}" data-year="${year}" title="Uložiť mesačné vyúčtovanie trénera do PDF">PDF</button>
-      <button type="button" class="gt-trainer-share-btn" data-trainer="${String(trainerName).replace(/"/g,'&quot;')}" data-month="${month}" data-year="${year}" title="Zdieľať mesačné vyúčtovanie trénera ako PDF">ZDIEĽAŤ</button>
+      <button type="button" class="gt-trainer-pdf-btn" onclick='return window.saveHeadTrainerDetailPDF(${JSON.stringify(String(trainerName||''))},${Number(month)},${Number(year)});' title="Uložiť mesačné vyúčtovanie trénera do PDF">PDF</button>
+      <button type="button" class="gt-trainer-share-btn" onclick='return window.shareHeadTrainerDetailPDF(${JSON.stringify(String(trainerName||''))},${Number(month)},${Number(year)});' title="Zdieľať mesačné vyúčtovanie trénera ako PDF">ZDIEĽAŤ</button>
     </div>
     <button class="membership-paid-report-btn" onclick="showMonthlyMembershipPayments()">✓ ZAPLATENÉ ČLENSKÉ</button>
     <div class="billing-info">ⓘ &nbsp; Vyúčtovanie trénera ${trainerName} za ${mName} ${year}</div>
@@ -13381,6 +13381,9 @@ async function shareHeadTrainerMonthlyPDF(){
   return false;
 }
 
+window.saveHeadTrainerMonthlyPDF=saveHeadTrainerMonthlyPDF;
+window.shareHeadTrainerMonthlyPDF=shareHeadTrainerMonthlyPDF;
+
 function getHeadTrainerDetailReportData(trainerName,month,year){
   const rows=getTrainerMonthlyRecords(trainerName,month,year);
   // Main PDF table contains training records only. Standalone/legacy records
@@ -13430,23 +13433,7 @@ async function shareHeadTrainerDetailPDF(trainerName,month,year){
   return false;
 }
 window.shareHeadTrainerDetailPDF=shareHeadTrainerDetailPDF;
-if(!window.__guardTrainerDetailPdfHandlers){
-  window.__guardTrainerDetailPdfHandlers=true;
-  document.addEventListener('click',function(ev){
-    const pdf=ev.target.closest && ev.target.closest('.gt-trainer-pdf-btn');
-    const share=ev.target.closest && ev.target.closest('.gt-trainer-share-btn');
-    const btn=pdf||share;
-    if(!btn)return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    const trainer=btn.getAttribute('data-trainer')||'';
-    const month=Number(btn.getAttribute('data-month'));
-    const year=Number(btn.getAttribute('data-year'));
-    if(pdf) window.saveHeadTrainerDetailPDF(trainer,month,year);
-    else window.shareHeadTrainerDetailPDF(trainer,month,year);
-    return false;
-  },true);
-}
+// PDF/SHARE mesačného detailu sú volané priamo z tlačidiel cez inline onclick.
 
 
 function renderHeadTrainerBilling(){
@@ -13471,8 +13458,8 @@ function renderHeadTrainerBilling(){
     </tbody></table></div>
     <div class="club-total-card"><span>▤ &nbsp; ODOVZDAŤ KLUBU<br><small>ZA ${mName} ${year}</small></span><strong>${sum('club')} €</strong></div>
     <div class="head-billing-actions">
-      <button type="button" title="Uložiť mesačný zoznam trénerov do PDF" onclick="return saveHeadTrainerMonthlyPDF()">PDF</button>
-      <button type="button" title="Zdieľať mesačný zoznam trénerov ako PDF" onclick="return shareHeadTrainerMonthlyPDF()">ZDIEĽAŤ</button>
+      <button type="button" class="gt-head-monthly-pdf-btn" title="Uložiť mesačný zoznam trénerov do PDF" onclick="return window.saveHeadTrainerMonthlyPDF()">PDF</button>
+      <button type="button" class="gt-head-monthly-share-btn" title="Zdieľať mesačný zoznam trénerov ako PDF" onclick="return window.shareHeadTrainerMonthlyPDF()">ZDIEĽAŤ</button>
     </div>
   </main>${standardBottomNav('billing', true)}`;
 }

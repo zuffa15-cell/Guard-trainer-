@@ -408,7 +408,7 @@ function gtApplyBackupMetaFromSharedData(data){
     if(!remote || typeof remote!=='object') return;
     const meta=gtReadBackupMeta();
     let changed=false;
-    ['members','attendance','billing','full'].forEach(type=>{
+    ['trainers','members','attendance','billing','full'].forEach(type=>{
       if(remote[type] && (!meta[type] || String(remote[type])>String(meta[type]))){
         meta[type]=remote[type]; changed=true;
       }
@@ -6168,9 +6168,9 @@ function goBack(){ location.hash='home'; renderHome(); }
 
 
 const trainersData=[
- {id:101,name:'Peter Onuščák',full:'Peter Onuščák',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
- {id:103,name:'Viktor Žuffa',full:'Viktor Žuffa',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
- {id:104,name:'Anatolii Kuhal',full:'Anatolii Kuhal',role:'TRÉNER',email:'',phone:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'}
+ {id:101,name:'Peter Onuščák',full:'Peter Onuščák',role:'TRÉNER',email:'',phone:'',dob:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
+ {id:103,name:'Viktor Žuffa',full:'Viktor Žuffa',role:'TRÉNER',email:'',phone:'',dob:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'},
+ {id:104,name:'Anatolii Kuhal',full:'Anatolii Kuhal',role:'TRÉNER',email:'',phone:'',dob:'',license:'',valid:'',groups:[],active:true,status:'AKTÍVNA'}
 ];
 const TRAINERS_STORAGE_KEY='gt-trainers-v395';
 try{
@@ -6193,6 +6193,7 @@ try{
       groups:Array.isArray(t.groups)?t.groups:[],
       full:String(t.full||t.name||'').trim(),
       name:String(t.name||t.full||'').trim(),
+      dob:String(t.dob||'').trim(),
       active: t.active===false || String(t.status||'').toUpperCase()==='NEAKTÍVNA' ? false : true,
       status: t.active===false || String(t.status||'').toUpperCase()==='NEAKTÍVNA' ? 'NEAKTÍVNA' : 'AKTÍVNA'
     })).filter(t=>t.full||t.name);
@@ -6547,6 +6548,7 @@ function renderTrainerProfile(id){
     <label>PRIEZVISKO<input id="tpLast" value="${t.full.split(' ').slice(1).join(' ')}" ${canEditTrainerProfile()?'':'disabled'}></label>
     <label>E-MAIL<input id="tpEmail" value="${t.email}" ${canEditTrainerProfile()?'':'disabled'}></label>
     <label>TELEFÓN<input id="tpPhone" value="${t.phone}" ${canEditTrainerProfile()?'':'disabled'}></label>
+    <label>DÁTUM NARODENIA<input id="tpDob" type="date" value="${t.dob||''}" ${canEditTrainerProfile()?'':'disabled'}></label>
     ${isAdmin()?`<label>HESLO PRE PRIHLÁSENIE<input id="tpLoginPassword" type="text" value="${t.loginPassword||''}" placeholder="Nastaviť heslo" autocomplete="off"></label>`:''}
    </div>
   </section>
@@ -6615,6 +6617,7 @@ function saveTrainerProfile(id){
    t.name=t.full.split(/\s+/).slice(0,2).join(' ');
    t.email=String(val('tpEmail')).trim();
    t.phone=String(val('tpPhone')).trim();
+   t.dob=String(val('tpDob')).trim();
    t.role=String(val('tpRole')).trim();
    t.license=String(val('tpLicense')).trim();
    t.valid=String(val('tpValid')).trim();
@@ -9017,6 +9020,10 @@ function saveSchedule(){
    - záloha nezasahuje do cloudovej synchronizácie
    ========================================================= */
 const GT_BACKUP_SETS = {
+  trainers: {
+    title: 'Tréneri',
+    keys: ['gt-trainers-v395','gt-trainers']
+  },
   members: {
     title: 'Členovia',
     keys: ['gt-members-real-2026-v847','gt-member-save-order-v1','gt-member-delete-order-v1','gt-member-application-files-v1']
@@ -9147,7 +9154,7 @@ function gtLoadBackupMetaFromCloud(){
       const remote=snap.data()||{};
       const meta=gtReadBackupMeta();
       let changed=false;
-      ['members','attendance','billing','full'].forEach(type=>{
+      ['trainers','members','attendance','billing','full'].forEach(type=>{
         if(remote[type] && (!meta[type] || String(remote[type])>String(meta[type]))){
           meta[type]=remote[type];
           changed=true;
@@ -9167,7 +9174,7 @@ function gtStartBackupMetaCloudSync(){
       const remote=snap.data()||{};
       const meta=gtReadBackupMeta();
       let changed=false;
-      ['members','attendance','billing','full'].forEach(type=>{
+      ['trainers','members','attendance','billing','full'].forEach(type=>{
         if(remote[type] && (!meta[type] || String(remote[type])>String(meta[type]))){
           meta[type]=remote[type];
           changed=true;
@@ -9182,12 +9189,12 @@ function gtBackupButtonLabel(type){
   const el=document.getElementById('gtBackupLast-'+type);
   if(el) el.textContent=gtBackupFormatDate(gtGetBackupDate(type));
 }
-function gtRefreshBackupLabels(){ ['members','attendance','billing','full'].forEach(gtBackupButtonLabel); }
+function gtRefreshBackupLabels(){ ['trainers','members','attendance','billing','full'].forEach(gtBackupButtonLabel); }
 function gtDownloadBackup(type){
   try{
     const payload=gtCreateBackupPayload(type);
     const stamp=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
-    const slug=type==='members'?'clenovia':type==='attendance'?'dochadzka':'vyuctovanie';
+    const slug=type==='trainers'?'treneri':type==='members'?'clenovia':type==='attendance'?'dochadzka':'vyuctovanie';
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
@@ -9307,7 +9314,26 @@ async function gtRestoreApplyData(data, type){
       originalSetItem('gt-member-application-files-v1',JSON.stringify(obj.applicationFiles));
     }
   };
-  if(type==='full'){applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
+  if(type==='full'){applySet('trainers',data.trainers);applySet('members',data.members);applySet('attendance',data.attendance);applySet('billing',data.billing);}else applySet(type,data);
+  if(type==='trainers'||type==='full'){
+    try{
+      const raw=originalGetItem('gt-trainers-v395') || originalGetItem('gt-trainers') || '[]';
+      const restoredTrainers=JSON.parse(raw);
+      if(!Array.isArray(restoredTrainers)) throw new Error('Záloha trénerov neobsahuje pole trénerov');
+      trainersData.splice(0,trainersData.length,...restoredTrainers.map(t=>({
+        ...t,
+        dob:String(t.dob||'').trim(),
+        groups:Array.isArray(t.groups)?t.groups:[],
+        full:String(t.full||t.name||'').trim(),
+        name:String(t.name||t.full||'').trim()
+      })).filter(t=>t.full||t.name));
+      persistTrainersData();
+      try{ if(typeof renderTrainers==='function' && location.hash.includes('trainer')) renderTrainers(); }catch(e){}
+    }catch(e){
+      console.warn('Obnova trénerov',e);
+      throw e;
+    }
+  }
   if(type==='members'||type==='full'){
     gtMembersRestoreInProgress=true;
     try{
@@ -9361,7 +9387,7 @@ async function gtRestoreApplyData(data, type){
   if(type==='billing'||type==='full'){try{if(typeof pushBillingToCloud==='function')pushBillingToCloud();else if(typeof syncBillingDirect==='function')syncBillingDirect();}catch(e){console.warn('Cloud sync vyúčtovania',e);}}
 }
 function gtOpenRestoreFile(){const i=document.getElementById('gtRestoreFileInput');if(i)i.click();}
-function gtHandleRestoreFile(input){const file=input?.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=async()=>{try{const p=JSON.parse(String(reader.result||''));if(p?.guardTrainerBackup!==true||!p.data)throw new Error('Neplatná záloha');const type=p.type;if(!['members','attendance','billing','full'].includes(type))throw new Error('Neznámy typ zálohy');const label=p.title||'Záloha';if(!confirm(`Naozaj obnoviť „${label}“? Aktuálne údaje v tejto kategórii sa nahradia stavom zo zálohy.`)){input.value='';return;}await gtRestoreApplyData(p.data,type);input.value='';toast(`Záloha „${label}“ bola obnovená`);setTimeout(()=>{try{if(type==='members'||type==='full')renderMembers();else if(type==='attendance')nav('attendance');else if(type==='billing')openMyBilling();}catch(e){location.reload();}},400);}catch(e){console.error('Restore error',e);input.value='';toast('Zálohu sa nepodarilo obnoviť');}};reader.onerror=()=>{input.value='';toast('Zálohu sa nepodarilo načítať');};reader.readAsText(file);}
+function gtHandleRestoreFile(input){const file=input?.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=async()=>{try{const p=JSON.parse(String(reader.result||''));if(p?.guardTrainerBackup!==true||!p.data)throw new Error('Neplatná záloha');const type=p.type;if(!['trainers','members','attendance','billing','full'].includes(type))throw new Error('Neznámy typ zálohy');const label=p.title||'Záloha';if(!confirm(`Naozaj obnoviť „${label}“? Aktuálne údaje v tejto kategórii sa nahradia stavom zo zálohy.`)){input.value='';return;}await gtRestoreApplyData(p.data,type);input.value='';toast(`Záloha „${label}“ bola obnovená`);setTimeout(()=>{try{if(type==='trainers')renderTrainers();else if(type==='members'||type==='full')renderMembers();else if(type==='attendance')nav('attendance');else if(type==='billing')openMyBilling();}catch(e){location.reload();}},400);}catch(e){console.error('Restore error',e);input.value='';toast('Zálohu sa nepodarilo obnoviť');}};reader.onerror=()=>{input.value='';toast('Zálohu sa nepodarilo načítať');};reader.readAsText(file);}
 
 function renderBackups(){
   const app=document.querySelector('.app');
@@ -9376,6 +9402,7 @@ function renderBackups(){
         <div class="section-title">💾 ZÁLOHY DÁT</div>
         <small>Záloha sa stiahne ako súbor do mobilu.</small>
       </div>
+      <button type="button" class="more-menu-item" onclick="gtDownloadBackup('trainers')">🥊 <span><b>ZÁLOHA TRÉNEROV</b><small id="gtBackupLast-trainers">Zatiaľ nebola vytvorená</small></span>⬇</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('members')">👥 <span><b>ZÁLOHA ČLENOV</b><small id="gtBackupLast-members">Zatiaľ nebola vytvorená</small></span>⬇</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('attendance')">☑️ <span><b>ZÁLOHA DOCHÁDZKY</b><small id="gtBackupLast-attendance">Zatiaľ nebola vytvorená</small></span>⬇</button>
       <button type="button" class="more-menu-item" onclick="gtDownloadBackup('billing')">▤ <span><b>ZÁLOHA VYÚČTOVANIA</b><small id="gtBackupLast-billing">Zatiaľ nebola vytvorená</small></span>⬇</button>
@@ -9419,7 +9446,7 @@ function renderMore(){
      
      ${isAdminTesting()?`<button class="more-menu-item" onclick="exitAdminTesting()">✕ <span><b>UKONČIŤ TESTOVANIE</b><small>Návrat späť na administrátora</small></span>›</button>`:''}
      <div class="more-buttons">
-       <button class="more-menu-item" onclick="renderBackups()">💾 <span><b>ZÁLOHY DÁT</b><small>Zálohovať členov, dochádzku a vyúčtovanie do mobilu</small></span>›</button>
+       <button class="more-menu-item" onclick="renderBackups()">💾 <span><b>ZÁLOHY DÁT</b><small>Zálohovať trénerov, členov, dochádzku a vyúčtovanie do mobilu</small></span>›</button>
        <button class="more-menu-item" onclick="renderTrainers()">♟ <span><b>SPRÁVA TRÉNEROV</b><small>Prehľad všetkých trénerov</small></span>›</button>
        <button type="button" class="more-menu-item" onclick="return openStatisticsScreen()">📊 <span><b>ŠTATISTIKY</b><small>Dochádzka, skupiny a najaktívnejší členovia</small></span>›</button>
        <button type="button" class="more-menu-item gt-logout-button" onclick="return logoutGuardTrainer(this)">🚪 <span><b>ODHLÁSIŤ SA</b><small>Ukončiť prihlásenie na tomto zariadení</small></span>›</button>

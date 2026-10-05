@@ -13226,7 +13226,11 @@ function getMainTrainerProfile(){
 function getMainTrainerDisplayName(){ return 'Hlavný tréner'; }
 
 function buildGuardTrainerVectorPDF(title,subtitle,headers,bodyRows,totalRow,detailRows=[]){
-  const W=842,H=595,M=28;
+  const W=842,M=28;
+  const bodyCount=Math.min((bodyRows||[]).length,18);
+  const detailCount=Math.min((detailRows||[]).length,24);
+  const detailBlock=detailCount ? (16 + detailCount*13) : 0;
+  const H=Math.max(595, 65 + 32 + bodyCount*26 + (totalRow&&totalRow.length ? 26 : 0) + detailBlock + 60);
   const widths=[82,58,88,86,72,60,60,60,78,70];
   let ws=widths.slice(0,headers.length);
   if(ws.length<headers.length) ws=Array(headers.length).fill(Math.floor((W-2*M)/headers.length));
@@ -13271,13 +13275,13 @@ function buildGuardTrainerVectorPDF(title,subtitle,headers,bodyRows,totalRow,det
   (bodyRows||[]).slice(0,18).forEach((r,i)=>drawRow(r,rowH,i%2===1));
   if(totalRow && totalRow.length) drawRow(totalRow,rowH,true);
 
+  // Detailný zoznam „INÉ PLATBY – PODROBNOSTI“ patrí POD hlavné vyúčtovanie.
+  // Nikdy ho nekresli cez tabuľku – výška PDF sa podľa potreby zväčší.
   if(detailRows && detailRows.length){
-    let dy=Math.max(125,y-18);
+    let dy=y-18;
     ops.push(txtCenter('INE PLATBY - PODROBNOSTI',W/2,dy,9,true));
     dy-=16;
     detailRows.slice(0,24).forEach(d=>{
-      if(dy<42)return;
-      // Keep the reason and amount together directly after the description.
       ops.push(txtCenter(`${d[0]} | ${d[1]} - ${d[2]} ${d[3]}`,W/2,dy,7,false));
       dy-=13;
     });

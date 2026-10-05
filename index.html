@@ -13414,27 +13414,38 @@ function getHeadTrainerDetailReportData(trainerName,month,year){
 
 function saveHeadTrainerDetailPDF(trainerName,month,year){
   try{
+    trainerName=String(trainerName||'').trim(); month=Number(month)||appToday().month; year=Number(year)||appToday().year;
     const x=getHeadTrainerDetailReportData(trainerName,month,year);
     const title=`VYÚČTOVANIE - ${trainerName} - ${x.mName} ${year}`;
     const blob=buildGuardTrainerVectorPDF(title,'Denný výpis vyúčtovania trénera',x.headers,x.body,x.total,x.details);
-    saveGuardTrainerPDF(blob,`Guard-Trainer-${String(trainerName).replace(/\s+/g,'-')}-${x.mName}-${year}.pdf`);
-  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+    if(!blob || blob.size<100){ throw new Error('PDF blob je prázdny'); }
+    const safeName=`Guard-Trainer-${trainerName.replace(/[^a-zA-Z0-9 _-]/g,'').trim().replace(/\s+/g,'-')}-${x.mName.replace(/[^a-zA-Z0-9-]/g,'')}-${year}.pdf`;
+    const ok=saveGuardTrainerPDF(blob,safeName);
+    if(!ok) throw new Error('Uloženie PDF zlyhalo');
+  }catch(e){
+    console.error('PDF detail trénera:',e);
+    try{ if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť: '+(e?.message||'chyba')); }catch(_){ alert('PDF sa nepodarilo vytvoriť.'); }
+  }
   return false;
 }
 window.saveHeadTrainerDetailPDF=saveHeadTrainerDetailPDF;
 
 async function shareHeadTrainerDetailPDF(trainerName,month,year){
   try{
+    trainerName=String(trainerName||'').trim(); month=Number(month)||appToday().month; year=Number(year)||appToday().year;
     const x=getHeadTrainerDetailReportData(trainerName,month,year);
     const title=`VYÚČTOVANIE - ${trainerName} - ${x.mName} ${year}`;
     const blob=buildGuardTrainerVectorPDF(title,'Denný výpis vyúčtovania trénera',x.headers,x.body,x.total,x.details);
-    await shareGuardTrainerPDF(blob,`Guard-Trainer-${String(trainerName).replace(/\s+/g,'-')}-${x.mName}-${year}.pdf`,title,`Mesačné vyúčtovanie trénera ${trainerName}`);
-  }catch(e){console.error(e);if(typeof toast==='function')toast('PDF sa nepodarilo vytvoriť');}
+    if(!blob || blob.size<100) throw new Error('PDF blob je prázdny');
+    const safeName=`Guard-Trainer-${trainerName.replace(/[^a-zA-Z0-9 _-]/g,'').trim().replace(/\s+/g,'-')}-${x.mName.replace(/[^a-zA-Z0-9-]/g,'')}-${year}.pdf`;
+    await shareGuardTrainerPDF(blob,safeName,title,`Mesačné vyúčtovanie trénera ${trainerName}`);
+  }catch(e){
+    console.error('Zdieľanie PDF detailu trénera:',e);
+    try{ if(typeof toast==='function')toast('PDF sa nepodarilo zdieľať: '+(e?.message||'chyba')); }catch(_){ alert('PDF sa nepodarilo zdieľať.'); }
+  }
   return false;
 }
 window.shareHeadTrainerDetailPDF=shareHeadTrainerDetailPDF;
-// PDF/SHARE mesačného detailu sú volané priamo z tlačidiel cez inline onclick.
-
 
 function renderHeadTrainerBilling(){
   const app=document.querySelector('.app');

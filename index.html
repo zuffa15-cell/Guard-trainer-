@@ -12352,8 +12352,8 @@ function trainingBilling(){
 
       <section class="billing-card">
         <div class="bill-row"><span>Tréning <small class="payment-count">(${paying} platieb)</small></span><strong>${trainingSum} €</strong></div>
-        <div class="bill-row"><span>Členské <small class="payment-count">(${attendanceState.members.filter(m=>Number(m.membershipAmount||0)>0).length} platieb)</small></span><strong>${membershipSum} €</strong></div>
-        <div class="bill-row"><span>Registračné <small class="payment-count">(${attendanceState.members.filter(m=>m.registration).length} platieb)</small></span><strong>${registrationSum} €</strong></div>
+        <div class="bill-row"><span>Členské <small class="payment-count">(${attendanceState.members.filter(m=>Number(membershipPaidHereToday(m)||0)>0).length} platieb)</small></span><strong>${membershipSum} €</strong></div>
+        <div class="bill-row"><span>Registračné <small class="payment-count">(${attendanceState.members.filter(m=>registrationPaidHereToday(m)).length} platieb)</small></span><strong>${registrationSum} €</strong></div>
         <div class="bill-row"><span>Iné +</span><strong>${otherPlus} €</strong></div>
         <div class="bill-row minus"><span>Iné −</span><strong>− ${otherMinus} €</strong></div>
         <div class="bill-total"><span>CELKOM VYBRANÉ</span><strong>${gross} €</strong></div>

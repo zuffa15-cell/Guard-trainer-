@@ -7421,7 +7421,142 @@ function deleteMemberFromList(id){
 }
 
 
+
+/* v-auto-archive – automatické čistenie aktívneho zoznamu členov.
+   Pravidlá:
+   - nový člen je chránený prvých 60 dní od vstupu,
+   - potom sa archivuje, ak 60 dní nemal žiadnu evidovanú návštevu,
+   - alebo ak 90 dní nemá žiadnu úhradu členského.
+   Archivácia je OR: stačí splniť jednu z podmienok.
+   Archív zachováva celý profil a existujúci mechanizmus ho vie obnoviť.
+*/
+function gtAutoArchiveInactiveMembers(){
+  try{
+    if(!Array.isArray(membersData) || !membersData.length) return 0;
+    const todayIso=appToday().iso;
+    const todayMs=Date.parse(todayIso+'T12:00:00');
+    if(!Number.isFinite(todayMs)) return 0;
+
+    const diffDays=(from)=>{
+      const d=gtParseMemberDate(from);
+      if(!Number.isFinite(d)) return Infinity;
+      return Math.floor((todayMs-d)/86400000);
+    };
+
+    const gtParseMemberDate=(value)=>{
+      if(!value) return NaN;
+      const s=String(value).trim();
+      let m=s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+      if(m) return Date.parse(`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T12:00:00`);
+      m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if(m) return Date.parse(`${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}T12:00:00`);
+      const t=Date.parse(s);
+      return Number.isFinite(t)?t:NaN;
+    };
+
+    // Posledná návšteva člena zo všetkých uložených dochádzok.
+    const lastAttendance=new Map();
+    const hist=typeof trainingAttendanceByGroup==='object' && trainingAttendanceByGroup ? trainingAttendanceByGroup : {};
+    Object.keys(hist).forEach(key=>{
+      const parts=String(key).split('|');
+      const datePart=parts[0]||'';
+      const dateMs=gtParseMemberDate(datePart);
+      if(!Number.isFinite(dateMs)) return;
+      const records=hist[key];
+      if(!records || typeof records!=='object') return;
+      Object.keys(records).forEach(nameKey=>{
+        const rec=records[nameKey];
+        const attended=typeof rec==='boolean' ? rec : !!rec?.training;
+        if(!attended) return;
+        const prev=lastAttendance.get(nameKey)||0;
+        if(dateMs>prev) lastAttendance.set(nameKey,dateMs);
+      });
+    });
+
+    // Posledná zaplatená členská platba zo všetkých dostupných zdrojov.
+    const lastMembership=new Map();
+    const rememberMembership=(m,date)=>{
+      const d=gtParseMemberDate(date);
+      if(!Number.isFinite(d)) return;
+      const key=`${m.surname}|${m.name}`;
+      const prev=lastMembership.get(key)||0;
+      if(d>prev) lastMembership.set(key,d);
+    };
+    (Array.isArray(membershipPayments)?membershipPayments:[]).forEach(p=>{
+      if(Number(p.amount||0)>0){
+        const m=membersData.find(x=>Number(x.id)===Number(p.memberId));
+        if(m) rememberMembership(m,p.date);
+      }
+    });
+    membersData.forEach(m=>{
+      if(Number(m.membershipAmount||0)>0) rememberMembership(m,m.membershipDate);
+      if(Number(m.membershipAccountAmount||0)>0) rememberMembership(m,m.membershipAccountDate);
+      if(Array.isArray(m.accountPaymentHistory)){
+        m.accountPaymentHistory.forEach(p=>{
+          if(p?.type==='membership' && Number(p.amount||0)>0) rememberMembership(m,p.date);
+        });
+      }
+    });
+
+    const toArchive=[];
+    membersData.forEach(m=>{
+      if(!m || m.archived) return;
+
+      // Noví členovia sú chránení prvých 60 dní od vstupu.
+      const entryDate=m.memberSince||m.applicationDate||m.createdAt||m.created||'';
+      const ageDays=diffDays(entryDate);
+      if(ageDays<60) return;
+
+      const key=`${m.surname}|${m.name}`;
+      const attendanceMs=lastAttendance.get(key)||0;
+      const membershipMs=lastMembership.get(key)||0;
+      const noAttendanceDays=attendanceMs ? Math.floor((todayMs-attendanceMs)/86400000) : Infinity;
+      const noMembershipDays=membershipMs ? Math.floor((todayMs-membershipMs)/86400000) : Infinity;
+
+      if(noAttendanceDays>=60 || noMembershipDays>=90){
+        toArchive.push({m,noAttendanceDays,noMembershipDays});
+      }
+    });
+
+    if(!toArchive.length) return 0;
+
+    const archived=getDeletedMembers();
+    const activeIds=new Set(toArchive.map(x=>Number(x.m.id)));
+    toArchive.forEach(({m})=>{
+      const copy=JSON.parse(JSON.stringify(m));
+      copy.archived=true;
+      copy.deletedAt=new Date().toISOString();
+      copy.archiveReason='AUTO: 60 dní bez návštevy alebo 90 dní bez členského';
+      const idx=archived.findIndex(x=>memberSameName(x,m));
+      if(idx>=0) archived[idx]=copy; else archived.push(copy);
+    });
+    persistDeletedMembers(archived);
+
+    const deleteAt=Date.now();
+    let tombstones={};
+    try{ tombstones=JSON.parse(originalGetItem('gt-member-delete-order-v1')||'{}')||{}; }catch(e){ tombstones={}; }
+    toArchive.forEach(({m})=>{
+      tombstones[String(m.id)]=Math.max(Number(tombstones[String(m.id)]||0),deleteAt);
+    });
+    try{ originalSetItem('gt-member-delete-order-v1',JSON.stringify(tombstones)); }catch(e){}
+
+    membersData=membersData.filter(m=>!activeIds.has(Number(m.id)));
+    normalizeAllMembers();
+    persistMembersData();
+    try{ toArchive.forEach(({m})=>syncDeletedMemberDirectV2(m.id)); }catch(e){ console.warn('Guard Trainer: auto archive cloud sync failed',e); }
+    try{ pushToCloud(true); }catch(e){}
+
+    const n=toArchive.length;
+    console.log(`Guard Trainer: automaticky archivovaných členov: ${n}`);
+    return n;
+  }catch(e){
+    console.warn('Guard Trainer: automatická archivácia zlyhala',e);
+    return 0;
+  }
+}
+
 function renderMembers(){
+ gtAutoArchiveInactiveMembers();
  membersData.sort((a,b)=>{const x=(a.surname||'').localeCompare(b.surname||'','sk',{sensitivity:'base'});return x||(a.name||'').localeCompare(b.name||'','sk',{sensitivity:'base'});});
  normalizeAllMembers();
  const app=document.querySelector('.app');
@@ -7710,7 +7845,7 @@ function renderMemberProfile(id, backTarget){
  if(backTarget && backTarget.route) window.__gtBackTarget=backTarget;
  else window.__gtBackTarget={route:currentRoute};
  const savedReg=savedRegistrationForMember(m);
- const canEditMemberPayments = activeUserRole==='admin';
+ const canEditMemberPayments = (activeUserRole==='admin' || activeUserRole==='trainer');
  const registrationAccount = (Number(m.registrationAccountAmount||0)>0 && !!m.registrationAccountDate)
    ? {date:m.registrationAccountDate,amount:Number(m.registrationAccountAmount)}
    : (ensureMemberAccountHistory(m).find(x=>x.type==='registration' && Number(x.amount)>0 && x.date) || null);
@@ -7814,12 +7949,12 @@ function saveMemberPaymentFromProfile(memberId,type,period){
       Polrok určuje, za ktoré obdobie je platba započítaná. */
    const paymentYear=2026;
    const idx=membershipPayments.findIndex(x=>Number(x.memberId)===Number(memberId)&&Number(x.period)===p&&Number(x.year||String(x.date||'').slice(0,4))===paymentYear);
-   const rec={memberId:m.id,surname:m.surname,name:m.name,groups:[group],paidGroup:group,date,amount,period:p,year:paymentYear,source:'admin'};
+   const rec={memberId:m.id,surname:m.surname,name:m.name,groups:[group],paidGroup:group,date,amount,period:p,year:paymentYear,source:(activeUserRole==='admin'?'admin':'trainer')};
    if(idx>=0) membershipPayments[idx]=rec; else membershipPayments.push(rec);
    m.membership=true; m.membershipDate=date; m.membershipAmount=amount; m.membershipPaidGroup=group;
  }else{
    const idx=registrationPayments.findIndex(x=>Number(x.memberId)===Number(memberId));
-   const rec={memberId:m.id,surname:m.surname,name:m.name,paidGroup:group,date,amount,source:'admin'};
+   const rec={memberId:m.id,surname:m.surname,name:m.name,paidGroup:group,date,amount,source:(activeUserRole==='admin'?'admin':'trainer')};
    if(idx>=0) registrationPayments[idx]=rec; else registrationPayments.push(rec);
    m.registration=true; m.registrationDate=date; m.registrationAmount=amount; m.registrationPaidGroup=group;
  }
